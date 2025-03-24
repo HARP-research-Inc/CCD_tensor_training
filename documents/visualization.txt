@@ -1,0 +1,13 @@
+Third order verb tensor toy example for "eats"
+
+subjects [man, john, machine]
+objects [dog, bread, dollar]
+
+[
+    [[man eats dog],[man eats bread],[man eats dollar]]
+    [[john eats dog],[john eats bread],[john eats dollar]]
+    [[machine eats dog],[machine eats bread],[machine eats dollar]]
+]
+#except these should be embeddings
+
+

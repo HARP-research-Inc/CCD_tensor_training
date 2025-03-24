@@ -1,0 +1,40 @@
+Research question:
+- Can we develop a verb tensor --learned from or trained on natural language data-- that can act on word vectors like verb function in DisCoCat and DisCoCirc (i.e. they're compositional, meaning functions take in meaning vectors and return meaning vectors)?
+- Can we develop other elements like negation matrices?
+
+___________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+_____Basic_____
+- Not (negation)
+- Adjectives
+- Verbs
+    - Transitive
+    - Non-transitive
+- Adverbs
+
+_____Harder:_____
+- Adpositions:
+    - e.g. to, from
+- Verbs with sequential component:
+    - e.g. sees: "[big dog] sees [the cat jump over the fence]"
+- Reflexive pronoun:
+    - e.g. himself
+    - map instances to themselves
+- Conjunction: 
+    - because - conjunction of sentences/verbs
+    - and/or - conjunction of nouns 
+- Frames (maybe): 
+    - generalized math thing (abstract; can represent all under Harder)
+
+_____Things handled implicitly in DisCoCirc calculus:_____
+- Conjunction "who":
+    - He who works
+- To-be verb for adjectives:
+    - Engineering problem. Train to represent the same as adjective.
+___________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
+
+Benchmarks:
+- Similarity test
+- Word prediction test
+
+
+Final size of representation 439,110,000

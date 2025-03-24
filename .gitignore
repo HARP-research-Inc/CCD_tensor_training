@@ -1,0 +1,7 @@
+training_venv
+tests/data
+data
+data_raw
+__pycache__
+archive/transitive_lemma.json
+archive/transitive_not_lemma.json
