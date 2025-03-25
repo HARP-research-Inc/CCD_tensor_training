@@ -2,18 +2,19 @@ import torch
 from torch import nn
 import numpy as np
 import torch.optim as optim
-from util import FullRankTensorRegression
+from util import FullRankTensorRegression, get_embedding_in_parallel
 
-if __name__ == "__main__":
-    num_verbs = 1
+def two_word_regression(model_destination, ground_truth_data, embeddingset1
+                        , embeddingset2 = None, in_parallel = True, words_per_word = -1, num_epochs = 50, embedding_dim = 300):
+    """
+    Regression for datasets of paired words.
+
+    Args:
+
+    Returns:
+    """
+
     num_s_o = 50
-    embedding_dim = 300
-
-    t = torch.load("data/hybrid_empirical_embeddings.pt", weights_only=False)
-    s_o = torch.load("data/hybrid_dependent_data.pt", weights_only=False) #list of tuples of tensors
-
-    #do just one verb for now
-
     
     s_o_tensor = torch.zeros((int(0.8*num_s_o**2), 2, embedding_dim))
     test_s_o_tensor = torch.zeros((int(0.2*num_s_o**2), 2, embedding_dim))
@@ -99,7 +100,19 @@ if __name__ == "__main__":
 
     print(f'Test Sample Loss: {loss.item():.4f}')   
 
-    torch.save(model.state_dict(), "data/hybrid_weights.pt")
+    torch.save(model.state_dict(), model_destination)
+
+def three_word_regression():
+    pass
+
+if __name__ == "__main__":
+
+    t = torch.load("data/hybrid_empirical_embeddings.pt", weights_only=False)
+    s_o = torch.load("data/hybrid_dependent_data.pt", weights_only=False) #list of tuples of tensors
+
+    #do just one verb for now
+
+    
 
     
 
