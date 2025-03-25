@@ -181,7 +181,7 @@ if __name__ == "__main__":
         print("Loading WikiText-103 using Hugging Face datasets...")
         dataset = load_dataset("wikitext", "wikitext-103-v1")
         # Use the entire training split or a subset. Here we use the first 100 examples.
-        texts = dataset["train"]["text"][:100]
+        texts = dataset["train"]["text"]
         text = "\n".join(texts)
     else:
         # Default: Use "the_raven.txt" in the same directory.
