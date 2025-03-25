@@ -104,13 +104,43 @@ def estimate_bert_complexity(sentence, model_name="bert-base-uncased", bert_opti
 ###############################################################################
 # 4) Corpus Analysis and Parallel Sentence Processing
 ###############################################################################
-def chunk_text_into_sentences(text):
+
+def chunk_text_into_sentences(text, max_chunk=None):
     """
-    Uses spaCy's sentence segmentation to chunk text into sentences.
+    Splits text into sentences using spaCy. If the text length exceeds nlp.max_length,
+    first split the text into smaller chunks (using double newlines as a delimiter)
+    and then process each chunk.
+    
     Returns a list of sentence strings.
     """
-    doc = nlp(text)
-    return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    if max_chunk is None:
+        # Use a safe margin: a little less than spaCy's max_length.
+        max_chunk = nlp.max_length - 1000
+
+    if len(text) > max_chunk:
+        # Split text by paragraphs (using double newlines).
+        paragraphs = text.split("\n\n")
+        chunks = []
+        current_chunk = ""
+        for para in paragraphs:
+            if len(current_chunk) + len(para) < max_chunk:
+                current_chunk += para + "\n\n"
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = para + "\n\n"
+        if current_chunk:
+            chunks.append(current_chunk)
+        # Now process each chunk with spaCy.
+        sentences = []
+        for chunk in chunks:
+            doc = nlp(chunk)
+            sentences.extend([sent.text.strip() for sent in doc.sents if sent.text.strip()])
+        return sentences
+    else:
+        doc = nlp(text)
+        return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+
 
 def process_sentence(sentence, d, disco_factor, bert_optim_factor):
     """
@@ -155,6 +185,7 @@ def estimate_corpus_complexity_parallel(text, d=300, disco_factor=1.0, bert_opti
                 "token_count": seq_len
             })
     return corpus_results
+
 
 ###############################################################################
 # 5) Helper: Load Text File
