@@ -1,15 +1,19 @@
 import spacy
 from transformers import BertTokenizer
-from tqdm import tqdm  # for progress bar
+from tqdm import tqdm  # for progress bar in sentence processing
 import sys
 import os
 import concurrent.futures
 
-# Optional: use pardata for WikiText-103 if flag is provided.
+# Flag to decide whether to use WikiText-103.
 USE_WIKITEXT = "--wikitext" in sys.argv
 
 if USE_WIKITEXT:
-    import pardata
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("Please install the huggingface datasets library: pip install datasets")
+        sys.exit(1)
 
 ###############################################################################
 # 1) Load spaCy model (download "en_core_web_sm" if not installed)
@@ -89,7 +93,7 @@ def estimate_bert_complexity(sentence, model_name="bert-base-uncased", bert_opti
     # BERT-base hyperparameters:
     num_layers = 12
     hidden_size = 768
-    intermediate_size = 3072  # usually 4*hidden_size
+    intermediate_size = 3072  # typically 4 * hidden_size
     self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
     feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
     flops_per_layer = self_attention_flops + feed_forward_flops
@@ -102,7 +106,7 @@ def estimate_bert_complexity(sentence, model_name="bert-base-uncased", bert_opti
 ###############################################################################
 def chunk_text_into_sentences(text):
     """
-    Uses spaCy's sentence segmentation.
+    Uses spaCy's sentence segmentation to chunk text into sentences.
     Returns a list of sentence strings.
     """
     doc = nlp(text)
@@ -157,7 +161,7 @@ def estimate_corpus_complexity_parallel(text, d=300, disco_factor=1.0, bert_opti
 ###############################################################################
 def load_text_file(file_path):
     """
-    Reads the entire content of a text file.
+    Reads the entire content of a text file and returns it as a string.
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         text = f.read()
@@ -174,11 +178,10 @@ if __name__ == "__main__":
     
     # Decide which corpus to use.
     if USE_WIKITEXT:
-        print("Loading WikiText-103 from pardata...")
-        dataset = pardata.load_dataset('wikitext103')
-        # For demonstration, we'll use a subset (e.g., first 100 examples) from the train split.
-        # Adjust as needed.
-        texts = [item["text"] for item in dataset["train"][:100]]
+        print("Loading WikiText-103 using Hugging Face datasets...")
+        dataset = load_dataset("wikitext", "wikitext-103-v1")
+        # Use the entire training split or a subset. Here we use the first 100 examples.
+        texts = dataset["train"]["text"][:100]
         text = "\n".join(texts)
     else:
         # Default: Use "the_raven.txt" in the same directory.
@@ -190,7 +193,7 @@ if __name__ == "__main__":
             # Fallback sample text.
             text = "The big dog quickly chased a ball in the yard."
     
-    # Use parallel processing for corpus analysis.
+    # Process corpus using parallel sentence processing.
     corpus_results = estimate_corpus_complexity_parallel(
         text, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
         use_progress_bar=True, max_workers=4
@@ -206,7 +209,7 @@ if __name__ == "__main__":
     print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
     print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
     
-    # Calculate the percentage improvement of DisCoCirc over BERT.
+    # Calculate the improvement of DisCoCirc over BERT.
     naive_improvement = 100 * (corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']) / corpus_results['bert_total_naive']
     optimized_improvement = 100 * (corpus_results['bert_total_optimized'] - corpus_results['discocirc_total_optimized']) / corpus_results['bert_total_optimized']
     
