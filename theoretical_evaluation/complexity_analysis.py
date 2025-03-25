@@ -129,7 +129,7 @@ def estimate_bert_complexity(sentence, model_name="bert-base-uncased"):
 # 4) Example usage: Compare DisCoCirc vs BERT-base on a single sentence
 ###############################################################################
 if __name__ == "__main__":
-    sentence = "The big dog quickly chased a ball in the yard."
+    sentence = """The big dog quickly chased a ball in the yard."""
     
     # DisCoCirc estimate:
     discocirc_total, discocirc_breakdown = estimate_discocirc_complexity(sentence, d=300)
