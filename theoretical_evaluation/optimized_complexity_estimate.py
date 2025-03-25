@@ -1,6 +1,6 @@
 import spacy
 from transformers import BertTokenizer
-from tqdm import tqdm  # for progress bar in sentence processing
+from tqdm import tqdm  # for progress bars
 import sys
 import os
 import concurrent.futures
@@ -21,19 +21,9 @@ if USE_WIKITEXT:
 nlp = spacy.load("en_core_web_sm")
 
 ###############################################################################
-# 2) DisCoCirc Complexity Estimation
+# 2) DisCoCirc Complexity Estimation (functions unchanged)
 ###############################################################################
 def get_token_rank(token):
-    """
-    Return the multilinear 'rank' (order) for this token/operator in a 
-    simplified DisCoCirc-style grammar.
-      - NOUN/PROPN/PRON => rank 1
-      - ADJ/ADV/DET => rank 2
-      - ADP, CCONJ, SCONJ => rank 3
-      - AUX => rank 2
-      - VERB => rank 2 (intransitive), 3 (transitive), or 4 (ditransitive)
-      - INTJ and others => rank 1 as fallback
-    """
     if token.pos_ in {"NOUN", "PROPN", "PRON"}:
         return 1
     if token.pos_ in {"ADJ", "ADV", "DET"}:
@@ -56,12 +46,6 @@ def get_token_rank(token):
     return 1
 
 def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=False):
-    """
-    For a given sentence, compute:
-      - naive cost = sum(d^rank) over tokens
-      - optimized cost = naive cost / disco_factor
-    Returns: (total_naive, total_optimized, breakdown)
-    """
     doc = nlp(sentence)
     total_naive = 0.0
     total_optimized = 0.0
@@ -77,20 +61,12 @@ def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=Fal
     return total_naive, total_optimized, breakdown
 
 ###############################################################################
-# 3) BERT Complexity Estimation
+# 3) BERT Complexity Estimation (functions unchanged)
 ###############################################################################
 def estimate_bert_complexity(sentence, model_name="bert-base-uncased", bert_optim_factor=1.0):
-    """
-    Estimate the FLOPs for processing 'sentence' with BERT-base using a rough formula:
-      - Self-attention: 2 * (L^2 * H) per layer.
-      - Feed-forward: 2 * L * H * (4H) per layer.
-    Then multiply by number of layers and apply an optimization factor.
-    Returns: (naive_flops, seq_len, optimized_flops)
-    """
     tokenizer = BertTokenizer.from_pretrained(model_name)
     tokens = tokenizer.encode(sentence, add_special_tokens=True)
     seq_len = len(tokens)
-    # BERT-base hyperparameters:
     num_layers = 12
     hidden_size = 768
     intermediate_size = 3072  # typically 4 * hidden_size
@@ -104,21 +80,11 @@ def estimate_bert_complexity(sentence, model_name="bert-base-uncased", bert_opti
 ###############################################################################
 # 4) Corpus Analysis and Parallel Sentence Processing
 ###############################################################################
-
 def chunk_text_into_sentences(text, max_chunk=None):
-    """
-    Splits text into sentences using spaCy. If the text length exceeds nlp.max_length,
-    first split the text into smaller chunks (using double newlines as a delimiter)
-    and then process each chunk.
-    
-    Returns a list of sentence strings.
-    """
     if max_chunk is None:
-        # Use a safe margin: a little less than spaCy's max_length.
-        max_chunk = nlp.max_length - 1000
+        max_chunk = nlp.max_length - 1000  # safe margin
 
     if len(text) > max_chunk:
-        # Split text by paragraphs (using double newlines).
         paragraphs = text.split("\n\n")
         chunks = []
         current_chunk = ""
@@ -131,7 +97,6 @@ def chunk_text_into_sentences(text, max_chunk=None):
                 current_chunk = para + "\n\n"
         if current_chunk:
             chunks.append(current_chunk)
-        # Now process each chunk with spaCy.
         sentences = []
         for chunk in chunks:
             doc = nlp(chunk)
@@ -141,29 +106,19 @@ def chunk_text_into_sentences(text, max_chunk=None):
         doc = nlp(text)
         return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
-
 def process_sentence(sentence, d, disco_factor, bert_optim_factor):
-    """
-    Process a single sentence and return:
-      (disc_naive, disc_opt, bert_naive, bert_opt, seq_len)
-    """
     disc_naive, disc_opt, _ = estimate_discocirc_complexity(sentence, d=d, disco_factor=disco_factor, verbose=False)
     bert_naive, seq_len, bert_opt = estimate_bert_complexity(sentence, bert_optim_factor=bert_optim_factor)
     return disc_naive, disc_opt, bert_naive, bert_opt, seq_len
 
-def estimate_corpus_complexity_parallel(text, d=300, disco_factor=1.0, bert_optim_factor=1.0, use_progress_bar=True, max_workers=4):
-    """
-    Splits text into sentences and processes them in parallel.
-    Aggregates naive and optimized FLOP counts for both DisCoCirc and BERT.
-    """
-    sentences = chunk_text_into_sentences(text)
+def estimate_corpus_complexity_from_sentences(sentences, d=300, disco_factor=1.0, bert_optim_factor=1.0, use_progress_bar=True, max_workers=4):
     corpus_results = {
         "num_sentences": len(sentences),
         "discocirc_total_naive": 0.0,
         "discocirc_total_optimized": 0.0,
         "bert_total_naive": 0.0,
         "bert_total_optimized": 0.0,
-        "sentence_details": []  # Optional per-sentence breakdown
+        "sentence_details": []
     }
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_sentence, sent, d, disco_factor, bert_optim_factor) for sent in sentences]
@@ -186,14 +141,10 @@ def estimate_corpus_complexity_parallel(text, d=300, disco_factor=1.0, bert_opti
             })
     return corpus_results
 
-
 ###############################################################################
 # 5) Helper: Load Text File
 ###############################################################################
 def load_text_file(file_path):
-    """
-    Reads the entire content of a text file and returns it as a string.
-    """
     with open(file_path, 'r', encoding='utf-8') as f:
         text = f.read()
     return text
@@ -202,31 +153,31 @@ def load_text_file(file_path):
 # 6) Main: Choose Corpus and Run Analysis
 ###############################################################################
 if __name__ == "__main__":
-    # Optimization factors.
-    disco_factor = 20.0     # Simulated low-rank approximations in DisCoCirc.
-    bert_optim_factor = 5.0 # Simulated optimizations in BERT.
-    d = 300  # Embedding dimension for DisCoCirc
+    disco_factor = 20.0     
+    bert_optim_factor = 5.0 
+    d = 300               
     
-    # Decide which corpus to use.
     if USE_WIKITEXT:
-        print("Loading WikiText-103 using Hugging Face datasets...")
-        dataset = load_dataset("wikitext", "wikitext-103-v1")
-        # Use the entire training split or a subset. Here we use the first 100 examples.
-        texts = dataset["train"]["text"]
-        text = "\n".join(texts)
+        print("Loading WikiText-103 using Hugging Face datasets in streaming mode...")
+        dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
+        all_sentences = []
+        # Using a total count of 28,475 examples for the progress bar (adjust if needed).
+        for example in tqdm(dataset, total=28475, desc="Processing WikiText examples"):
+            example_text = example["text"]
+            sents = chunk_text_into_sentences(example_text)
+            all_sentences.extend(sents)
+        sentences = all_sentences
     else:
-        # Default: Use "the_raven.txt" in the same directory.
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
         if os.path.exists(file_path):
             print(f"Loading text file: {file_path}")
             text = load_text_file(file_path)
         else:
-            # Fallback sample text.
             text = "The big dog quickly chased a ball in the yard."
+        sentences = chunk_text_into_sentences(text)
     
-    # Process corpus using parallel sentence processing.
-    corpus_results = estimate_corpus_complexity_parallel(
-        text, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
+    corpus_results = estimate_corpus_complexity_from_sentences(
+        sentences, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
         use_progress_bar=True, max_workers=4
     )
     
@@ -240,7 +191,6 @@ if __name__ == "__main__":
     print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
     print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
     
-    # Calculate the improvement of DisCoCirc over BERT.
     naive_improvement = 100 * (corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']) / corpus_results['bert_total_naive']
     optimized_improvement = 100 * (corpus_results['bert_total_optimized'] - corpus_results['discocirc_total_optimized']) / corpus_results['bert_total_optimized']
     
