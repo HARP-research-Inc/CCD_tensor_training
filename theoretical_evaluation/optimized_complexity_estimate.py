@@ -266,8 +266,13 @@ def estimate_corpus_complexity_from_sentences(
     n_workers = get_optimal_workers()
     print(f"\nUsing {n_workers} worker processes for parallel processing")
     
-    # Split sentences into chunks for parallel processing
-    chunk_size = max(1, len(sentences) // (n_workers * 4))  # Divide into smaller chunks for better load balancing
+    # Split sentences into chunks for parallel processing using improved formula
+    total_sentences = len(sentences)
+    # Use a more reasonable formula that works well with many CPU cores
+    # Ensures each worker gets a meaningful batch of work, regardless of CPU count
+    chunk_size = max(10, min(100, int(math.sqrt(total_sentences * 10 / n_workers))))
+    print(f"Using chunk size of {chunk_size} sentences per worker")
+    
     sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
     
     # Create a partial function with the fixed arguments
@@ -413,9 +418,13 @@ def benchmark_processing_methods(sample_size=100):
     # Determine optimal settings based on fastest device
     fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
     
-    # Calculate optimal chunk size based on CPU cores
+    # Calculate optimal chunk size based on CPU cores - fixed to handle many cores
     cpu_count = multiprocessing.cpu_count()
-    optimal_chunk_size = max(1, int(sample_size / (cpu_count * 4)))
+    # Use a more reasonable formula for chunk size calculation
+    # Ensures reasonable batch sizes even on systems with many cores
+    # Minimum of 10 sentences per worker, scaling up to 25 as core count increases
+    suggested_chunk_size = max(10, min(25, int(math.sqrt(sample_size * 10 / cpu_count))))
+    optimal_chunk_size = max(1, suggested_chunk_size)
     
     optimal_settings = {
         "use_cpu": fastest_device == "cpu",
