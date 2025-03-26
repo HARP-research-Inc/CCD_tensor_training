@@ -231,7 +231,7 @@ def estimate_corpus_complexity_from_sentences(
     use_progress_bar: bool=True
 ) -> dict:
     """
-    Process sentences in the main process. 
+    Process sentences in parallel using multiprocessing. 
     Returns aggregated complexity results.
     """
     corpus_results = {
@@ -243,28 +243,42 @@ def estimate_corpus_complexity_from_sentences(
         "sentence_details": []
     }
     
-    if use_progress_bar:
-        sentences = tqdm(sentences, desc="Processing sentences")
+    # Determine optimal number of workers (75% of CPU cores)
+    n_workers = get_optimal_workers()
+    print(f"\nUsing {n_workers} worker processes for parallel processing")
     
-    for sentence in sentences:
-        disc_naive, disc_opt, _ = estimate_discocirc_complexity(
-            sentence, d=d, disco_factor=disco_factor, verbose=False
-        )
-        bert_naive, seq_len, bert_opt = estimate_bert_complexity(
-            sentence, bert_optim_factor=bert_optim_factor
-        )
-        
-        corpus_results["discocirc_total_naive"] += disc_naive
-        corpus_results["discocirc_total_optimized"] += disc_opt
-        corpus_results["bert_total_naive"] += bert_naive
-        corpus_results["bert_total_optimized"] += bert_opt
-        corpus_results["sentence_details"].append({
-            "discocirc_naive": disc_naive,
-            "discocirc_optimized": disc_opt,
-            "bert_naive": bert_naive,
-            "bert_optimized": bert_opt,
-            "token_count": seq_len
-        })
+    # Split sentences into chunks for parallel processing
+    chunk_size = max(1, len(sentences) // (n_workers * 4))  # Divide into smaller chunks for better load balancing
+    sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
+    
+    # Prepare arguments for parallel processing
+    process_args = [(chunk, d, disco_factor, bert_optim_factor) for chunk in sentence_chunks]
+    
+    # Process chunks in parallel
+    with multiprocessing.Pool(processes=n_workers) as pool:
+        if use_progress_bar:
+            chunk_results = list(tqdm(
+                pool.imap(process_sentence_batch, process_args),
+                total=len(sentence_chunks),
+                desc="Processing sentence chunks"
+            ))
+        else:
+            chunk_results = pool.map(process_sentence_batch, process_args)
+    
+    # Aggregate results from all chunks
+    for chunk_result in chunk_results:
+        for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
+            corpus_results["discocirc_total_naive"] += disc_naive
+            corpus_results["discocirc_total_optimized"] += disc_opt
+            corpus_results["bert_total_naive"] += bert_naive
+            corpus_results["bert_total_optimized"] += bert_opt
+            corpus_results["sentence_details"].append({
+                "discocirc_naive": disc_naive,
+                "discocirc_optimized": disc_opt,
+                "bert_naive": bert_naive,
+                "bert_optimized": bert_opt,
+                "token_count": seq_len
+            })
     
     return corpus_results
 
