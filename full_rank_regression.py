@@ -20,44 +20,47 @@ def two_word_regression(model_destination, embedding_set, ground_truth, num_epoc
         raise Exception("Mismatched data dimensions")
 
     num_nouns = len(t)
+    test_size = num_nouns // 5  # 20% of the data
+    train_size = num_nouns - test_size  # Remaining 80%
 
+    # Allocating space for testing and training tensors
+    print(">allocating space for testing and training tensors...")
+    s_o_tensor = torch.zeros((train_size, 2, embedding_dim))
+    test_s_o_tensor = torch.zeros((test_size, 2, embedding_dim))
     
-    s_o_tensor = torch.zeros((int(0.8*num_nouns), 2, embedding_dim))
-    test_s_o_tensor = torch.zeros((int(0.2*num_nouns), 2, embedding_dim))
-    
-    ground_truth = torch.zeros((int(0.8*num_nouns), embedding_dim))
-    ground_truth_test = torch.zeros((int(0.2*num_nouns), embedding_dim))
+    ground_truth = torch.zeros((train_size, embedding_dim))
+    ground_truth_test = torch.zeros((test_size, embedding_dim))
+    print(">done!\n\n\n")
 
-    print(len(t))
-    print(len(s_o))
-    
-    noun_pairs_test = s_o[:int(0.2*num_nouns)]
-    sentence_test = t[:int(0.2*num_nouns)]
+    # Partitioning between testing and training sets
+    print(">Partitioning between testing and training sets...")
+    noun_pairs_test = s_o[:test_size]
+    sentence_test = t[:test_size]
 
-    # 
-    verb1_noun_pairs = s_o[int(0.2*num_nouns):num_nouns]
-    verb1_sentences = t[int(0.2*num_nouns):num_nouns]
+    verb1_noun_pairs = s_o[test_size:]
+    verb1_sentences = t[test_size:]
+    print(">done!\n\n\n")
 
-    print("shape of verb1_sentences: ", verb1_sentences[0].shape)
-
-    print(len(verb1_sentences))
-    print(ground_truth.shape)
-
-    #assembling training tensors
+    # Assembling training tensors
+    print(">Assembling training tensors...")
     for i, noun_tup in enumerate(verb1_noun_pairs):
         s_o_tensor[i][0] = noun_tup[0]
         s_o_tensor[i][1] = noun_tup[1]
         ground_truth[i] = torch.Tensor(verb1_sentences[i])
+    print(">done!\n\n\n")
     
-    #assembling test tensors
+    # Assembling test tensors
+    print(">Assembling testing tensors...")
     for i, noun_tup in enumerate(noun_pairs_test):
         test_s_o_tensor[i][0] = noun_tup[0]
         test_s_o_tensor[i][1] = noun_tup[1]
         ground_truth_test[i] = torch.Tensor(sentence_test[i])
+    print(">done!\n\n\n")
     
     model = FullRankTensorRegression(embedding_dim, embedding_dim)
     optimizer = optim.Adadelta(model.parameters(), lr=1) 
 
+    print(">Running regression...")
     subjects = s_o_tensor[:, 0, :]
     objects = s_o_tensor[:, 1, :]
 
@@ -77,32 +80,32 @@ def two_word_regression(model_destination, embedding_set, ground_truth, num_epoc
         # Print loss for each epoch
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.20f}')
     
-    print(f'Final In-Sample Loss: {loss.item():.20f}')
+    print(f'>done! Final In-Sample Loss: {loss.item():.20f}\n\n\n')
 
     """************************testing************************"""
-
+    print(">************************testing************************")
     subjects = test_s_o_tensor[:, 0, :]
     objects = test_s_o_tensor[:, 1, :]    
     predicted_test = model(subjects, objects)
     loss = torch.mean((predicted_test - ground_truth_test)**2)
 
-    print(f'Test Sample Loss: {loss.item():.4f}')   
+    print(f'>done! Test Sample Loss: {loss.item():.4f}\n\n\n')   
 
     torch.save(model.state_dict(), model_destination)
 
 def three_word_regression():
-    #May or may not be implemented
+    # May or may not be implemented
     pass
 
 if __name__ == "__main__":
 
     t = torch.load("data/hybrid_empirical_embeddings.pt", weights_only=False)
-    s_o = torch.load("data/hybrid_dependent_data.pt", weights_only=False) #list of tuples of tensors
+    s_o = torch.load("data/hybrid_dependent_data.pt", weights_only=False) # List of tuples of tensors
 
     two_word_regression("data/hybrid_weights.pt", s_o, t)
 
-    
 
-    
+
+
 
 

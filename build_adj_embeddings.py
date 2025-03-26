@@ -40,13 +40,14 @@ if __name__ == "__main__":
             sentence = adj + " " + noun
             #print(sentence)
             noun_embedding = get_embedding_in_parallel(noun)
+            adjective_embedding = get_embedding_in_parallel(adj)
 
-            if noun_embedding is None:
+            if noun_embedding is None or adjective_embedding is None:
                 continue 
             sentence_embedding = model.encode(sentence)
 
             buffer.append(torch.from_numpy(sentence_embedding))
-            noun_embeddings.append(noun_embedding)
+            noun_embeddings.append((noun_embedding, adjective_embedding))
 
     empirical_embeddings = torch.stack(buffer)
     print(empirical_embeddings.shape)
