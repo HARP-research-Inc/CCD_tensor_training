@@ -306,34 +306,37 @@ if __name__ == "__main__":
     if USE_WIKITEXT:
         print("Loading WikiText-103 using Hugging Face datasets in streaming mode...")
 
-        # We'll track a third progress bar for tokens
-        # We know training has ~28k articles, so one bar for articles is up to 28475
-        # Let's set a second bar for approximate tokens. We'll guess 101,425,671 tokens in training.
+        # We'll track progress for articles and actual processing
         from datasets import load_dataset
         dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
         
         total_articles = 28475
-        total_tokens_est = 101_425_671  # Approx for the entire training set
         article_pbar = tqdm(total=total_articles, desc="WikiText Articles")
-        token_pbar = tqdm(total=total_tokens_est, desc="WikiText Tokens Processed")
         
         all_sentences = []
         article_count = 0
+        processed_tokens = 0
         
         for example in dataset:
             article_count += 1
             article_pbar.update(1)
             
             example_text = example["text"]
-            
-            ex_tokens = len(example_text.split())
-            token_pbar.update(ex_tokens)
-            
             sents = chunk_text_into_sentences(example_text)
+            
+            # Count actual processed tokens (from BERT tokenizer)
+            for sent in sents:
+                tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
+                processed_tokens += len(tokens)
+            
             all_sentences.extend(sents)
+            
+            # Update progress every 100 articles
+            if article_count % 100 == 0:
+                print(f"\rProcessed {article_count}/{total_articles} articles, {processed_tokens:,} tokens", end="")
         
         article_pbar.close()
-        token_pbar.close()
+        print(f"\nTotal processed tokens: {processed_tokens:,}")
         
         sentences = all_sentences
     else:
