@@ -12,8 +12,8 @@ DisCoCirc is a framework that combines distributional semantics with categorical
 .
 ├── preprocessing/                  # Data preprocessing utilities
 │   ├── make_block.py             # Continuous corpora assembly
-│   ├── transitive_verb_parser.py # Advanced parsing utilities
-│   ├── adjective_parse.py        # Adjective-specific parsing
+│   ├── transitive_verb_parser.py # Transitive verb parsing
+│   ├── adjective_parse.py        # Adjective-noun pair parsing
 │   └── build_SVO_sentences.py  # Subject-Verb-Object sentence construction
 ├── tests/                  # Test suite
 ├── documents/             # Documentation and examples
