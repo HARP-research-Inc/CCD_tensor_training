@@ -9,12 +9,14 @@ import math
 import torch
 from typing import Optional, Tuple
 from functools import partial
+import time
 
 # Flags for different modes
 USE_WIKITEXT = "--wikitext" in sys.argv
 BERT_ONLY   = "--bert"     in sys.argv
-CPU_ONLY    = "--cpu"      in sys.argv   # <-- ADDED FLAG
-CPU_BERT    = "--cpu-bert" in sys.argv   # <-- NEW FLAG
+CPU_ONLY    = "--cpu"      in sys.argv
+CPU_BERT    = "--cpu-bert" in sys.argv
+BENCHMARK   = "--benchmark" in sys.argv
 
 if USE_WIKITEXT:
     try:
@@ -221,6 +223,7 @@ def process_sentence_batch(
         disc_naive, disc_opt, _ = estimate_discocirc_complexity(
             sentence, d=d, disco_factor=disco_factor, verbose=False
         )
+        
         # BERT processing uses GPU if available (unless --cpu)
         bert_naive, seq_len, bert_opt = estimate_bert_complexity(
             sentence, bert_optim_factor=bert_optim_factor
@@ -295,6 +298,100 @@ def load_text_file(file_path):
         text = f.read()
     return text
 
+def benchmark_processing_methods(sample_size=100):
+    """Run a quick benchmark to determine fastest processing methods."""
+    print("\n=== Running Benchmark ===")
+    
+    # Load a small sample of data
+    if USE_WIKITEXT:
+        dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
+        sample_texts = []
+        for i, example in enumerate(dataset):
+            if i >= sample_size:
+                break
+            sample_texts.append(example["text"])
+    else:
+        file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                text = f.read()
+        else:
+            text = "The big dog quickly chased a ball in the yard."
+        sample_texts = [text]
+    
+    # Benchmark BERT processing
+    print("\nBenchmarking BERT processing...")
+    bert_times = []
+    bert_pbar = tqdm(total=len(sample_texts), desc="BERT", position=1, leave=False)
+    for text in sample_texts:
+        start_time = time.time()
+        tokens = BERT_TOKENIZER.encode(text, add_special_tokens=True)
+        seq_len = len(tokens)
+        # Calculate FLOPs (symbolic formula)
+        num_layers = 12
+        hidden_size = 768
+        intermediate_size = 3072
+        self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+        feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+        flops_per_layer = self_attention_flops + feed_forward_flops
+        naive_flops = flops_per_layer * num_layers
+        optimized_flops = naive_flops / 5.0
+        bert_times.append(time.time() - start_time)
+        bert_pbar.update(1)
+    bert_pbar.close()
+    
+    # Benchmark DisCoCirc processing
+    print("\nBenchmarking DisCoCirc processing...")
+    disco_times = []
+    disco_pbar = tqdm(total=len(sample_texts), desc="DisCoCirc", position=2, leave=False)
+    for text in sample_texts:
+        start_time = time.time()
+        doc = nlp(text)
+        total_naive = 0.0
+        total_opt = 0.0
+        for token in doc:
+            rank = get_token_rank(token)
+            naive = float(300**rank)
+            opt = naive / 20.0
+            total_naive += naive
+            total_opt += opt
+        disco_times.append(time.time() - start_time)
+        disco_pbar.update(1)
+    disco_pbar.close()
+    
+    # Calculate average times and other statistics
+    avg_bert_time = sum(bert_times) / len(bert_times)
+    avg_disco_time = sum(disco_times) / len(disco_times)
+    min_bert_time = min(bert_times)
+    min_disco_time = min(disco_times)
+    max_bert_time = max(bert_times)
+    max_disco_time = max(disco_times)
+    
+    print("\n=== Benchmark Results ===")
+    print("\nBERT Processing:")
+    print(f"  Average time: {avg_bert_time:.4f} seconds")
+    print(f"  Min time:     {min_bert_time:.4f} seconds")
+    print(f"  Max time:     {max_bert_time:.4f} seconds")
+    print(f"  Total time:   {sum(bert_times):.4f} seconds")
+    
+    print("\nDisCoCirc Processing:")
+    print(f"  Average time: {avg_disco_time:.4f} seconds")
+    print(f"  Min time:     {min_disco_time:.4f} seconds")
+    print(f"  Max time:     {max_disco_time:.4f} seconds")
+    print(f"  Total time:   {sum(disco_times):.4f} seconds")
+    
+    # Determine optimal settings
+    optimal_settings = {
+        "use_cpu": avg_bert_time < 0.1,  # If BERT is fast on CPU, use CPU
+        "parallel_chunk_size": max(1, int(sample_size / (multiprocessing.cpu_count() * 4)))
+    }
+    
+    print("\n=== Optimal Settings ===")
+    print(f"Using CPU: {optimal_settings['use_cpu']}")
+    print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']}")
+    
+    return optimal_settings
+
 ###############################################################################
 # 6) Main Execution
 ###############################################################################
@@ -303,42 +400,104 @@ if __name__ == "__main__":
     bert_optim_factor = 5.0 
     d = 300               
     
+    # Run benchmark first if requested
+    if BENCHMARK:
+        optimal_settings = benchmark_processing_methods()
+        # Update global settings based on benchmark
+        if optimal_settings["use_cpu"]:
+            CPU_ONLY = True
+            print("\nUsing CPU mode based on benchmark results")
+        else:
+            print("\nUsing GPU mode based on benchmark results")
+    
     if USE_WIKITEXT:
-        print("Loading WikiText-103 using Hugging Face datasets in streaming mode...")
-
-        # We'll track progress for articles and actual processing
+        print("\nLoading WikiText-103 using Hugging Face datasets in streaming mode...")
         from datasets import load_dataset
         dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
         
         total_articles = 28475
-        article_pbar = tqdm(total=total_articles, desc="WikiText Articles")
+        article_pbar = tqdm(total=total_articles, desc="WikiText Articles", position=0)
         
-        all_sentences = []
+        # Initialize results
+        corpus_results = {
+            "num_sentences": 0,
+            "discocirc_total_naive": 0.0,
+            "discocirc_total_optimized": 0.0,
+            "bert_total_naive": 0.0,
+            "bert_total_optimized": 0.0,
+            "sentence_details": []
+        }
+        
+        # Process articles in batches for better performance
+        batch_size = 100
+        current_batch = []
         article_count = 0
-        processed_tokens = 0
         
-        for example in dataset:
-            article_count += 1
-            article_pbar.update(1)
+        # Determine optimal number of workers
+        n_workers = get_optimal_workers()
+        print(f"\nUsing {n_workers} worker processes for parallel processing")
+        
+        # Create a partial function with the fixed arguments
+        process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
+        
+        # Initialize multiprocessing pool
+        with multiprocessing.Pool(processes=n_workers) as pool:
+            for example in dataset:
+                article_count += 1
+                article_pbar.update(1)
+                
+                example_text = example["text"]
+                sents = chunk_text_into_sentences(example_text)
+                current_batch.extend(sents)
+                
+                # Process batch when it reaches batch_size
+                if len(current_batch) >= batch_size:
+                    # Process the batch in parallel
+                    batch_results = process_batch(current_batch)
+                    
+                    # Accumulate results
+                    for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
+                        corpus_results["discocirc_total_naive"] += disc_naive
+                        corpus_results["discocirc_total_optimized"] += disc_opt
+                        corpus_results["bert_total_naive"] += bert_naive
+                        corpus_results["bert_total_optimized"] += bert_opt
+                        corpus_results["sentence_details"].append({
+                            "discocirc_naive": disc_naive,
+                            "discocirc_optimized": disc_opt,
+                            "bert_naive": bert_naive,
+                            "bert_optimized": bert_opt,
+                            "token_count": seq_len
+                        })
+                    
+                    corpus_results["num_sentences"] += len(current_batch)
+                    current_batch = []
+                
+                # Update progress every 100 articles
+                if article_count % 100 == 0:
+                    article_pbar.set_postfix({
+                        "sentences": corpus_results["num_sentences"],
+                        "articles": article_count
+                    })
             
-            example_text = example["text"]
-            sents = chunk_text_into_sentences(example_text)
-            
-            # Count actual processed tokens (from BERT tokenizer)
-            for sent in sents:
-                tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
-                processed_tokens += len(tokens)
-            
-            all_sentences.extend(sents)
-            
-            # Update progress every 100 articles
-            if article_count % 100 == 0:
-                print(f"\rProcessed {article_count}/{total_articles} articles, {processed_tokens:,} tokens", end="")
+            # Process any remaining sentences
+            if current_batch:
+                batch_results = process_batch(current_batch)
+                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
+                    corpus_results["discocirc_total_naive"] += disc_naive
+                    corpus_results["discocirc_total_optimized"] += disc_opt
+                    corpus_results["bert_total_naive"] += bert_naive
+                    corpus_results["bert_total_optimized"] += bert_opt
+                    corpus_results["sentence_details"].append({
+                        "discocirc_naive": disc_naive,
+                        "discocirc_optimized": disc_opt,
+                        "bert_naive": bert_naive,
+                        "bert_optimized": bert_opt,
+                        "token_count": seq_len
+                    })
+                corpus_results["num_sentences"] += len(current_batch)
         
         article_pbar.close()
-        print(f"\nTotal processed tokens: {processed_tokens:,}")
-        
-        sentences = all_sentences
+        print(f"\nTotal processed sentences: {corpus_results['num_sentences']:,}")
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
         if os.path.exists(file_path):
@@ -348,11 +507,10 @@ if __name__ == "__main__":
             text = "The big dog quickly chased a ball in the yard."
         
         sentences = chunk_text_into_sentences(text)
-    
-    corpus_results = estimate_corpus_complexity_from_sentences(
-        sentences, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
-        use_progress_bar=True
-    )
+        corpus_results = estimate_corpus_complexity_from_sentences(
+            sentences, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
+            use_progress_bar=True
+        )
     
     print("\n" + "="*60)
     print("[Corpus Complexity Analysis (Optimized and Unoptimized)]")
