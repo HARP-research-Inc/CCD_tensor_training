@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
     print("\nactual vs expected")
     print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected1.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected2.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected3.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected4.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding2.detach().numpy(), expected2.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding3.detach().numpy(), expected3.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding4.detach().numpy(), expected4.detach().numpy()))
     print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected4.detach().numpy()))
