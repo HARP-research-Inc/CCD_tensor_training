@@ -58,7 +58,7 @@ def two_word_regression(model_destination, embedding_set, ground_truth, num_epoc
     print(">done!\n\n\n")
     
     model = FullRankTensorRegression(embedding_dim, embedding_dim)
-    optimizer = optim.Adadelta(model.parameters(), lr=1) 
+    optimizer = optim.Adadelta(model.parameters(), lr=0.1) 
 
     print(">Running regression...")
     subjects = s_o_tensor[:, 0, :]
@@ -79,8 +79,16 @@ def two_word_regression(model_destination, embedding_set, ground_truth, num_epoc
 
         # Print loss for each epoch
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.20f}')
-    
+
+        # Debugging: Check if weights are being updated
+        if epoch == 0 or epoch == num_epochs - 1:
+            print(f"Sample weights at epoch {epoch + 1}: {list(model.parameters())[0][0][:5]}")
+
     print(f'>done! Final In-Sample Loss: {loss.item():.20f}\n\n\n')
+
+    # Save model weights
+    torch.save(model.state_dict(), model_destination)
+    print(f"Model weights saved to: {model_destination}")
 
     """************************testing************************"""
     print(">************************testing************************")

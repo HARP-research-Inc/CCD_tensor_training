@@ -7,5 +7,5 @@ if __name__ == "__main__":
 
     empirical_data = torch.load("data/adj_empirical_embeddings.pt", weights_only=False)
     
-    two_word_regression("data/adj_weights.pt", 
-                        dependent_data, empirical_data, num_epochs=25)
+    two_word_regression("adj_weights_on_the_fly.pt", 
+                        dependent_data, empirical_data, num_epochs=1)

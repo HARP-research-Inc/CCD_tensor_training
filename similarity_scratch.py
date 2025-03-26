@@ -37,12 +37,15 @@ def generate_embedding(line, pca, model, ft_model, tensor_function):
 
     return expected_sentence_embedding, actual_sentence_embedding
 
-def API_query_embedding(line, pca, model, tensor_function):
+def API_query_embedding(line, pca, model, tensor_function, pos = "transitive verb"):
     sentence = line.strip("\n").strip(".").lower()
     words = sentence.split()
 
-    subject = words[0]
-    object = words[2]
+    word1 = words[0]
+    if pos == "transitive verb":
+        word2 = words[2]
+    else:
+        word2 = words[1]
 
     expected_sentence_embedding = model.encode(sentence, convert_to_tensor=True)
     expected_sentence_embedding = expected_sentence_embedding.cpu().numpy().reshape(1, -1)
@@ -50,8 +53,8 @@ def API_query_embedding(line, pca, model, tensor_function):
 
     #print("BERT embedding shape:", expected_sentence_embedding.shape)
     
-    subject_embedding = get_embedding_in_parallel(subject)  # Add batch dimension
-    object_embedding = get_embedding_in_parallel(object)  # Add batch dimension
+    subject_embedding = get_embedding_in_parallel(word1)  # Add batch dimension
+    object_embedding = get_embedding_in_parallel(word2)  # Add batch dimension
     # print(subject_embedding.shape)
     # print(object_embedding.shape)
 
@@ -70,50 +73,49 @@ def API_query_embedding(line, pca, model, tensor_function):
     return expected_sentence_embedding, actual_sentence_embedding
 
 if __name__ == "__main__":
-    
     file = open("data/test_sentences.txt", 'r')
 
-    #loading embedding models
+    # Loading embedding models
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    #ft_model = api.load('fasttext-wiki-news-subwords-300')
 
-    tensor_function = FullRankTensorRegression(300, 300)
-    tensor_function.load_state_dict(torch.load("data/hybrid_weights.pt"))
+    # Load the first model weights
+    tensor_function1 = FullRankTensorRegression(300, 300)
+    model_path1 = "adj_weights_on_the_fly.pt"
+    tensor_function1.load_state_dict(torch.load(model_path1))
+    tensor_function1.eval()
 
-    tensor_function.eval()
-    
-    #loading transform model
-    pca = joblib.load("data/pca_model.pkl")
+    # Load the second model weights
+    tensor_function2 = FullRankTensorRegression(300, 300)
+    model_path2 = "dummy_model.pt"
+    tensor_function2.load_state_dict(torch.load(model_path2))
+    tensor_function2.eval()
 
+    # Debugging: Check if weights are loaded correctly
+    print(f"Sample weights from {model_path1}: {list(tensor_function1.parameters())[0][0][:5]}")
+    print(f"Sample weights from {model_path2}: {list(tensor_function2.parameters())[0][0][:5]}")
 
+    # Loading transform model
+    pca = joblib.load("data/adj_pca_model.pkl")
 
+    # Compare outputs of the two models
+    actual_sentence_embedding1_model1, _ = API_query_embedding("big guy", pca, model, tensor_function1, pos="adjective")
+    actual_sentence_embedding2_model1, _ = API_query_embedding("fat man", pca, model, tensor_function1, pos="adjective")
 
-    # actual_sentence_embedding1, _ = generate_embedding("man strike buffalo", pca, model, ft_model, tensor_function)    
-    # actual_sentence_embedding2, _ = generate_embedding("dude strike bison", pca, model, ft_model, tensor_function)
-    # actual_sentence_embedding3, _ = generate_embedding("dog strike gold", pca, model, ft_model, tensor_function)
-    # actual_sentence_embedding4, _ = generate_embedding("guy strike buffalo", pca, model, ft_model, tensor_function)
-    # actual_sentence_embedding5, _ = generate_embedding("man strike man", pca, model, ft_model, tensor_function)
+    actual_sentence_embedding1_model2, _ = API_query_embedding("big guy", pca, model, tensor_function2, pos="adjective")
+    actual_sentence_embedding2_model2, _ = API_query_embedding("fat man", pca, model, tensor_function2, pos="adjective")
 
-    actual_sentence_embedding1, _ = API_query_embedding("man strike buffalo", pca, model, tensor_function)    
-    actual_sentence_embedding2, _ = API_query_embedding("dude strike bison", pca, model, tensor_function)
-    actual_sentence_embedding3, _ = API_query_embedding("dog strike gold", pca, model, tensor_function)
-    actual_sentence_embedding4, _ = API_query_embedding("guy strike buffalo", pca, model, tensor_function)
-    actual_sentence_embedding5, _ = API_query_embedding("man strike man", pca, model, tensor_function)
+    # Print cosine similarities for both models
+    print(f"Model 1 ({model_path1}) Cosine similarity: ",
+          cosine_sim(actual_sentence_embedding1_model1.detach().numpy(), actual_sentence_embedding2_model1.detach().numpy()))
+    print(f"Model 2 ({model_path2}) Cosine similarity: ",
+          cosine_sim(actual_sentence_embedding1_model2.detach().numpy(), actual_sentence_embedding2_model2.detach().numpy()))
 
-    # Calculate loss
-    #loss = F.mse_loss(actual_sentence_embedding1, expected_sentence_embedding1)
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding2.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding3.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding4.detach().numpy()))
-    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding5.detach().numpy()))
+    # Compare the outputs of the two models
+    diff1 = torch.norm(actual_sentence_embedding1_model1 - actual_sentence_embedding1_model2).item()
+    diff2 = torch.norm(actual_sentence_embedding2_model1 - actual_sentence_embedding2_model2).item()
 
-
-
-
-    #print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected_sentence_embedding.detach().numpy()))
-    #print("MSE Loss: ", loss.item())
-
-    # Calculate and print aggregate loss
+    print(f"Difference between model outputs for 'boring evil': {diff1:.6f}")
+    print(f"Difference between model outputs for 'boring badness': {diff2:.6f}")
 
 
 
