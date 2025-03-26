@@ -319,28 +319,44 @@ def benchmark_processing_methods(sample_size=100):
             text = "The big dog quickly chased a ball in the yard."
         sample_texts = [text]
     
-    # Benchmark BERT processing
-    print("\nBenchmarking BERT processing...")
-    bert_times = []
-    bert_pbar = tqdm(total=len(sample_texts), desc="BERT", position=1, leave=False)
-    for text in sample_texts:
-        start_time = time.time()
-        tokens = BERT_TOKENIZER.encode(text, add_special_tokens=True)
-        seq_len = len(tokens)
-        # Calculate FLOPs (symbolic formula)
-        num_layers = 12
-        hidden_size = 768
-        intermediate_size = 3072
-        self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-        feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
-        flops_per_layer = self_attention_flops + feed_forward_flops
-        naive_flops = flops_per_layer * num_layers
-        optimized_flops = naive_flops / 5.0
-        bert_times.append(time.time() - start_time)
-        bert_pbar.update(1)
-    bert_pbar.close()
+    # Test both CPU and GPU if available
+    devices = ["cpu"]
+    if torch.cuda.is_available():
+        devices.append("cuda")
     
-    # Benchmark DisCoCirc processing
+    print("\nBenchmarking BERT processing on different devices...")
+    bert_results = {}
+    for device in devices:
+        print(f"\nTesting on {device.upper()}")
+        bert_times = []
+        bert_pbar = tqdm(total=len(sample_texts), desc=f"BERT ({device.upper()})", position=1, leave=False)
+        for text in sample_texts:
+            start_time = time.time()
+            tokens = BERT_TOKENIZER.encode(text, add_special_tokens=True)
+            if device == "cuda":
+                tokens = torch.tensor(tokens, device=torch.device("cuda"))
+            seq_len = len(tokens)
+            # Calculate FLOPs (symbolic formula)
+            num_layers = 12
+            hidden_size = 768
+            intermediate_size = 3072
+            self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+            feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+            flops_per_layer = self_attention_flops + feed_forward_flops
+            naive_flops = flops_per_layer * num_layers
+            optimized_flops = naive_flops / 5.0
+            bert_times.append(time.time() - start_time)
+            bert_pbar.update(1)
+        bert_pbar.close()
+        bert_results[device] = {
+            "times": bert_times,
+            "avg": sum(bert_times) / len(bert_times),
+            "min": min(bert_times),
+            "max": max(bert_times),
+            "total": sum(bert_times)
+        }
+    
+    # Benchmark DisCoCirc processing (always on CPU)
     print("\nBenchmarking DisCoCirc processing...")
     disco_times = []
     disco_pbar = tqdm(total=len(sample_texts), desc="DisCoCirc", position=2, leave=False)
@@ -359,34 +375,32 @@ def benchmark_processing_methods(sample_size=100):
         disco_pbar.update(1)
     disco_pbar.close()
     
-    # Calculate average times and other statistics
-    avg_bert_time = sum(bert_times) / len(bert_times)
-    avg_disco_time = sum(disco_times) / len(disco_times)
-    min_bert_time = min(bert_times)
-    min_disco_time = min(disco_times)
-    max_bert_time = max(bert_times)
-    max_disco_time = max(disco_times)
-    
+    # Print benchmark results
     print("\n=== Benchmark Results ===")
     print("\nBERT Processing:")
-    print(f"  Average time: {avg_bert_time:.4f} seconds")
-    print(f"  Min time:     {min_bert_time:.4f} seconds")
-    print(f"  Max time:     {max_bert_time:.4f} seconds")
-    print(f"  Total time:   {sum(bert_times):.4f} seconds")
+    for device in devices:
+        results = bert_results[device]
+        print(f"\n{device.upper()}:")
+        print(f"  Average time: {results['avg']:.4f} seconds")
+        print(f"  Min time:     {results['min']:.4f} seconds")
+        print(f"  Max time:     {results['max']:.4f} seconds")
+        print(f"  Total time:   {results['total']:.4f} seconds")
     
     print("\nDisCoCirc Processing:")
-    print(f"  Average time: {avg_disco_time:.4f} seconds")
-    print(f"  Min time:     {min_disco_time:.4f} seconds")
-    print(f"  Max time:     {max_disco_time:.4f} seconds")
+    print(f"  Average time: {sum(disco_times)/len(disco_times):.4f} seconds")
+    print(f"  Min time:     {min(disco_times):.4f} seconds")
+    print(f"  Max time:     {max(disco_times):.4f} seconds")
     print(f"  Total time:   {sum(disco_times):.4f} seconds")
     
-    # Determine optimal settings
+    # Determine optimal settings based on fastest device
+    fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
     optimal_settings = {
-        "use_cpu": avg_bert_time < 0.1,  # If BERT is fast on CPU, use CPU
+        "use_cpu": fastest_device == "cpu",
         "parallel_chunk_size": max(1, int(sample_size / (multiprocessing.cpu_count() * 4)))
     }
     
     print("\n=== Optimal Settings ===")
+    print(f"Fastest device: {fastest_device.upper()}")
     print(f"Using CPU: {optimal_settings['use_cpu']}")
     print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']}")
     
