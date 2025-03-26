@@ -19,6 +19,15 @@ CPU_BERT    = "--cpu-bert" in sys.argv
 BENCHMARK   = "--benchmark" in sys.argv
 USE_FORK    = "--fork"     in sys.argv  # Use fork instead of spawn (can be faster but less reliable)
 
+# Process worker limits
+MAX_WORKERS = None
+for arg in sys.argv:
+    if arg.startswith("--workers="):
+        try:
+            MAX_WORKERS = int(arg.split("=")[1])
+        except (ValueError, IndexError):
+            print("Warning: Invalid value for --workers flag.")
+
 if USE_WIKITEXT:
     try:
         from datasets import load_dataset
@@ -175,7 +184,14 @@ def estimate_bert_complexity(
 def get_optimal_workers():
     """Determine number of worker processes based on CPU cores."""
     cpu_count = multiprocessing.cpu_count()
-    return max(1, math.floor(cpu_count * 0.75))
+    optimal = max(1, math.floor(cpu_count * 0.75))
+    
+    # Apply MAX_WORKERS constraint if specified
+    if MAX_WORKERS is not None:
+        optimal = min(optimal, MAX_WORKERS)
+        print(f"Limiting to {optimal} workers due to --workers flag")
+    
+    return optimal
 
 def process_chunk(chunk):
     """Process a chunk of text into sentences (spaCy)."""
@@ -480,6 +496,15 @@ def benchmark_processing_methods(sample_size=100):
 if __name__ == "__main__":
     # Initialize GPU and tokenizer in the main process only
     initialize_gpu()
+    
+    # Print info about worker limits
+    cpu_count = multiprocessing.cpu_count()
+    effective_workers = get_optimal_workers()
+    print(f"\nSystem has {cpu_count} CPU cores, using {effective_workers} worker processes")
+    if MAX_WORKERS is not None:
+        print(f"Worker count limited by --workers={MAX_WORKERS} flag")
+    else:
+        print("For better performance on many-core systems, consider using --workers=16")
     
     disco_factor = 20.0     
     bert_optim_factor = 5.0 
