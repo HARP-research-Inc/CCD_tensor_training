@@ -14,6 +14,7 @@ from functools import partial
 USE_WIKITEXT = "--wikitext" in sys.argv
 BERT_ONLY   = "--bert"     in sys.argv
 CPU_ONLY    = "--cpu"      in sys.argv   # <-- ADDED FLAG
+CPU_BERT    = "--cpu-bert" in sys.argv   # <-- NEW FLAG
 
 if USE_WIKITEXT:
     try:
@@ -29,9 +30,12 @@ print("\n=== GPU Diagnostics ===")
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
-# Decide on device, checking for --cpu override
+# Decide on device, checking for --cpu and --cpu-bert overrides
 if CPU_ONLY:
-    print("User requested --cpu, forcing CPU usage.")
+    print("User requested --cpu, forcing CPU usage for all operations.")
+    DEVICE = torch.device("cpu")
+elif CPU_BERT:
+    print("User requested --cpu-bert, forcing CPU usage for BERT operations only.")
     DEVICE = torch.device("cpu")
 else:
     # Force CUDA device selection if available
