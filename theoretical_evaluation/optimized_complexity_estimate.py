@@ -11,7 +11,8 @@ from typing import Optional, Tuple
 
 # Flags for different modes
 USE_WIKITEXT = "--wikitext" in sys.argv
-BERT_ONLY = "--bert" in sys.argv
+BERT_ONLY   = "--bert"     in sys.argv
+CPU_ONLY    = "--cpu"      in sys.argv   # <-- ADDED FLAG
 
 if USE_WIKITEXT:
     try:
@@ -20,41 +21,45 @@ if USE_WIKITEXT:
         print("Please install the huggingface datasets library: pip install datasets")
         sys.exit(1)
 
+###############################################################################
 # Enhanced GPU diagnostics and initialization
+###############################################################################
 print("\n=== GPU Diagnostics ===")
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
-# Force CUDA device selection
-if torch.cuda.is_available():
-    # Get all available CUDA devices
-    cuda_devices = [i for i in range(torch.cuda.device_count())]
-    if cuda_devices:
-        # Find NVIDIA GPU (usually device 0)
-        nvidia_device = cuda_devices[0]
-        print(f"Found NVIDIA GPU at device {nvidia_device}")
-        print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
-        print(f"CUDA version: {torch.version.cuda}")
-        
-        # Set CUDA device and create context
-        torch.cuda.set_device(nvidia_device)
-        DEVICE = torch.device(f"cuda:{nvidia_device}")
-        
-        # Force CUDA initialization
-        torch.cuda.init()
-        
-        # Test CUDA with a small computation
-        test_tensor = torch.rand(5, 5).cuda()
-        test_result = torch.matmul(test_tensor, test_tensor.t())
-        print("CUDA test computation successful!")
-        print(f"Test tensor device: {test_tensor.device}")
-        print(f"Test result device: {test_result.device}")
-    else:
-        print("No CUDA devices found!")
-        DEVICE = torch.device("cpu")
-else:
-    print("CUDA is not available, falling back to CPU")
+# Decide on device, checking for --cpu override
+if CPU_ONLY:
+    print("User requested --cpu, forcing CPU usage.")
     DEVICE = torch.device("cpu")
+else:
+    # Force CUDA device selection if available
+    if torch.cuda.is_available():
+        cuda_devices = [i for i in range(torch.cuda.device_count())]
+        if cuda_devices:
+            nvidia_device = cuda_devices[0]
+            print(f"Found NVIDIA GPU at device {nvidia_device}")
+            print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
+            print(f"CUDA version: {torch.version.cuda}")
+            
+            torch.cuda.set_device(nvidia_device)
+            DEVICE = torch.device(f"cuda:{nvidia_device}")
+            
+            # Force CUDA initialization
+            torch.cuda.init()
+            
+            # Test CUDA with a small computation
+            test_tensor = torch.rand(5, 5).cuda()
+            test_result = torch.matmul(test_tensor, test_tensor.t())
+            print("CUDA test computation successful!")
+            print(f"Test tensor device: {test_tensor.device}")
+            print(f"Test result device: {test_result.device}")
+        else:
+            print("No CUDA devices found!")
+            DEVICE = torch.device("cpu")
+    else:
+        print("CUDA is not available, falling back to CPU")
+        DEVICE = torch.device("cpu")
 
 print(f"Using device: {DEVICE}")
 print("=====================\n")
@@ -113,7 +118,7 @@ def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=Fal
     return total_naive, total_optimized, breakdown
 
 ###############################################################################
-# 3) BERT Complexity Estimation (GPU-accelerated)
+# 3) BERT Complexity Estimation (GPU-accelerated unless --cpu is used)
 ###############################################################################
 def estimate_bert_complexity(
     sentence: str, 
@@ -121,7 +126,7 @@ def estimate_bert_complexity(
     bert_optim_factor: float = 1.0
 ) -> Tuple[float, int, float]:
     """
-    GPU-accelerated BERT complexity estimation.
+    GPU-accelerated BERT complexity estimation (symbolic, not a real forward pass).
     Returns: (naive_flops, seq_len, optimized_flops)
     """
     # Use the global tokenizer
@@ -129,14 +134,14 @@ def estimate_bert_complexity(
     
     if DEVICE.type == 'cuda':
         # Move tokens to GPU
-        tokens = torch.Tensor(tokens).to(DEVICE)
+        tokens = torch.tensor(tokens, device=DEVICE)
     
     seq_len = len(tokens)
     num_layers = 12
     hidden_size = 768
     intermediate_size = 3072  # typically 4 * hidden_size
     
-    # Calculate FLOPs
+    # Calculate FLOPs (symbolic formula)
     self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
     feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
     flops_per_layer = self_attention_flops + feed_forward_flops
@@ -211,7 +216,7 @@ def process_sentence_batch(
         disc_naive, disc_opt, _ = estimate_discocirc_complexity(
             sentence, d=d, disco_factor=disco_factor, verbose=False
         )
-        # BERT processing uses GPU if available
+        # BERT processing uses GPU if available (unless --cpu)
         bert_naive, seq_len, bert_opt = estimate_bert_complexity(
             sentence, bert_optim_factor=bert_optim_factor
         )
@@ -226,7 +231,7 @@ def estimate_corpus_complexity_from_sentences(
     use_progress_bar: bool=True
 ) -> dict:
     """
-    Process sentences in parallel, with GPU operations in main process.
+    Process sentences in the main process. 
     Returns aggregated complexity results.
     """
     corpus_results = {
@@ -238,16 +243,13 @@ def estimate_corpus_complexity_from_sentences(
         "sentence_details": []
     }
     
-    # Process all sentences in the main process to ensure GPU access
     if use_progress_bar:
         sentences = tqdm(sentences, desc="Processing sentences")
     
     for sentence in sentences:
-        # DisCoCirc processing remains on CPU
         disc_naive, disc_opt, _ = estimate_discocirc_complexity(
             sentence, d=d, disco_factor=disco_factor, verbose=False
         )
-        # BERT processing uses GPU if available
         bert_naive, seq_len, bert_opt = estimate_bert_complexity(
             sentence, bert_optim_factor=bert_optim_factor
         )
@@ -288,6 +290,7 @@ if __name__ == "__main__":
         # We'll track a third progress bar for tokens
         # We know training has ~28k articles, so one bar for articles is up to 28475
         # Let's set a second bar for approximate tokens. We'll guess 101,425,671 tokens in training.
+        from datasets import load_dataset
         dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
         
         total_articles = 28475
@@ -304,7 +307,6 @@ if __name__ == "__main__":
             
             example_text = example["text"]
             
-            # Approx token count for progress tracking
             ex_tokens = len(example_text.split())
             token_pbar.update(ex_tokens)
             
