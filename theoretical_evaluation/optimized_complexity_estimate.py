@@ -25,54 +25,59 @@ if USE_WIKITEXT:
         print("Please install the huggingface datasets library: pip install datasets")
         sys.exit(1)
 
-###############################################################################
-# Enhanced GPU diagnostics and initialization
-###############################################################################
-print("\n=== GPU Diagnostics ===")
-print(f"PyTorch version: {torch.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")
+# Initialize global variables to be set in initialize_gpu()
+DEVICE = None
+BERT_TOKENIZER = None
 
-# Decide on device, checking for --cpu and --cpu-bert overrides
-if CPU_ONLY:
-    print("User requested --cpu, forcing CPU usage for all operations.")
-    DEVICE = torch.device("cpu")
-elif CPU_BERT:
-    print("User requested --cpu-bert, forcing CPU usage for BERT operations only.")
-    DEVICE = torch.device("cpu")
-else:
-    # Force CUDA device selection if available
-    if torch.cuda.is_available():
-        cuda_devices = [i for i in range(torch.cuda.device_count())]
-        if cuda_devices:
-            nvidia_device = cuda_devices[0]
-            print(f"Found NVIDIA GPU at device {nvidia_device}")
-            print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
-            print(f"CUDA version: {torch.version.cuda}")
-            
-            torch.cuda.set_device(nvidia_device)
-            DEVICE = torch.device(f"cuda:{nvidia_device}")
-            
-            # Force CUDA initialization
-            torch.cuda.init()
-            
-            # Test CUDA with a small computation
-            test_tensor = torch.rand(5, 5).cuda()
-            test_result = torch.matmul(test_tensor, test_tensor.t())
-            print("CUDA test computation successful!")
-            print(f"Test tensor device: {test_tensor.device}")
-            print(f"Test result device: {test_result.device}")
-        else:
-            print("No CUDA devices found!")
-            DEVICE = torch.device("cpu")
-    else:
-        print("CUDA is not available, falling back to CPU")
+def initialize_gpu():
+    """Initialize GPU and set up global variables. Only run in main process."""
+    global DEVICE, BERT_TOKENIZER
+    
+    print("\n=== GPU Diagnostics ===")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
+    # Decide on device, checking for --cpu and --cpu-bert overrides
+    if CPU_ONLY:
+        print("User requested --cpu, forcing CPU usage for all operations.")
         DEVICE = torch.device("cpu")
+    elif CPU_BERT:
+        print("User requested --cpu-bert, forcing CPU usage for BERT operations only.")
+        DEVICE = torch.device("cpu")
+    else:
+        # Force CUDA device selection if available
+        if torch.cuda.is_available():
+            cuda_devices = [i for i in range(torch.cuda.device_count())]
+            if cuda_devices:
+                nvidia_device = cuda_devices[0]
+                print(f"Found NVIDIA GPU at device {nvidia_device}")
+                print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
+                print(f"CUDA version: {torch.version.cuda}")
+                
+                torch.cuda.set_device(nvidia_device)
+                DEVICE = torch.device(f"cuda:{nvidia_device}")
+                
+                # Force CUDA initialization
+                torch.cuda.init()
+                
+                # Test CUDA with a small computation
+                test_tensor = torch.rand(5, 5).cuda()
+                test_result = torch.matmul(test_tensor, test_tensor.t())
+                print("CUDA test computation successful!")
+                print(f"Test tensor device: {test_tensor.device}")
+                print(f"Test result device: {test_result.device}")
+            else:
+                print("No CUDA devices found!")
+                DEVICE = torch.device("cpu")
+        else:
+            print("CUDA is not available, falling back to CPU")
+            DEVICE = torch.device("cpu")
 
-print(f"Using device: {DEVICE}")
-print("=====================\n")
+    print(f"Using device: {DEVICE}")
+    print("=====================\n")
 
-# Initialize BERT tokenizer once
-BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
+    # Initialize BERT tokenizer once
+    BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
 
 ###############################################################################
 # 1) Load spaCy model (download "en_core_web_sm" if not installed)
@@ -136,10 +141,16 @@ def estimate_bert_complexity(
     GPU-accelerated BERT complexity estimation (symbolic, not a real forward pass).
     Returns: (naive_flops, seq_len, optimized_flops)
     """
+    global BERT_TOKENIZER, DEVICE
+    
+    # Ensure tokenizer and device are initialized
+    if BERT_TOKENIZER is None:
+        BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
+    
     # Use the global tokenizer
     tokens = BERT_TOKENIZER.encode(sentence, add_special_tokens=True)
     
-    if DEVICE.type == 'cuda':
+    if DEVICE is not None and DEVICE.type == 'cuda':
         # Move tokens to GPU
         tokens = torch.tensor(tokens, device=DEVICE)
     
@@ -300,6 +311,12 @@ def load_text_file(file_path):
 
 def benchmark_processing_methods(sample_size=100):
     """Run a quick benchmark to determine fastest processing methods."""
+    global BERT_TOKENIZER, DEVICE
+    
+    # Make sure we have initialized everything
+    if BERT_TOKENIZER is None or DEVICE is None:
+        initialize_gpu()
+        
     print("\n=== Running Benchmark ===")
     
     # Load a small sample of data
@@ -321,7 +338,7 @@ def benchmark_processing_methods(sample_size=100):
     
     # Test both CPU and GPU if available
     devices = ["cpu"]
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and not CPU_ONLY:
         devices.append("cuda")
     
     print("\nBenchmarking BERT processing on different devices...")
@@ -332,6 +349,7 @@ def benchmark_processing_methods(sample_size=100):
         bert_pbar = tqdm(total=len(sample_texts), desc=f"BERT ({device.upper()})", position=1, leave=False)
         for text in sample_texts:
             start_time = time.time()
+            # Process the entire text, including tokenization and FLOP calculation
             tokens = BERT_TOKENIZER.encode(text, add_special_tokens=True)
             if device == "cuda":
                 tokens = torch.tensor(tokens, device=torch.device("cuda"))
@@ -394,15 +412,20 @@ def benchmark_processing_methods(sample_size=100):
     
     # Determine optimal settings based on fastest device
     fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
+    
+    # Calculate optimal chunk size based on CPU cores
+    cpu_count = multiprocessing.cpu_count()
+    optimal_chunk_size = max(1, int(sample_size / (cpu_count * 4)))
+    
     optimal_settings = {
         "use_cpu": fastest_device == "cpu",
-        "parallel_chunk_size": max(1, int(sample_size / (multiprocessing.cpu_count() * 4)))
+        "parallel_chunk_size": optimal_chunk_size
     }
     
     print("\n=== Optimal Settings ===")
     print(f"Fastest device: {fastest_device.upper()}")
     print(f"Using CPU: {optimal_settings['use_cpu']}")
-    print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']}")
+    print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']} (based on {cpu_count} CPU cores)")
     
     return optimal_settings
 
@@ -410,6 +433,9 @@ def benchmark_processing_methods(sample_size=100):
 # 6) Main Execution
 ###############################################################################
 if __name__ == "__main__":
+    # Initialize GPU and tokenizer in the main process only
+    initialize_gpu()
+    
     disco_factor = 20.0     
     bert_optim_factor = 5.0 
     d = 300               
@@ -454,8 +480,12 @@ if __name__ == "__main__":
         # Create a partial function with the fixed arguments
         process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
         
+        # Configure multiprocessing to use 'spawn' method to prevent duplicate initialization
+        if __name__ == "__main__":
+            multiprocessing.set_start_method('spawn', force=True)
+        
         # Initialize multiprocessing pool
-        with multiprocessing.Pool(processes=n_workers) as pool:
+        with multiprocessing.Pool(processes=n_workers, initializer=None) as pool:
             for example in dataset:
                 article_count += 1
                 article_pbar.update(1)
