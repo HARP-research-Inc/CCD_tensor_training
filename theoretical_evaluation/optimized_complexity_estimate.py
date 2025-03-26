@@ -17,6 +17,7 @@ BERT_ONLY   = "--bert"     in sys.argv
 CPU_ONLY    = "--cpu"      in sys.argv
 CPU_BERT    = "--cpu-bert" in sys.argv
 BENCHMARK   = "--benchmark" in sys.argv
+USE_FORK    = "--fork"     in sys.argv  # Use fork instead of spawn (can be faster but less reliable)
 
 if USE_WIKITEXT:
     try:
@@ -269,20 +270,29 @@ def estimate_corpus_complexity_from_sentences(
     # Split sentences into chunks for parallel processing using improved formula
     total_sentences = len(sentences)
     
-    # Improved formula that scales better with CPU count:
-    # For 8 cores: ~20 sentences
-    # For 16 cores: ~30 sentences
-    # For 32 cores: ~40 sentences
-    # For 64 cores: ~60 sentences
-    # For 128 cores: ~90 sentences
-    min_chunk = 20
-    max_chunk = 100
+    # Advanced optimization for very high core counts
+    # Scale more aggressively with higher core counts
+    # For 8 cores: ~100 sentences
+    # For 16 cores: ~200 sentences
+    # For 32 cores: ~400 sentences
+    # For 64 cores: ~800 sentences
+    # For 128 cores: ~1600 sentences
+    base_chunk = 100
+    # Exponential scaling with worker count
+    chunk_multiplier = math.log2(n_workers) / math.log2(8)  # Scaled relative to 8 cores
+    chunk_size = int(base_chunk * chunk_multiplier)
+    chunk_size = max(50, min(2000, chunk_size))
     
-    # Base scale factor on log base 2 of n_workers to handle high core counts better
-    log_factor = math.log2(max(4, n_workers))
-    chunk_size = int(min_chunk * (log_factor / 2))
-    chunk_size = max(min_chunk, min(max_chunk, chunk_size))
+    # Make sure we don't have too many or too few chunks
+    max_chunks = n_workers * 4  # Aim for around 4 chunks per worker
+    min_chunks = n_workers  # At least one chunk per worker
     
+    total_chunks = max(1, total_sentences // chunk_size)
+    if total_chunks < min_chunks:
+        chunk_size = max(50, total_sentences // min_chunks)
+    elif total_chunks > max_chunks:
+        chunk_size = max(50, total_sentences // max_chunks)
+        
     print(f"Using chunk size of {chunk_size} sentences per worker")
     
     sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
@@ -433,20 +443,23 @@ def benchmark_processing_methods(sample_size=100):
     # Calculate optimal chunk size based on CPU cores - improved for high core counts
     cpu_count = multiprocessing.cpu_count()
     
-    # New formula that scales better with CPU count:
-    # For 8 cores: ~10-12 sentences
-    # For 16 cores: ~15 sentences
-    # For 32 cores: ~20 sentences
-    # For 64 cores: ~30 sentences
-    # For 128 cores: ~45 sentences
-    min_chunk = 10
-    max_chunk = 50
+    # Advanced optimization for very high core counts
+    # Scale more aggressively with higher core counts
+    # For 8 cores: ~50 sentences
+    # For 16 cores: ~100 sentences
+    # For 32 cores: ~200 sentences
+    # For 64 cores: ~400 sentences
+    # For 128 cores: ~800 sentences
+    base_chunk = 50
+    # Exponential scaling with core count
+    chunk_multiplier = math.log2(cpu_count) / math.log2(8)  # Scaled relative to 8 cores
+    suggested_chunk_size = int(base_chunk * chunk_multiplier)
+    optimal_chunk_size = max(50, min(1000, suggested_chunk_size))
     
-    # Base scale factor on log base 2 of cpu_count to handle high core counts better
-    # This creates a logarithmic scaling that works well from 4 to 128+ cores
-    log_factor = math.log2(max(4, cpu_count))
-    suggested_chunk_size = int(min_chunk * (log_factor / 2))
-    optimal_chunk_size = max(min_chunk, min(max_chunk, suggested_chunk_size))
+    # Adjust based on timing results
+    # If DisCoCirc is much slower than BERT, use larger chunks to amortize overhead
+    if sum(disco_times) > 5 * sum(bert_results[fastest_device]["times"]):
+        optimal_chunk_size = min(1000, optimal_chunk_size * 2)
     
     optimal_settings = {
         "use_cpu": fastest_device == "cpu",
@@ -457,6 +470,7 @@ def benchmark_processing_methods(sample_size=100):
     print(f"Fastest device: {fastest_device.upper()}")
     print(f"Using CPU: {optimal_settings['use_cpu']}")
     print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']} (based on {cpu_count} CPU cores)")
+    print(f"Multiprocessing mode: {'fork' if USE_FORK else 'spawn'} (use --fork flag for possibly faster processing)")
     
     return optimal_settings
 
@@ -512,8 +526,12 @@ if __name__ == "__main__":
         process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
         
         # Configure multiprocessing to use 'spawn' method to prevent duplicate initialization
-        if __name__ == "__main__":
+        # unless fork is explicitly requested
+        if __name__ == "__main__" and not USE_FORK:
+            print("\nUsing 'spawn' multiprocessing method (safer but slower)")
             multiprocessing.set_start_method('spawn', force=True)
+        elif __name__ == "__main__" and USE_FORK:
+            print("\nUsing 'fork' multiprocessing method (faster but less reliable)")
         
         # Initialize multiprocessing pool
         with multiprocessing.Pool(processes=n_workers, initializer=None) as pool:
