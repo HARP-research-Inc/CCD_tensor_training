@@ -14,6 +14,7 @@ import time
 # Flags for different modes
 USE_WIKITEXT = "--wikitext" in sys.argv
 BERT_ONLY   = "--bert"     in sys.argv
+DISCO_ONLY  = "--disco"    in sys.argv
 CPU_ONLY    = "--cpu"      in sys.argv
 CPU_BERT    = "--cpu-bert" in sys.argv
 BENCHMARK   = "--benchmark" in sys.argv
@@ -153,6 +154,10 @@ def estimate_bert_complexity(
     """
     global BERT_TOKENIZER, DEVICE
     
+    # Skip BERT calculations in DisCoCirc-only mode
+    if DISCO_ONLY:
+        return 0.0, 0, 0.0  # no BERT computations in DisCoCirc-only mode
+    
     # Ensure tokenizer and device are initialized
     if BERT_TOKENIZER is None:
         BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
@@ -248,15 +253,25 @@ def process_sentence_batch(
     results = []
     for sentence in sentences:
         # DisCoCirc processing remains on CPU
-        disc_naive, disc_opt, _ = estimate_discocirc_complexity(
-            sentence, d=d, disco_factor=disco_factor, verbose=False
-        )
+        if not BERT_ONLY:
+            print(f"\rProcessing DisCoCirc: {sentence[:50]}{'...' if len(sentence) > 50 else ''}", end="", flush=True)
+            disc_naive, disc_opt, _ = estimate_discocirc_complexity(
+                sentence, d=d, disco_factor=disco_factor, verbose=False
+            )
+        else:
+            disc_naive, disc_opt = 0.0, 0.0
         
         # BERT processing uses GPU if available (unless --cpu)
-        bert_naive, seq_len, bert_opt = estimate_bert_complexity(
-            sentence, bert_optim_factor=bert_optim_factor
-        )
+        if not DISCO_ONLY:
+            print(f"\rProcessing BERT: {sentence[:50]}{'...' if len(sentence) > 50 else ''}", end="", flush=True)
+            bert_naive, seq_len, bert_opt = estimate_bert_complexity(
+                sentence, bert_optim_factor=bert_optim_factor
+            )
+        else:
+            bert_naive, seq_len, bert_opt = 0.0, 0, 0.0
+            
         results.append((disc_naive, disc_opt, bert_naive, bert_opt, seq_len))
+    print("\r" + " " * 80 + "\r", end="", flush=True)  # Clear the status line
     return results
 
 def estimate_corpus_complexity_from_sentences(
@@ -381,7 +396,7 @@ def benchmark_processing_methods(sample_size=100):
     
     # Test both CPU and GPU if available
     devices = ["cpu"]
-    if torch.cuda.is_available() and not CPU_ONLY:
+    if torch.cuda.is_available() and not CPU_ONLY and not DISCO_ONLY:
         devices.append("cuda")
     
     print("\nBenchmarking BERT processing on different devices...")
@@ -438,23 +453,28 @@ def benchmark_processing_methods(sample_size=100):
     
     # Print benchmark results
     print("\n=== Benchmark Results ===")
-    print("\nBERT Processing:")
-    for device in devices:
-        results = bert_results[device]
-        print(f"\n{device.upper()}:")
-        print(f"  Average time: {results['avg']:.4f} seconds")
-        print(f"  Min time:     {results['min']:.4f} seconds")
-        print(f"  Max time:     {results['max']:.4f} seconds")
-        print(f"  Total time:   {results['total']:.4f} seconds")
+    if not DISCO_ONLY:
+        print("\nBERT Processing:")
+        for device in devices:
+            results = bert_results[device]
+            print(f"\n{device.upper()}:")
+            print(f"  Average time: {results['avg']:.4f} seconds")
+            print(f"  Min time:     {results['min']:.4f} seconds")
+            print(f"  Max time:     {results['max']:.4f} seconds")
+            print(f"  Total time:   {results['total']:.4f} seconds")
     
-    print("\nDisCoCirc Processing:")
-    print(f"  Average time: {sum(disco_times)/len(disco_times):.4f} seconds")
-    print(f"  Min time:     {min(disco_times):.4f} seconds")
-    print(f"  Max time:     {max(disco_times):.4f} seconds")
-    print(f"  Total time:   {sum(disco_times):.4f} seconds")
+    if not BERT_ONLY:
+        print("\nDisCoCirc Processing:")
+        print(f"  Average time: {sum(disco_times)/len(disco_times):.4f} seconds")
+        print(f"  Min time:     {min(disco_times):.4f} seconds")
+        print(f"  Max time:     {max(disco_times):.4f} seconds")
+        print(f"  Total time:   {sum(disco_times):.4f} seconds")
     
     # Determine optimal settings based on fastest device
-    fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
+    if not DISCO_ONLY:
+        fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
+    else:
+        fastest_device = "cpu"  # Always use CPU in DisCoCirc-only mode
     
     # Calculate optimal chunk size based on CPU cores - improved for high core counts
     cpu_count = multiprocessing.cpu_count()
@@ -495,7 +515,10 @@ def benchmark_processing_methods(sample_size=100):
 ###############################################################################
 if __name__ == "__main__":
     # Initialize GPU and tokenizer in the main process only
-    initialize_gpu()
+    if not DISCO_ONLY:
+        initialize_gpu()
+    else:
+        print("\nRunning in DisCoCirc-only mode, skipping GPU initialization")
     
     # Print info about worker limits
     cpu_count = multiprocessing.cpu_count()
@@ -542,6 +565,7 @@ if __name__ == "__main__":
         batch_size = 100
         current_batch = []
         article_count = 0
+        sentences_count = 0
         
         # Determine optimal number of workers
         n_workers = get_optimal_workers()
@@ -558,6 +582,14 @@ if __name__ == "__main__":
         elif __name__ == "__main__" and USE_FORK:
             print("\nUsing 'fork' multiprocessing method (faster but less reliable)")
         
+        # Print which methods are being processed
+        if BERT_ONLY:
+            print("\nProcessing mode: BERT only")
+        elif DISCO_ONLY:
+            print("\nProcessing mode: DisCoCirc only")
+        else:
+            print("\nProcessing mode: Both BERT and DisCoCirc")
+        
         # Initialize multiprocessing pool
         with multiprocessing.Pool(processes=n_workers, initializer=None) as pool:
             for example in dataset:
@@ -567,11 +599,14 @@ if __name__ == "__main__":
                 example_text = example["text"]
                 sents = chunk_text_into_sentences(example_text)
                 current_batch.extend(sents)
+                sentences_count += len(sents)
                 
                 # Process batch when it reaches batch_size
                 if len(current_batch) >= batch_size:
                     # Process the batch in parallel
+                    print(f"\nProcessing batch of {len(current_batch)} sentences...")
                     batch_results = process_batch(current_batch)
+                    print(f"Completed batch processing.")
                     
                     # Accumulate results
                     for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
@@ -596,6 +631,11 @@ if __name__ == "__main__":
                         "sentences": corpus_results["num_sentences"],
                         "articles": article_count
                     })
+                    # Print a summary of progress
+                    if not BERT_ONLY:
+                        print(f"\nDisCoCirc FLOPs so far: {corpus_results['discocirc_total_naive']:.2e} (naive) / {corpus_results['discocirc_total_optimized']:.2e} (optimized)")
+                    if not DISCO_ONLY:
+                        print(f"BERT FLOPs so far: {corpus_results['bert_total_naive']:.2e} (naive) / {corpus_results['bert_total_optimized']:.2e} (optimized)")
             
             # Process any remaining sentences
             if current_batch:
@@ -624,6 +664,14 @@ if __name__ == "__main__":
         else:
             text = "The big dog quickly chased a ball in the yard."
         
+        # Print which methods are being processed
+        if BERT_ONLY:
+            print("\nProcessing mode: BERT only")
+        elif DISCO_ONLY:
+            print("\nProcessing mode: DisCoCirc only")
+        else:
+            print("\nProcessing mode: Both BERT and DisCoCirc")
+        
         sentences = chunk_text_into_sentences(text)
         corpus_results = estimate_corpus_complexity_from_sentences(
             sentences, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
@@ -635,9 +683,9 @@ if __name__ == "__main__":
     print(f"Number of sentences: {corpus_results['num_sentences']}")
     
     # DisCoCirc results
-    if BERT_ONLY:
+    if DISCO_ONLY:
         print("\n-- DisCoCirc --")
-        print("N/A (BERT-only mode)")
+        print("N/A (DisCoCirc-only mode)")
     else:
         print("\n-- DisCoCirc (Aggregated) --")
         print(f"Naive Total FLOPs:     {corpus_results['discocirc_total_naive']:,.2f}")
@@ -645,11 +693,14 @@ if __name__ == "__main__":
     
     # BERT results
     print("\n-- BERT-base (Aggregated) --")
-    print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
-    print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
+    if DISCO_ONLY:
+        print("N/A (DisCoCirc-only mode)")
+    else:
+        print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
+        print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
     
     # If not in BERT-only mode, show comparative improvement
-    if not BERT_ONLY:
+    if not BERT_ONLY and not DISCO_ONLY:
         naive_improvement = 100 * (
             corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']
         ) / corpus_results['bert_total_naive'] if corpus_results['bert_total_naive'] else 0
@@ -661,5 +712,7 @@ if __name__ == "__main__":
         print("\n-- Improvement of DisCoCirc over BERT (Aggregated) --")
         print(f"Naive:     DisCoCirc uses {naive_improvement:.2f}% fewer FLOPs than BERT-base")
         print(f"Optimized: DisCoCirc uses {optimized_improvement:.2f}% fewer FLOPs than BERT-base")
-    else:
+    elif BERT_ONLY:
         print("\n-- BERT-only mode: DisCoCirc comparison not available --")
+    elif DISCO_ONLY:
+        print("\n-- DisCoCirc-only mode: BERT comparison not available --")
