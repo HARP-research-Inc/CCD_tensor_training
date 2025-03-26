@@ -20,19 +20,21 @@ def synonyms_test(sentences, verb, pca, model, tensor_function):
         line1 = sentences[index]
         line2 = sentences[index + 1]
         
-        sub1 = line1.split(',')[0]
         obj1 = line1.split(',')[1]
+        sub1 = line1.split(',')[0]
         
 
         sub2 = line2.split(',')[0]
         obj2 = line2.split(',')[1]
         sentence1 = sub1 + " " + verb + " " + obj2
-        sentence2 = sub2 + " " + verb + " " + obj1
+        sentence2 = obj1 + " " + verb + " " + sub2
 
-        expected_sentence_embedding1, _ = API_query_embedding(sentence1, pca, model, tensor_function)
-        expected_sentence_embedding2, _ = API_query_embedding(sentence2, pca, model, tensor_function)
+        print(sentence1, sentence2)
 
-        sum_sim += cosine_sim(expected_sentence_embedding1.detach().numpy(), expected_sentence_embedding2.detach().numpy())
+        _, actual1 = API_query_embedding(sentence1, pca, model, tensor_function)
+        _, actual2 = API_query_embedding(sentence2, pca, model, tensor_function)
+
+        sum_sim += cosine_sim(actual1.detach().numpy(), actual2.detach().numpy())
 
         index += 2
     
@@ -54,12 +56,12 @@ if __name__ == "__main__":
     # print("*****done loading FastText model*****")
 
     tensor_function = FullRankTensorRegression(300, 300)
-    tensor_function.load_state_dict(torch.load("../data/hybrid_weights.pt"))
+    tensor_function.load_state_dict(torch.load("../adj_weights_on_the_fly.pt"))
 
     tensor_function.eval()
     
     #loading transform model
-    pca = joblib.load("../data/pca_model.pkl")
+    pca = joblib.load("../data/adj_pca_model.pkl")
 
     data = file.readlines()
     print("far synonyms: ", synonyms_test(data, "strike", pca, model, tensor_function))

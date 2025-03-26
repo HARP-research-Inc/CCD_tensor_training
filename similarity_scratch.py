@@ -75,47 +75,39 @@ def API_query_embedding(line, pca, model, tensor_function, pos = "transitive ver
 if __name__ == "__main__":
     file = open("data/test_sentences.txt", 'r')
 
-    # Loading embedding models
+    #loading embedding models
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    #ft_model = api.load('fasttext-wiki-news-subwords-300')
 
-    # Load the first model weights
-    tensor_function1 = FullRankTensorRegression(300, 300)
-    model_path1 = "adj_weights_on_the_fly.pt"
-    tensor_function1.load_state_dict(torch.load(model_path1))
-    tensor_function1.eval()
+    tensor_function = FullRankTensorRegression(300, 300)
+    tensor_function.load_state_dict(torch.load("adj_weights_on_the_fly.pt"))
 
-    # Load the second model weights
-    tensor_function2 = FullRankTensorRegression(300, 300)
-    model_path2 = "dummy_model.pt"
-    tensor_function2.load_state_dict(torch.load(model_path2))
-    tensor_function2.eval()
-
-    # Debugging: Check if weights are loaded correctly
-    print(f"Sample weights from {model_path1}: {list(tensor_function1.parameters())[0][0][:5]}")
-    print(f"Sample weights from {model_path2}: {list(tensor_function2.parameters())[0][0][:5]}")
-
-    # Loading transform model
+    tensor_function.eval()
+    
+    #loading transform model
     pca = joblib.load("data/adj_pca_model.pkl")
 
-    # Compare outputs of the two models
-    actual_sentence_embedding1_model1, _ = API_query_embedding("big guy", pca, model, tensor_function1, pos="adjective")
-    actual_sentence_embedding2_model1, _ = API_query_embedding("fat man", pca, model, tensor_function1, pos="adjective")
+    expected1 , actual_sentence_embedding1 = API_query_embedding("big guy", pca, model, tensor_function, pos="adjective")    
+    expected2 , actual_sentence_embedding2 = API_query_embedding("large man", pca, model, tensor_function, pos="adjective")
+    expected3 , actual_sentence_embedding3 = API_query_embedding("large woman", pca, model, tensor_function, pos="adjective")
+    expected4 , actual_sentence_embedding4 = API_query_embedding("guy big", pca, model, tensor_function, pos="adjective")
+    expected5 , actual_sentence_embedding5 = API_query_embedding("fat man", pca, model, tensor_function, pos="adjective")
 
-    actual_sentence_embedding1_model2, _ = API_query_embedding("big guy", pca, model, tensor_function2, pos="adjective")
-    actual_sentence_embedding2_model2, _ = API_query_embedding("fat man", pca, model, tensor_function2, pos="adjective")
+    print("\nall vs \'big guy\'")
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding2.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding3.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding4.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), actual_sentence_embedding5.detach().numpy()))
 
-    # Print cosine similarities for both models
-    print(f"Model 1 ({model_path1}) Cosine similarity: ",
-          cosine_sim(actual_sentence_embedding1_model1.detach().numpy(), actual_sentence_embedding2_model1.detach().numpy()))
-    print(f"Model 2 ({model_path2}) Cosine similarity: ",
-          cosine_sim(actual_sentence_embedding1_model2.detach().numpy(), actual_sentence_embedding2_model2.detach().numpy()))
+    print("\nCONTROL: all vs \'big guy\'")
+    print("cosine similarity: ", cosine_sim(expected1.detach().numpy(), expected2.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(expected1.detach().numpy(), expected3.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(expected1.detach().numpy(), expected4.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(expected1.detach().numpy(), expected5.detach().numpy()))  
 
-    # Compare the outputs of the two models
-    diff1 = torch.norm(actual_sentence_embedding1_model1 - actual_sentence_embedding1_model2).item()
-    diff2 = torch.norm(actual_sentence_embedding2_model1 - actual_sentence_embedding2_model2).item()
-
-    print(f"Difference between model outputs for 'boring evil': {diff1:.6f}")
-    print(f"Difference between model outputs for 'boring badness': {diff2:.6f}")
-
-
-
+    print("\nactual vs expected")
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected1.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected2.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected3.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected4.detach().numpy()))
+    print("cosine similarity: ", cosine_sim(actual_sentence_embedding1.detach().numpy(), expected4.detach().numpy()))

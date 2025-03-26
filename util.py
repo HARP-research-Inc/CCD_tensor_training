@@ -11,11 +11,21 @@ class FullRankTensorRegression(nn.Module):
         super().__init__()
         self.sent_dim = sent_dim
         self.noun_dim = noun_dim
-        self.V = nn.Parameter(torch.randn(sent_dim, noun_dim, noun_dim) * np.sqrt(2.0 / (noun_dim + sent_dim)))
+
+        self.V = nn.Parameter(torch.randn(sent_dim, noun_dim, noun_dim))
+        self.bias = nn.Parameter(torch.zeros(sent_dim))
+
+        # Optional: initialize slice-by-slice
+        for i in range(sent_dim):
+            torch.nn.init.xavier_uniform_(self.V[i])
 
     def forward(self, s, o):
+        # Optionally normalize inputs
+        # s = F.normalize(s, dim=1)
+        # o = F.normalize(o, dim=1)
+
         Vs_o = torch.einsum('ljk,bj,bk->bl', self.V, s, o)
-        return Vs_o
+        return Vs_o + self.bias
 
 def cp_decompose(tensor, rank):
     cp_tensor = parafac(tensor=tensor, rank=rank)

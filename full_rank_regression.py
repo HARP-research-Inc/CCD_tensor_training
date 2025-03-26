@@ -58,7 +58,7 @@ def two_word_regression(model_destination, embedding_set, ground_truth, num_epoc
     print(">done!\n\n\n")
     
     model = FullRankTensorRegression(embedding_dim, embedding_dim)
-    optimizer = optim.Adadelta(model.parameters(), lr=0.1) 
+    optimizer = optim.Adadelta(model.parameters(), lr=0.001)
 
     print(">Running regression...")
     subjects = s_o_tensor[:, 0, :]
