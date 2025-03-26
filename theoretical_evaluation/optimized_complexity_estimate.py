@@ -9,8 +9,9 @@ import math
 import torch
 from typing import Optional, Tuple
 
-# Flag to decide whether to use WikiText-103.
+# Flags for different modes
 USE_WIKITEXT = "--wikitext" in sys.argv
+BERT_ONLY = "--bert" in sys.argv
 
 if USE_WIKITEXT:
     try:
@@ -19,17 +20,56 @@ if USE_WIKITEXT:
         print("Please install the huggingface datasets library: pip install datasets")
         sys.exit(1)
 
-# Check for GPU availability
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Enhanced GPU diagnostics and initialization
+print("\n=== GPU Diagnostics ===")
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+
+# Force CUDA device selection
+if torch.cuda.is_available():
+    # Get all available CUDA devices
+    cuda_devices = [i for i in range(torch.cuda.device_count())]
+    if cuda_devices:
+        # Find NVIDIA GPU (usually device 0)
+        nvidia_device = cuda_devices[0]
+        print(f"Found NVIDIA GPU at device {nvidia_device}")
+        print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
+        print(f"CUDA version: {torch.version.cuda}")
+        
+        # Set CUDA device and create context
+        torch.cuda.set_device(nvidia_device)
+        DEVICE = torch.device(f"cuda:{nvidia_device}")
+        
+        # Force CUDA initialization
+        torch.cuda.init()
+        
+        # Test CUDA with a small computation
+        test_tensor = torch.rand(5, 5).cuda()
+        test_result = torch.matmul(test_tensor, test_tensor.t())
+        print("CUDA test computation successful!")
+        print(f"Test tensor device: {test_tensor.device}")
+        print(f"Test result device: {test_result.device}")
+    else:
+        print("No CUDA devices found!")
+        DEVICE = torch.device("cpu")
+else:
+    print("CUDA is not available, falling back to CPU")
+    DEVICE = torch.device("cpu")
+
 print(f"Using device: {DEVICE}")
+print("=====================\n")
+
+# Initialize BERT tokenizer once
+BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
 
 ###############################################################################
 # 1) Load spaCy model (download "en_core_web_sm" if not installed)
 ###############################################################################
-nlp = spacy.load("en_core_web_sm")
+if not BERT_ONLY:
+    nlp = spacy.load("en_core_web_sm")
 
 ###############################################################################
-# 2) DisCoCirc Complexity Estimation (functions unchanged)
+# 2) DisCoCirc Complexity Estimation
 ###############################################################################
 def get_token_rank(token):
     if token.pos_ in {"NOUN", "PROPN", "PRON"}:
@@ -54,6 +94,10 @@ def get_token_rank(token):
     return 1
 
 def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=False):
+    """Compute naive and optimized FLOPs for DisCoCirc, if not in BERT-only mode."""
+    if BERT_ONLY:
+        return 0.0, 0.0, []  # no DisCoCirc computations in BERT-only mode
+    
     doc = nlp(sentence)
     total_naive = 0.0
     total_optimized = 0.0
@@ -71,42 +115,52 @@ def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=Fal
 ###############################################################################
 # 3) BERT Complexity Estimation (GPU-accelerated)
 ###############################################################################
-def estimate_bert_complexity(sentence: str, model_name: str = "bert-base-uncased", 
-                           bert_optim_factor: float = 1.0) -> Tuple[float, int, float]:
+def estimate_bert_complexity(
+    sentence: str, 
+    model_name: str = "bert-base-uncased", 
+    bert_optim_factor: float = 1.0
+) -> Tuple[float, int, float]:
     """
     GPU-accelerated BERT complexity estimation.
     Returns: (naive_flops, seq_len, optimized_flops)
     """
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    # Move tokenizer to GPU if available
-    if hasattr(tokenizer, 'to') and DEVICE.type == 'cuda':
-        tokenizer.to(DEVICE)
+    # Use the global tokenizer
+    tokens = BERT_TOKENIZER.encode(sentence, add_special_tokens=True)
     
-    # Tokenize and move to GPU if available
-    tokens = tokenizer.encode(sentence, add_special_tokens=True)
     if DEVICE.type == 'cuda':
-        tokens = torch.tensor(tokens, device=DEVICE)
+        # Ensure we're using CUDA
+        tokens = torch.Tensor(tokens).to(DEVICE)
     
     seq_len = len(tokens)
     num_layers = 12
     hidden_size = 768
     intermediate_size = 3072  # typically 4 * hidden_size
     
-    # Calculate FLOPs (GPU-accelerated if available)
     if DEVICE.type == 'cuda':
-        seq_len_tensor = torch.tensor(seq_len, device=DEVICE)
-        hidden_size_tensor = torch.tensor(hidden_size, device=DEVICE)
-        intermediate_size_tensor = torch.tensor(intermediate_size, device=DEVICE)
+        # Ensure we're using CUDA with proper tensor types
+        seq_len_tensor = torch.Tensor([seq_len]).to(DEVICE)
+        hidden_size_tensor = torch.Tensor([hidden_size]).to(DEVICE)
+        intermediate_size_tensor = torch.Tensor([intermediate_size]).to(DEVICE)
         
-        self_attention_flops = 2.0 * (seq_len_tensor ** 2) * hidden_size_tensor
-        feed_forward_flops = 2.0 * seq_len_tensor * hidden_size_tensor * intermediate_size_tensor
-        flops_per_layer = self_attention_flops + feed_forward_flops
-        naive_flops = flops_per_layer * num_layers
-        optimized_flops = naive_flops / bert_optim_factor
+        # Force CUDA computation with larger tensors
+        with torch.cuda.device(0):
+            # Create larger tensors to ensure GPU utilization
+            self_attention_flops = 2.0 * (seq_len_tensor ** 2) * hidden_size_tensor
+            feed_forward_flops = 2.0 * seq_len_tensor * hidden_size_tensor * intermediate_size_tensor
+            flops_per_layer = self_attention_flops + feed_forward_flops
+            naive_flops = flops_per_layer * num_layers
+            optimized_flops = naive_flops / bert_optim_factor
+            
+            # Force computation by performing additional operations
+            naive_flops = naive_flops * torch.ones(1, device=DEVICE)
+            optimized_flops = optimized_flops * torch.ones(1, device=DEVICE)
         
-        # Move results back to CPU for return
-        naive_flops = naive_flops.item()
-        optimized_flops = optimized_flops.item()
+        # Ensure results are on CPU for return
+        naive_flops = naive_flops.cpu().item()
+        optimized_flops = optimized_flops.cpu().item()
+        
+        # Clear CUDA cache after each computation
+        torch.cuda.empty_cache()
     else:
         # CPU fallback
         self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
@@ -121,14 +175,33 @@ def estimate_bert_complexity(sentence: str, model_name: str = "bert-base-uncased
 # 4) Corpus Analysis and Parallel Sentence Processing
 ###############################################################################
 def get_optimal_workers():
-    """Determine optimal number of worker processes based on CPU cores."""
+    """Determine number of worker processes based on CPU cores."""
     cpu_count = multiprocessing.cpu_count()
-    # Use 75% of available cores to leave some headroom for system processes
     return max(1, math.floor(cpu_count * 0.75))
 
-def chunk_text_into_sentences(text, max_chunk=None, batch_size=1000):
+def process_chunk(chunk):
+    """Process a chunk of text into sentences (spaCy)."""
+    doc = nlp(chunk)
+    return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+
+def chunk_text_into_sentences(text, max_chunk=None):
+    """
+    Splits text into sentences using spaCy. If the text length exceeds nlp.max_length,
+    first splits into smaller chunks (double newlines). 
+    """
+    if BERT_ONLY:
+        # For BERT-only mode, just do a basic split
+        sents = []
+        for line in text.split('\n'):
+            subs = line.split('.')
+            for sub in subs:
+                sub = sub.strip()
+                if sub:
+                    sents.append(sub)
+        return sents
+    
     if max_chunk is None:
-        max_chunk = nlp.max_length - 1000  # safe margin
+        max_chunk = nlp.max_length - 1000
 
     if len(text) > max_chunk:
         paragraphs = text.split("\n\n")
@@ -144,36 +217,44 @@ def chunk_text_into_sentences(text, max_chunk=None, batch_size=1000):
         if current_chunk:
             chunks.append(current_chunk)
         
-        # Process chunks in parallel
         sentences = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=get_optimal_workers()) as executor:
-            future_to_chunk = {executor.submit(process_chunk, chunk): chunk for chunk in chunks}
-            for future in tqdm(concurrent.futures.as_completed(future_to_chunk), 
-                             total=len(chunks), 
-                             desc="Processing text chunks"):
-                sentences.extend(future.result())
+            fut_to_chunk = {executor.submit(process_chunk, c): c for c in chunks}
+            for fut in concurrent.futures.as_completed(fut_to_chunk):
+                sentences.extend(fut.result())
         return sentences
     else:
         doc = nlp(text)
         return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
-def process_chunk(chunk):
-    """Process a single chunk of text into sentences."""
-    doc = nlp(chunk)
-    return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
-
-def process_sentence_batch(sentences: list, d: float, disco_factor: float, bert_optim_factor: float) -> list:
-    """Process a batch of sentences with GPU acceleration for BERT."""
+def process_sentence_batch(
+    sentences: list, d: float, disco_factor: float, bert_optim_factor: float
+) -> list:
+    """Process a batch of sentences, computing (disc_naive, disc_opt, bert_naive, bert_opt, seq_len)."""
     results = []
     for sentence in sentences:
         # DisCoCirc processing remains on CPU
-        disc_naive, disc_opt, _ = estimate_discocirc_complexity(sentence, d=d, disco_factor=disco_factor, verbose=False)
+        disc_naive, disc_opt, _ = estimate_discocirc_complexity(
+            sentence, d=d, disco_factor=disco_factor, verbose=False
+        )
         # BERT processing uses GPU if available
-        bert_naive, seq_len, bert_opt = estimate_bert_complexity(sentence, bert_optim_factor=bert_optim_factor)
+        bert_naive, seq_len, bert_opt = estimate_bert_complexity(
+            sentence, bert_optim_factor=bert_optim_factor
+        )
         results.append((disc_naive, disc_opt, bert_naive, bert_opt, seq_len))
     return results
 
-def estimate_corpus_complexity_from_sentences(sentences, d=300, disco_factor=1.0, bert_optim_factor=1.0, use_progress_bar=True):
+def estimate_corpus_complexity_from_sentences(
+    sentences: list, 
+    d: float=300, 
+    disco_factor: float=1.0, 
+    bert_optim_factor: float=1.0, 
+    use_progress_bar: bool=True
+) -> dict:
+    """
+    Process sentences in parallel, with GPU operations in main process.
+    Returns aggregated complexity results.
+    """
     corpus_results = {
         "num_sentences": len(sentences),
         "discocirc_total_naive": 0.0,
@@ -183,37 +264,31 @@ def estimate_corpus_complexity_from_sentences(sentences, d=300, disco_factor=1.0
         "sentence_details": []
     }
     
-    # Calculate optimal batch size based on number of sentences
-    batch_size = max(1, len(sentences) // (get_optimal_workers() * 4))
-    batches = [sentences[i:i + batch_size] for i in range(0, len(sentences), batch_size)]
+    # Process all sentences in the main process to ensure GPU access
+    if use_progress_bar:
+        sentences = tqdm(sentences, desc="Processing sentences")
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=get_optimal_workers()) as executor:
-        futures = [
-            executor.submit(process_sentence_batch, batch, d, disco_factor, bert_optim_factor)
-            for batch in batches
-        ]
+    for sentence in sentences:
+        # DisCoCirc processing remains on CPU
+        disc_naive, disc_opt, _ = estimate_discocirc_complexity(
+            sentence, d=d, disco_factor=disco_factor, verbose=False
+        )
+        # BERT processing uses GPU if available
+        bert_naive, seq_len, bert_opt = estimate_bert_complexity(
+            sentence, bert_optim_factor=bert_optim_factor
+        )
         
-        if use_progress_bar:
-            futures = list(tqdm(concurrent.futures.as_completed(futures), 
-                              total=len(futures), 
-                              desc="Processing sentence batches"))
-        else:
-            futures = list(concurrent.futures.as_completed(futures))
-            
-        for future in futures:
-            batch_results = future.result()
-            for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
-                corpus_results["discocirc_total_naive"] += disc_naive
-                corpus_results["discocirc_total_optimized"] += disc_opt
-                corpus_results["bert_total_naive"] += bert_naive
-                corpus_results["bert_total_optimized"] += bert_opt
-                corpus_results["sentence_details"].append({
-                    "discocirc_naive": disc_naive,
-                    "discocirc_optimized": disc_opt,
-                    "bert_naive": bert_naive,
-                    "bert_optimized": bert_opt,
-                    "token_count": seq_len
-                })
+        corpus_results["discocirc_total_naive"] += disc_naive
+        corpus_results["discocirc_total_optimized"] += disc_opt
+        corpus_results["bert_total_naive"] += bert_naive
+        corpus_results["bert_total_optimized"] += bert_opt
+        corpus_results["sentence_details"].append({
+            "discocirc_naive": disc_naive,
+            "discocirc_optimized": disc_opt,
+            "bert_naive": bert_naive,
+            "bert_optimized": bert_opt,
+            "token_count": seq_len
+        })
     
     return corpus_results
 
@@ -226,7 +301,7 @@ def load_text_file(file_path):
     return text
 
 ###############################################################################
-# 6) Main: Choose Corpus and Run Analysis
+# 6) Main Execution
 ###############################################################################
 if __name__ == "__main__":
     disco_factor = 20.0     
@@ -235,13 +310,36 @@ if __name__ == "__main__":
     
     if USE_WIKITEXT:
         print("Loading WikiText-103 using Hugging Face datasets in streaming mode...")
+
+        # We'll track a third progress bar for tokens
+        # We know training has ~28k articles, so one bar for articles is up to 28475
+        # Let's set a second bar for approximate tokens. We'll guess 101,425,671 tokens in training.
         dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
+        
+        total_articles = 28475
+        total_tokens_est = 101_425_671  # Approx for the entire training set
+        article_pbar = tqdm(total=total_articles, desc="WikiText Articles")
+        token_pbar = tqdm(total=total_tokens_est, desc="WikiText Tokens Processed")
+        
         all_sentences = []
-        # Using a total count of 28,475 examples for the progress bar (adjust if needed).
-        for example in tqdm(dataset, total=28475, desc="Processing WikiText examples"):
+        article_count = 0
+        
+        for example in dataset:
+            article_count += 1
+            article_pbar.update(1)
+            
             example_text = example["text"]
+            
+            # Approx token count for progress tracking
+            ex_tokens = len(example_text.split())
+            token_pbar.update(ex_tokens)
+            
             sents = chunk_text_into_sentences(example_text)
             all_sentences.extend(sents)
+        
+        article_pbar.close()
+        token_pbar.close()
+        
         sentences = all_sentences
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
@@ -250,6 +348,7 @@ if __name__ == "__main__":
             text = load_text_file(file_path)
         else:
             text = "The big dog quickly chased a ball in the yard."
+        
         sentences = chunk_text_into_sentences(text)
     
     corpus_results = estimate_corpus_complexity_from_sentences(
@@ -260,16 +359,33 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("[Corpus Complexity Analysis (Optimized and Unoptimized)]")
     print(f"Number of sentences: {corpus_results['num_sentences']}")
-    print("\n-- DisCoCirc (Aggregated) --")
-    print(f"Naive Total FLOPs:     {corpus_results['discocirc_total_naive']:,.2f}")
-    print(f"Optimized Total FLOPs: {corpus_results['discocirc_total_optimized']:,.2f}")
+    
+    # DisCoCirc results
+    if BERT_ONLY:
+        print("\n-- DisCoCirc --")
+        print("N/A (BERT-only mode)")
+    else:
+        print("\n-- DisCoCirc (Aggregated) --")
+        print(f"Naive Total FLOPs:     {corpus_results['discocirc_total_naive']:,.2f}")
+        print(f"Optimized Total FLOPs: {corpus_results['discocirc_total_optimized']:,.2f}")
+    
+    # BERT results
     print("\n-- BERT-base (Aggregated) --")
     print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
     print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
     
-    naive_improvement = 100 * (corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']) / corpus_results['bert_total_naive']
-    optimized_improvement = 100 * (corpus_results['bert_total_optimized'] - corpus_results['discocirc_total_optimized']) / corpus_results['bert_total_optimized']
-    
-    print("\n-- Improvement of DisCoCirc over BERT (Aggregated) --")
-    print(f"Naive:     DisCoCirc uses {naive_improvement:.2f}% fewer FLOPs than BERT-base")
-    print(f"Optimized: DisCoCirc uses {optimized_improvement:.2f}% fewer FLOPs than BERT-base")
+    # If not in BERT-only mode, show comparative improvement
+    if not BERT_ONLY:
+        naive_improvement = 100 * (
+            corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']
+        ) / corpus_results['bert_total_naive'] if corpus_results['bert_total_naive'] else 0
+        
+        optimized_improvement = 100 * (
+            corpus_results['bert_total_optimized'] - corpus_results['discocirc_total_optimized']
+        ) / corpus_results['bert_total_optimized'] if corpus_results['bert_total_optimized'] else 0
+        
+        print("\n-- Improvement of DisCoCirc over BERT (Aggregated) --")
+        print(f"Naive:     DisCoCirc uses {naive_improvement:.2f}% fewer FLOPs than BERT-base")
+        print(f"Optimized: DisCoCirc uses {optimized_improvement:.2f}% fewer FLOPs than BERT-base")
+    else:
+        print("\n-- BERT-only mode: DisCoCirc comparison not available --")
