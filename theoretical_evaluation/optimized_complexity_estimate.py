@@ -128,7 +128,7 @@ def estimate_bert_complexity(
     tokens = BERT_TOKENIZER.encode(sentence, add_special_tokens=True)
     
     if DEVICE.type == 'cuda':
-        # Ensure we're using CUDA
+        # Move tokens to GPU
         tokens = torch.Tensor(tokens).to(DEVICE)
     
     seq_len = len(tokens)
@@ -136,56 +136,12 @@ def estimate_bert_complexity(
     hidden_size = 768
     intermediate_size = 3072  # typically 4 * hidden_size
     
-    if DEVICE.type == 'cuda':
-        # Create much larger tensors to force GPU computation
-        batch_size = 64  # Increased batch size for more GPU work
-        matrix_size = 1024  # Larger matrix size for more computation
-        
-        # Create large matrices for computation
-        with torch.cuda.device(0):
-            # Create and initialize large matrices
-            matrix_a = torch.randn(batch_size, matrix_size, matrix_size, device=DEVICE)
-            matrix_b = torch.randn(batch_size, matrix_size, matrix_size, device=DEVICE)
-            
-            # Force GPU computation with matrix multiplication
-            matrix_c = torch.matmul(matrix_a, matrix_b)
-            torch.cuda.synchronize()  # Ensure computation is complete
-            
-            # Create attention matrices (this will force actual GPU computation)
-            attention_matrix = torch.randn(batch_size, seq_len, seq_len, device=DEVICE)
-            value_matrix = torch.randn(batch_size, seq_len, hidden_size, device=DEVICE)
-            
-            # Perform actual attention computation
-            attention_output = torch.matmul(attention_matrix, value_matrix)
-            torch.cuda.synchronize()  # Ensure computation is complete
-            
-            # Compute FLOPs with the actual computed tensors
-            self_attention_flops = torch.sum(2.0 * (torch.tensor(seq_len, device=DEVICE) ** 2) * torch.tensor(hidden_size, device=DEVICE))
-            feed_forward_flops = torch.sum(2.0 * torch.tensor(seq_len, device=DEVICE) * torch.tensor(hidden_size, device=DEVICE) * torch.tensor(intermediate_size, device=DEVICE))
-            flops_per_layer = self_attention_flops + feed_forward_flops
-            naive_flops = flops_per_layer * num_layers
-            optimized_flops = naive_flops / bert_optim_factor
-            
-            # Force computation by using the results
-            naive_flops = naive_flops + torch.sum(matrix_c) + torch.sum(attention_output)
-            optimized_flops = optimized_flops + torch.sum(matrix_c) + torch.sum(attention_output)
-            
-            # Ensure all computations are complete
-            torch.cuda.synchronize()
-        
-        # Ensure results are on CPU for return
-        naive_flops = naive_flops.cpu().item()
-        optimized_flops = optimized_flops.cpu().item()
-        
-        # Clear CUDA cache after each computation
-        torch.cuda.empty_cache()
-    else:
-        # CPU fallback
-        self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-        feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
-        flops_per_layer = self_attention_flops + feed_forward_flops
-        naive_flops = flops_per_layer * num_layers
-        optimized_flops = naive_flops / bert_optim_factor
+    # Calculate FLOPs
+    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+    flops_per_layer = self_attention_flops + feed_forward_flops
+    naive_flops = flops_per_layer * num_layers
+    optimized_flops = naive_flops / bert_optim_factor
     
     return naive_flops, seq_len, optimized_flops
 
