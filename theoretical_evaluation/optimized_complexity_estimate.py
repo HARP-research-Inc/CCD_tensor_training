@@ -8,6 +8,7 @@ import multiprocessing
 import math
 import torch
 from typing import Optional, Tuple
+from functools import partial
 
 # Flags for different modes
 USE_WIKITEXT = "--wikitext" in sys.argv
@@ -251,19 +252,19 @@ def estimate_corpus_complexity_from_sentences(
     chunk_size = max(1, len(sentences) // (n_workers * 4))  # Divide into smaller chunks for better load balancing
     sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
     
-    # Prepare arguments for parallel processing
-    process_args = [(chunk, d, disco_factor, bert_optim_factor) for chunk in sentence_chunks]
+    # Create a partial function with the fixed arguments
+    process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
     
     # Process chunks in parallel
     with multiprocessing.Pool(processes=n_workers) as pool:
         if use_progress_bar:
             chunk_results = list(tqdm(
-                pool.imap(process_sentence_batch, process_args),
+                pool.imap(process_batch, sentence_chunks),
                 total=len(sentence_chunks),
                 desc="Processing sentence chunks"
             ))
         else:
-            chunk_results = pool.map(process_sentence_batch, process_args)
+            chunk_results = pool.map(process_batch, sentence_chunks)
     
     # Aggregate results from all chunks
     for chunk_result in chunk_results:
