@@ -13,9 +13,6 @@ if __name__ == "__main__":
 
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-
-    #FastText
-
     file_in = open("data/top_adjective.json")
     data = json.load(file_in)
 

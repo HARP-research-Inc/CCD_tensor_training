@@ -4,7 +4,21 @@ from tensorly.decomposition import parafac
 import requests
 import torch.nn.functional as F
 
+def get_embedding_in_parallel(embedding):
+    """
+        
+    """
+    response = requests.get("http://127.0.0.1:8000/embedding/"+embedding)
+    if response.status_code == 200:
+        return torch.tensor(response.json()["embedding"][0]).unsqueeze(0)
+    else:
+        print(f"Error: {response.status_code}, {response.json()}")
+        return None
+
 def generate_embedding(line, pca, model, ft_model, tensor_function):
+    """
+        Embedding querying 
+    """
     sentence = line.strip("\n").strip(".").lower()
     words = sentence.split()
 
@@ -15,14 +29,10 @@ def generate_embedding(line, pca, model, ft_model, tensor_function):
     expected_sentence_embedding = expected_sentence_embedding.cpu().numpy().reshape(1, -1)
     expected_sentence_embedding = torch.tensor(pca.transform(expected_sentence_embedding))
 
-    #print("BERT embedding shape:", expected_sentence_embedding.shape)
-    
     subject_embedding = torch.tensor(ft_model[subject]).unsqueeze(0)  # Add batch dimension
     object_embedding = torch.tensor(ft_model[object]).unsqueeze(0)  # Add batch dimension
-    # print(subject_embedding.shape)
-    # print(object_embedding.shape)
 
-    # print("FastText embeddings (s/o):", subject_embedding.shape, object_embedding.shape)
+
     actual_sentence_embedding = tensor_function(subject_embedding, object_embedding)
 
     # Ensure both embeddings are on the same device and have the same shape
@@ -54,10 +64,7 @@ def API_query_embedding(line, pca, model, tensor_function, pos = "transitive ver
     
     subject_embedding = get_embedding_in_parallel(word1)  # Add batch dimension
     object_embedding = get_embedding_in_parallel(word2)  # Add batch dimension
-    # print(subject_embedding.shape)
-    # print(object_embedding.shape)
 
-    # print("FastText embeddings (s/o):", subject_embedding.shape, object_embedding.shape)
     actual_sentence_embedding = tensor_function(subject_embedding, object_embedding)
 
     # Ensure both embeddings are on the same device and have the same shape
@@ -80,14 +87,6 @@ def cp_decompose(tensor, rank):
     R = cp_tensor.factors[2]   
 
     return P, Q, R
-
-def get_embedding_in_parallel(embedding):
-    response = requests.get("http://127.0.0.1:8000/embedding/"+embedding)
-    if response.status_code == 200:
-        return torch.tensor(response.json()["embedding"][0]).unsqueeze(0)
-    else:
-        print(f"Error: {response.status_code}, {response.json()}")
-        return None
 
 def cosine_sim(A, B):
     return (np.trace(A.T @ B) / (np.linalg.norm(A, 'fro') * np.linalg.norm(B, 'fro')))

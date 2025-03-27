@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 import joblib
 from util import cosine_sim
 from regression import FullRankTensorRegression
-from similarity_demo import API_query_embedding
+from util import API_query_embedding
 
 if __name__ == "__main__":
     file = open("data/test_sentences.txt", 'r')
