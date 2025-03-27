@@ -1,14 +1,13 @@
 import torch
-import gensim.downloader as api
 from sentence_transformers import SentenceTransformer
 import joblib
-import torch.nn.functional as F
 
 import os
 import sys
 sys.path.insert(0, os.path.abspath(".."))
-from util import FullRankTensorRegression, cosine_sim, get_embedding_in_parallel
-from similarity_scratch import API_query_embedding
+from util import cosine_sim, get_embedding_in_parallel
+from regression import FullRankTensorRegression
+from similarity_demo import API_query_embedding
 
 
 def synonyms_test(sentences, verb, pca, model, tensor_function):
