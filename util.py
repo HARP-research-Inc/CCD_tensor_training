@@ -1,31 +1,75 @@
 import numpy as np
 import torch
-from torch import nn
 from tensorly.decomposition import parafac
-import tensorly as tl
-import torch.optim as optim
 import requests
+import torch.nn.functional as F
 
-class FullRankTensorRegression(nn.Module):
-    def __init__(self, noun_dim, sent_dim):
-        super().__init__()
-        self.sent_dim = sent_dim
-        self.noun_dim = noun_dim
+def generate_embedding(line, pca, model, ft_model, tensor_function):
+    sentence = line.strip("\n").strip(".").lower()
+    words = sentence.split()
 
-        self.V = nn.Parameter(torch.randn(sent_dim, noun_dim, noun_dim))
-        self.bias = nn.Parameter(torch.zeros(sent_dim))
+    subject = words[0]
+    object = words[2]
 
-        # Optional: initialize slice-by-slice
-        for i in range(sent_dim):
-            torch.nn.init.xavier_uniform_(self.V[i])
+    expected_sentence_embedding = model.encode(sentence, convert_to_tensor=True)
+    expected_sentence_embedding = expected_sentence_embedding.cpu().numpy().reshape(1, -1)
+    expected_sentence_embedding = torch.tensor(pca.transform(expected_sentence_embedding))
 
-    def forward(self, s, o):
-        # Optionally normalize inputs
-        # s = F.normalize(s, dim=1)
-        # o = F.normalize(o, dim=1)
+    #print("BERT embedding shape:", expected_sentence_embedding.shape)
+    
+    subject_embedding = torch.tensor(ft_model[subject]).unsqueeze(0)  # Add batch dimension
+    object_embedding = torch.tensor(ft_model[object]).unsqueeze(0)  # Add batch dimension
+    # print(subject_embedding.shape)
+    # print(object_embedding.shape)
 
-        Vs_o = torch.einsum('ljk,bj,bk->bl', self.V, s, o)
-        return Vs_o + self.bias
+    # print("FastText embeddings (s/o):", subject_embedding.shape, object_embedding.shape)
+    actual_sentence_embedding = tensor_function(subject_embedding, object_embedding)
+
+    # Ensure both embeddings are on the same device and have the same shape
+    expected_sentence_embedding = expected_sentence_embedding.to(actual_sentence_embedding.device)
+    expected_sentence_embedding = expected_sentence_embedding.view(1, -1)
+    actual_sentence_embedding = actual_sentence_embedding.view(1, -1)
+
+    # Normalize embeddings
+    expected_sentence_embedding = F.normalize(expected_sentence_embedding, p=2, dim=1)
+    actual_sentence_embedding = F.normalize(actual_sentence_embedding, p=2, dim=1)
+
+    return expected_sentence_embedding, actual_sentence_embedding
+
+def API_query_embedding(line, pca, model, tensor_function, pos = "transitive verb"):
+    sentence = line.strip("\n").strip(".").lower()
+    words = sentence.split()
+
+    word1 = words[0]
+    if pos == "transitive verb":
+        word2 = words[2]
+    else:
+        word2 = words[1]
+
+    expected_sentence_embedding = model.encode(sentence, convert_to_tensor=True)
+    expected_sentence_embedding = expected_sentence_embedding.cpu().numpy().reshape(1, -1)
+    expected_sentence_embedding = torch.tensor(pca.transform(expected_sentence_embedding))
+
+    #print("BERT embedding shape:", expected_sentence_embedding.shape)
+    
+    subject_embedding = get_embedding_in_parallel(word1)  # Add batch dimension
+    object_embedding = get_embedding_in_parallel(word2)  # Add batch dimension
+    # print(subject_embedding.shape)
+    # print(object_embedding.shape)
+
+    # print("FastText embeddings (s/o):", subject_embedding.shape, object_embedding.shape)
+    actual_sentence_embedding = tensor_function(subject_embedding, object_embedding)
+
+    # Ensure both embeddings are on the same device and have the same shape
+    expected_sentence_embedding = expected_sentence_embedding.to(actual_sentence_embedding.device)
+    expected_sentence_embedding = expected_sentence_embedding.view(1, -1)
+    actual_sentence_embedding = actual_sentence_embedding.view(1, -1)
+
+    # Normalize embeddings
+    expected_sentence_embedding = F.normalize(expected_sentence_embedding, p=2, dim=1)
+    actual_sentence_embedding = F.normalize(actual_sentence_embedding, p=2, dim=1)
+
+    return expected_sentence_embedding, actual_sentence_embedding
 
 def cp_decompose(tensor, rank):
     cp_tensor = parafac(tensor=tensor, rank=rank)
@@ -44,9 +88,6 @@ def get_embedding_in_parallel(embedding):
     else:
         print(f"Error: {response.status_code}, {response.json()}")
         return None
-
-def dummy_function():
-    return True
 
 def cosine_sim(A, B):
     return (np.trace(A.T @ B) / (np.linalg.norm(A, 'fro') * np.linalg.norm(B, 'fro')))

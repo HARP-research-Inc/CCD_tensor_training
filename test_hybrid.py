@@ -2,7 +2,8 @@ import torch
 import gensim.downloader as api
 from sentence_transformers import SentenceTransformer
 import joblib
-from util import cosine_sim, FullRankTensorRegression
+from util import cosine_sim
+from regression import FullRankTensorRegression
 import torch.nn.functional as F
 
 if __name__ == "__main__":

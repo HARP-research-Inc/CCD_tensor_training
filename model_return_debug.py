@@ -2,9 +2,9 @@ import torch
 import gensim.downloader as api
 from sentence_transformers import SentenceTransformer
 import joblib
-from util import FullRankTensorRegression, cosine_sim, get_embedding_in_parallel
-import torch.nn.functional as F
-from similarity_scratch import API_query_embedding
+from util import cosine_sim
+from regression import FullRankTensorRegression
+from similarity_demo import API_query_embedding
 
 if __name__ == "__main__":
     file = open("data/test_sentences.txt", 'r')

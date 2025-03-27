@@ -2,8 +2,27 @@ import torch
 from torch import nn
 import numpy as np
 import torch.optim as optim
-from util import FullRankTensorRegression
 
+class FullRankTensorRegression(nn.Module):
+    def __init__(self, noun_dim, sent_dim):
+        super().__init__()
+        self.sent_dim = sent_dim
+        self.noun_dim = noun_dim
+
+        self.V = nn.Parameter(torch.randn(sent_dim, noun_dim, noun_dim))
+        self.bias = nn.Parameter(torch.zeros(sent_dim))
+
+        # Optional: initialize slice-by-slice
+        for i in range(sent_dim):
+            torch.nn.init.xavier_uniform_(self.V[i])
+
+    def forward(self, s, o):
+        # Optionally normalize inputs
+        # s = F.normalize(s, dim=1)
+        # o = F.normalize(o, dim=1)
+
+        Vs_o = torch.einsum('ljk,bj,bk->bl', self.V, s, o)
+        return Vs_o + self.bias
 
 def two_word_regression(model_destination, embedding_set, ground_truth, num_epochs = 50, embedding_dim = 300):
     """
