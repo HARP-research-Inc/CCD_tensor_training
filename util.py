@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 def get_embedding_in_parallel(embedding):
     """
-        
+
     """
     response = requests.get("http://127.0.0.1:8000/embedding/"+embedding)
     if response.status_code == 200:
@@ -17,7 +17,13 @@ def get_embedding_in_parallel(embedding):
 
 def generate_embedding(line, pca, model, ft_model, tensor_function):
     """
-        Embedding querying 
+    Embedding querying that requires
+
+    Args: 
+        
+
+
+    Returns
     """
     sentence = line.strip("\n").strip(".").lower()
     words = sentence.split()

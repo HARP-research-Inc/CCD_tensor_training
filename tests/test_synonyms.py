@@ -10,7 +10,14 @@ from regression import FullRankTensorRegression
 from similarity_demo import API_query_embedding
 
 
-def synonyms_test(sentences, verb, pca, model, tensor_function):
+def synonyms_test(sentences, verb, pca, model, tensor_function, type = "transitive verb"):
+    """
+    Synonyms test function. Requires 
+
+    Args:
+        Sentences: list of sentence vectors
+        Verb: 
+    """
     sum_sim = 0
     num_samples = len(sentences)
 
@@ -30,10 +37,15 @@ def synonyms_test(sentences, verb, pca, model, tensor_function):
 
         print(sentence1, sentence2)
 
-        _, actual1 = API_query_embedding(sentence1, pca, model, tensor_function)
-        _, actual2 = API_query_embedding(sentence2, pca, model, tensor_function)
+        #compare actual
+        _, embedding1 = API_query_embedding(sentence1, pca, model, tensor_function, pos = type)
+        _, embedding2 = API_query_embedding(sentence2, pca, model, tensor_function, pos = type)
 
-        sum_sim += cosine_sim(actual1.detach().numpy(), actual2.detach().numpy())
+        #compare expected
+        # embedding1, _= API_query_embedding(sentence1, pca, model, tensor_function, pos = type)
+        # embedding2, _ = API_query_embedding(sentence2, pca, model, tensor_function, pos = type)
+
+        sum_sim += cosine_sim(embedding1.detach().numpy(), embedding2.detach().numpy())
 
         index += 2
     
@@ -55,7 +67,7 @@ if __name__ == "__main__":
     # print("*****done loading FastText model*****")
 
     tensor_function = FullRankTensorRegression(300, 300)
-    tensor_function.load_state_dict(torch.load("../adj_weights_on_the_fly.pt"))
+    tensor_function.load_state_dict(torch.load("../models/adj_weights.pt"))
 
     tensor_function.eval()
     
@@ -63,7 +75,7 @@ if __name__ == "__main__":
     pca = joblib.load("../data/adj_pca_model.pkl")
 
     data = file.readlines()
-    print("far synonyms: ", synonyms_test(data, "strike", pca, model, tensor_function))
+    print("near synonyms: ", synonyms_test(data, "", pca, model, tensor_function, type="adjective"))
     
     file.close()
 
