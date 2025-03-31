@@ -1,9 +1,8 @@
-import torch
+import json
+from run_regression import two_word_regression
 
-if torch.cuda.is_available():
-    print("GPU is available")
-else:
-    print("GPU is not available, using CPU instead")
 
-num_gpus = torch.cuda.device_count()
-print(f"Number of available GPUs: {num_gpus}")
+with open("data/top_transitive.json") as file:
+    data = json.load(file)
+    print(len(data))
+

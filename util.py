@@ -17,7 +17,7 @@ def get_embedding_in_parallel(embedding):
 
 def generate_embedding(line, pca, model, ft_model, tensor_function):
     """
-    Embedding querying that requires
+    Queries fastText embeddings from FT model loaded from
 
     Args: 
         
@@ -53,6 +53,20 @@ def generate_embedding(line, pca, model, ft_model, tensor_function):
     return expected_sentence_embedding, actual_sentence_embedding
 
 def API_query_embedding(line, pca, model, tensor_function, pos = "transitive verb"):
+    """
+    Queries word embeddings from local server with fastText preloaded. 
+
+    Args:
+        line: string sentence
+        pca: PCA reduction model
+        model: preloaded BERT model
+        tensor_function: trained model weights
+        pos: part of speech. Defaults to transitive verb
+
+    Returns:
+        expected_sentence_embedding: BERT embedding
+        actual_sentence_embedding: actual sentence embedding
+    """
     sentence = line.strip("\n").strip(".").lower()
     words = sentence.split()
 

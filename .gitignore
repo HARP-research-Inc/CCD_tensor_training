@@ -1,5 +1,8 @@
 training_venv
 tests/data
+tests/__pycache__
+polar_ANN/data
+polar_ANN/__pycache__
 data
 data_raw
 __pycache__

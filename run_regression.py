@@ -1,9 +1,12 @@
 from regression import two_word_regression
 import torch
 
+def update_version_tracking_json():
+    pass
+
 def noun_adjective_pair_regression(destination, epochs = 100):
     """
-        
+    
     """
     dependent_data = torch.load("data/adj_dependent_data.pt", weights_only=False)
 
