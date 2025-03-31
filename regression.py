@@ -65,6 +65,36 @@ class ThreeWordTensorRegression(nn.Module):
         Vs_o = torch.einsum('ljk,bj,bk->bl', self.V, s, o)
         return Vs_o + self.bias
 
+class ThreeWordTensorRegression(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        """
+        Regression initialization for mapping three input vectors to one output vector.
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        # Tensor for mapping three input vectors to one output vector
+        self.V = nn.Parameter(torch.randn(output_dim, input_dim, input_dim, input_dim))
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+
+        # Initialize slice-by-slice
+        for i in range(output_dim):
+            torch.nn.init.xavier_uniform_(self.V[i])
+
+    def forward(self, x1, x2, x3):
+        """
+        Forward pass for three input vectors.
+
+        Args:
+            x1, x2, x3: Input tensors of shape (batch_size, input_dim)
+
+        Returns:
+            Output tensor of shape (batch_size, output_dim)
+        """
+        Vx1x2x3 = torch.einsum('lijk,bi,bj,bk->bl', self.V, x1, x2, x3)
+        return Vx1x2x3 + self.bias
+
 def two_word_regression(model_destination, embedding_set, ground_truth, num_epochs = 50, embedding_dim = 300):
     """
     Regression for datasets of paired words e.g. adjective-noun pairs. Produces
