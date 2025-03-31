@@ -4,11 +4,12 @@ from tensorly.decomposition import parafac
 import requests
 import torch.nn.functional as F
 
-def get_embedding_in_parallel(embedding):
+def get_embedding_in_parallel(word):
     """
+    Queries word embeddings from local server with fastText preloaded. 
 
     """
-    response = requests.get("http://127.0.0.1:8000/embedding/"+embedding)
+    response = requests.get("http://127.0.0.1:8000/embedding/"+word)
     if response.status_code == 200:
         return torch.tensor(response.json()["embedding"][0]).unsqueeze(0)
     else:
@@ -17,7 +18,7 @@ def get_embedding_in_parallel(embedding):
 
 def generate_embedding(line, pca, model, ft_model, tensor_function):
     """
-    Queries fastText embeddings from FT model loaded from
+    Queries fastText embeddings from FT model loaded in scope.
 
     Args: 
         
@@ -54,7 +55,7 @@ def generate_embedding(line, pca, model, ft_model, tensor_function):
 
 def API_query_embedding(line, pca, model, tensor_function, pos = "transitive verb"):
     """
-    Queries word embeddings from local server with fastText preloaded. 
+    Generates sentence embeddings. 
 
     Args:
         line: string sentence
