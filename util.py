@@ -55,7 +55,7 @@ def generate_embedding(line, pca, model, ft_model, tensor_function):
 
 def API_query_embedding(line, pca, model, tensor_function, pos = "transitive verb"):
     """
-    Generates sentence embeddings. 
+    Generates sentence embeddings using get_embedding_in_parallel queries.
 
     Args:
         line: string sentence
