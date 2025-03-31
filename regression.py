@@ -64,6 +64,9 @@ class ThreeWordTensorRegression(nn.Module):
         Vx1x2x3 = torch.einsum('lijk,bi,bj,bk->bl', self.V, x1, x2, x3)
         return Vx1x2x3 + self.bias
 
+class OneWordTensorRegression(nn.Module):
+    pass
+
 def two_word_regression(model_destination, embedding_set, ground_truth, 
                         num_epochs = 50, embedding_dim = 300, lr = 0.1):
     """
@@ -309,6 +312,9 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
     Throws:
         Exception if ground truth data is of different len to word embedding data len
     """
+
+    #to-do: make even more dynamic
+
     t = ground_truth # t stores ground truth data
     s_o = embedding_set #s_o stores word data
 
@@ -353,7 +359,7 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
         ground_truth_test[i] = torch.Tensor(sentence_test[i])
     print(">done!\n\n\n")
     
-    
+    #to-do: make the user pre-load this
     if tuple_len == 3:
         model = ThreeWordTensorRegression(word_dim, sentence_dim)
     elif tuple_len == 2:
@@ -363,6 +369,7 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
     optimizer = optim.Adadelta(model.parameters(), lr=lr)
 
     print(">Running regression...")
+    #to-do make more dynamic w/ list
     nouns1 = s_o_tensor[:, 0, :]
     nouns2 = s_o_tensor[:, 1, :]
     if tuple_len == 3:
