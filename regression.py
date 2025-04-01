@@ -65,7 +65,34 @@ class ThreeWordTensorRegression(nn.Module):
         return Vx1x2x3 + self.bias
 
 class OneWordTensorRegression(nn.Module):
-    pass
+    def __init__(self, input_dim, output_dim):
+        """
+        Regression initialization for mapping one input vector to one output vector.
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        # Tensor for mapping one input vector to one output vector
+        self.V = nn.Parameter(torch.randn(output_dim, input_dim))
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+
+        # Initialize slice-by-slice
+        for i in range(output_dim):
+            torch.nn.init.xavier_uniform_(self.V[i])
+
+    def forward(self, x):
+        """
+        Forward pass for one input vector.
+
+        Args:
+            x: Input tensor of shape (batch_size, input_dim)
+
+        Returns:
+            Output tensor of shape (batch_size, output_dim)
+        """
+        Vx = torch.einsum('ik,bk->bi', self.V, x)
+        return Vx + self.bias
 
 def two_word_regression(model_destination, embedding_set, ground_truth, 
                         num_epochs = 50, embedding_dim = 300, lr = 0.1):
@@ -295,11 +322,16 @@ def three_word_regression(model_destination, embedding_set, ground_truth,
 
     torch.save(model.state_dict(), model_destination)
 
-def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
+###########################################
+#############k-word regression#############
+###########################################
+
+def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len, module: nn.Module,
                           num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1):
     """
-    Regression for datasets of tripled words e.g. SVO triplets. Produces
-    linear map between triplet embeddings and ground_truth tensor.
+    Regression function meant to handle differnt word len regressions. Produces
+    linear map between k embeddings and one ground_truth tensor. Thus far only
+    supports 2 and 3 word regressions.
 
     Args: 
         model_destination: file path of final regression model (.pt file preferred)
@@ -360,31 +392,40 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
     print(">done!\n\n\n")
     
     #to-do: make the user pre-load this
-    if tuple_len == 3:
-        model = ThreeWordTensorRegression(word_dim, sentence_dim)
-    elif tuple_len == 2:
-        model = FullRankTensorRegression(word_dim, sentence_dim)
+    # if tuple_len == 3:
+    #     model = ThreeWordTensorRegression(word_dim, sentence_dim)
+    # elif tuple_len == 2:
+    #     model = FullRankTensorRegression(word_dim, sentence_dim)
 
     #utilizing Adadelta regularization
-    optimizer = optim.Adadelta(model.parameters(), lr=lr)
+    optimizer = optim.Adadelta(module.parameters(), lr=lr)
 
     print(">Running regression...")
-    #to-do make more dynamic w/ list
-    nouns1 = s_o_tensor[:, 0, :]
-    nouns2 = s_o_tensor[:, 1, :]
-    if tuple_len == 3:
-        nouns3 = s_o_tensor[:, 2, :]
 
-    
+    #to-do: make more dynamic w/ list
+    # nouns1 = s_o_tensor[:, 0, :]
+    # nouns2 = s_o_tensor[:, 1, :]
+    # if tuple_len == 3:
+    #     nouns3 = s_o_tensor[:, 2, :]
+
+    nouns_train = list()
+    for i in range(tuple_len):
+        print(i, tuple_len, s_o_tensor.shape)
+        nouns_train.append(s_o_tensor[:, i, :])
 
     for epoch in range(num_epochs):
         optimizer.zero_grad()
 
         # Forward pass
+        #to-do: make more dynamic w/ list
         if tuple_len == 3:
-            predicted = model(nouns1, nouns2, nouns3)
+            predicted = module(nouns_train[0],nouns_train[1], nouns_train[2])
         elif tuple_len == 2:
-            predicted = model(nouns1, nouns2)
+            predicted = module(nouns_train[0],nouns_train[1])
+        elif tuple_len == 1:
+            predicted = module(nouns_train[0])
+        else:
+            raise Exception("Unsupported tuple length")
 
         # Compute loss (Mean Squared Error)
         loss = torch.mean((predicted - ground_truth)**2)
@@ -403,7 +444,7 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
     print(f'>done! Final In-Sample Loss: {loss.item():.20f}\n\n\n')
 
     # Save model weights
-    torch.save(model.state_dict(), model_destination)
+    torch.save(module.state_dict(), model_destination)
     print(f"Model weights saved to: {model_destination}")
 
 
@@ -411,21 +452,33 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
 
     print(">************************testing************************")
-    nouns1 = test_s_o_tensor[:, 0, :]
-    nouns2 = test_s_o_tensor[:, 1, :]
-    if tuple_len == 3:
-        nouns3 = test_s_o_tensor[:, 2, :]
     
+    #to-do: you know the drill
+    # nouns1 = test_s_o_tensor[:, 0, :]
+    # nouns2 = test_s_o_tensor[:, 1, :]
+    # if tuple_len == 3:
+    #     nouns3 = test_s_o_tensor[:, 2, :]
+
+    nouns_test = list()
+    for i in range(tuple_len):
+        nouns_test.append(test_s_o_tensor[:, i, :])
+
     if tuple_len == 3:
-            predicted_test = model(nouns1, nouns2, nouns3)
+        predicted_test = module(nouns_test[0],nouns_test[1], nouns_test[2])
     elif tuple_len == 2:
-        predicted_test = model(nouns1, nouns2)
+        predicted_test = module(nouns_test[0],nouns_test[1])
+    elif tuple_len == 1:
+        predicted_test = module(nouns_test[0])
+    else:
+        raise Exception("Unsupported tuple length")
+
+    
 
     loss = torch.mean((predicted_test - ground_truth_test)**2)
 
     print(f'>done! Test Sample Loss: {loss.item():.4f}\n\n\n')   
 
-    torch.save(model.state_dict(), model_destination)
+    torch.save(module.state_dict(), model_destination)
 
 
 
