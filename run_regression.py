@@ -27,6 +27,7 @@ def transitive_verb_regression(destination, epochs):
     k_word_regression(destination, s_o, t, 2, module, word_dim=300, sentence_dim=300, num_epochs=epochs, shuffle=True)
 
 
+
 def concatenated_three_word_regression(destination, epochs):
     """
     Regression for SVO sentences using 1 word regression with word embeddings
