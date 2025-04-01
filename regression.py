@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-import numpy as np
 import torch.optim as optim
+import random
 
 class FullRankTensorRegression(nn.Module):
     def __init__(self, noun_dim, sent_dim):
@@ -205,7 +205,8 @@ def two_word_regression(model_destination, embedding_set, ground_truth,
 
     print(f'>done! Test Sample Loss: {loss.item():.4f}\n\n\n')   
 
-    torch.save(model.state_dict(), model_destination)
+    torch.save(model.state_dict(), model_destination)    
+    
 
 def three_word_regression(model_destination, embedding_set, ground_truth, 
                           num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1):
@@ -216,7 +217,7 @@ def three_word_regression(model_destination, embedding_set, ground_truth,
     Args: 
         model_destination: file path of final regression model (.pt file preferred)
         embedding_set: list of tuples of raw dependent data embeddings
-        ground_truth: tensor containing empirical contextual sentence embedding 
+        ground_truth: tensor containing empirical contextual sentence embeddings 
         num_epochs: number of epochs to train
         word_dim: dimension word embeddings 
         sentence_dim: dimension of sentence embeddings
@@ -322,16 +323,37 @@ def three_word_regression(model_destination, embedding_set, ground_truth,
 
     torch.save(model.state_dict(), model_destination)
 
-###########################################
-#############k-word regression#############
-###########################################
+
+def parallel_shuffle(data1, data2):
+    """
+    Randomly shuffle two datasets in parallel.
+
+    Args:
+        data1: First dataset to shuffle
+        data2: Second dataset to shuffle
+    Modifies:
+        data1, data2
+    """
+    if len(data1) != len(data2):
+        raise ValueError("Datasets must have the same length to shuffle in parallel.")
+
+    indices = list(range(len(data1)))
+    random.shuffle(indices)
+
+    # Shuffle both datasets using the same indices
+    data1[:] = [data1[i] for i in indices]
+    data2[:] = [data2[i] for i in indices]
+
+#############################################
+############# k-word regression #############
+#############################################
 
 def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len, module: nn.Module,
-                          num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1):
+                    num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1, shuffle = False):
     """
     Regression function meant to handle differnt word len regressions. Produces
     linear map between k embeddings and one ground_truth tensor. Thus far only
-    supports 2 and 3 word regressions.
+    supports 1, 2, and 3 word regressions.
 
     Args: 
         model_destination: file path of final regression model (.pt file preferred)
@@ -352,6 +374,11 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
     if len(t) != len(s_o):
         raise Exception("Mismatched data dimensions")
+    
+    print(">shuffling data...")
+    if shuffle:
+        parallel_shuffle(s_o, t)
+    print(">done!\n\n\n")
 
     num_nouns = len(t)
     test_size = num_nouns // 5  # 20% of the data
@@ -410,7 +437,7 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
     nouns_train = list()
     for i in range(tuple_len):
-        print(i, tuple_len, s_o_tensor.shape)
+        #print(i, tuple_len, s_o_tensor.shape)
         nouns_train.append(s_o_tensor[:, i, :])
 
     for epoch in range(num_epochs):
