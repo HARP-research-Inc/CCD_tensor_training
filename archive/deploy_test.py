@@ -1,4 +1,4 @@
-from full_rank_regression import FullRankTensorRegression
+from regression import FullRankTensorRegression
 import torch
 from util import cosine_sim
 from transformers import BertModel, BertTokenizer
