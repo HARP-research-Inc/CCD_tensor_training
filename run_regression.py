@@ -16,6 +16,8 @@ def noun_adjective_pair_regression(destination, epochs = 100):
     empirical_data = torch.load("data/adj_empirical_embeddings.pt", weights_only=False)
     
     module = FullRankTensorRegression(300, 300)
+
+
     k_word_regression(destination, dependent_data, empirical_data, 2, module, word_dim=300, sentence_dim=300, num_epochs=epochs, shuffle=True)
     
 
@@ -62,9 +64,9 @@ def concatenated_three_word_regression(destination, epochs):
 
 
 if __name__ == "__main__":
-    #noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
-    #transitive_verb_regression("data/hybrid_weights.pt", epochs=10)
+    noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
+    #transitive_verb_regression("data/hybrid_weights_dummy.pt", epochs=400)
 
-    concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
+    #concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
 
     print("Regression complete.")

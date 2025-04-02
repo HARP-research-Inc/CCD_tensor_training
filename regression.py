@@ -371,6 +371,10 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
     t = ground_truth # t stores ground truth data
     s_o = embedding_set #s_o stores word data
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    if device == "cuda:3":
+        torch.cuda.empty_cache() 
+    module.to(device)
 
     if len(t) != len(s_o):
         raise Exception("Mismatched data dimensions")
@@ -386,11 +390,11 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
     # Allocating space for testing and training tensors
     print(">allocating space for testing and training tensors...")
-    s_o_tensor = torch.zeros((train_size, tuple_len, word_dim))
-    test_s_o_tensor = torch.zeros((test_size, tuple_len, word_dim))
+    s_o_tensor = torch.zeros((train_size, tuple_len, word_dim)).to(device)
+    test_s_o_tensor = torch.zeros((test_size, tuple_len, word_dim)).to(device)
     
-    ground_truth = torch.zeros((train_size, sentence_dim))
-    ground_truth_test = torch.zeros((test_size, sentence_dim))
+    ground_truth = torch.zeros((train_size, sentence_dim)).to(device)
+    ground_truth_test = torch.zeros((test_size, sentence_dim)).to(device)
     print(">done!\n\n\n")
 
     # Partitioning between testing and training sets
@@ -418,22 +422,10 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
         ground_truth_test[i] = torch.Tensor(sentence_test[i])
     print(">done!\n\n\n")
     
-    #to-do: make the user pre-load this
-    # if tuple_len == 3:
-    #     model = ThreeWordTensorRegression(word_dim, sentence_dim)
-    # elif tuple_len == 2:
-    #     model = FullRankTensorRegression(word_dim, sentence_dim)
-
     #utilizing Adadelta regularization
     optimizer = optim.Adadelta(module.parameters(), lr=lr)
 
     print(">Running regression...")
-
-    #to-do: make more dynamic w/ list
-    # nouns1 = s_o_tensor[:, 0, :]
-    # nouns2 = s_o_tensor[:, 1, :]
-    # if tuple_len == 3:
-    #     nouns3 = s_o_tensor[:, 2, :]
 
     nouns_train = list()
     for i in range(tuple_len):
@@ -479,12 +471,6 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
 
     print(">************************testing************************")
-    
-    #to-do: you know the drill
-    # nouns1 = test_s_o_tensor[:, 0, :]
-    # nouns2 = test_s_o_tensor[:, 1, :]
-    # if tuple_len == 3:
-    #     nouns3 = test_s_o_tensor[:, 2, :]
 
     nouns_test = list()
     for i in range(tuple_len):
