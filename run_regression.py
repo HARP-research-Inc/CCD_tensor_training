@@ -60,13 +60,20 @@ def concatenated_three_word_regression(destination, epochs):
                 sentence = subject + " " + verb + " " + object
                 empirical_data.append(model.encode(sentence))
 
-        
+def build_trans_verb_model(destination, epochs):
+    response = input("WARNING: building this model will take up over 30 gb of space. Type \'YES\' to continue, type anything else to exit: ")
+    if(response != "YES"):
+        return
+    
+    
 
 
 if __name__ == "__main__":
-    noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
-    #transitive_verb_regression("data/hybrid_weights_dummy.pt", epochs=400)
+    #noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
+    #transitive_verb_regression("models/hybrid_weights_dummy.pt", epochs=400)
 
     #concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
+
+    build_trans_verb_model("transitive_verb_model/", epochs=5)
 
     print("Regression complete.")

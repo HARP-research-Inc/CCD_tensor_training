@@ -6,19 +6,8 @@ import os
 import json
 import joblib  # For saving the PCA model
 
-
-
-if __name__ == "__main__":
-
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-
-    #FastText
-    ft_model = api.load('fasttext-wiki-news-subwords-300')
-
-    file_in = open("data/one_verb.json")
-    data = json.load(file_in)
-
+def build_trans(data, BERT_model, FT):
+    
     num_nouns = 50
     num_verbs = len(data)
     pca = PCA(n_components=300)
@@ -57,6 +46,21 @@ if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
 
     empirical_embeddings = pca.fit_transform(empirical_embeddings)
+
+    return pca, empirical_embeddings, s_o_embeddings
+
+if __name__ == "__main__":
+
+    file_in = open("data/one_verb.json")
+    data = json.load(file_in)
+
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
+    #FastText
+    ft_model = api.load('fasttext-wiki-news-subwords-300')
+    
+    pca, empirical_embeddings, s_o_embeddings = build_trans(data, model, ft_model)
 
     # Save the PCA model
     joblib.dump(pca, "data/pca_model.pkl")
