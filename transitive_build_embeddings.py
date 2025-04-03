@@ -62,30 +62,30 @@ def build_one_verb(verb, BERT_model):
     
     s_o_embeddings = list()
 
-    for v_i, verb in enumerate(data):
-        #print("v_i: ", v_i)
-        nouns = data[verb]
+    
+    #print("v_i: ", v_i)
+    nouns = data[verb]
 
-        subjects = nouns[0]
-        objects = nouns[1]        
+    subjects = nouns[0]
+    objects = nouns[1]        
+    
+    for s_i, subject in enumerate(subjects, start=0):
+        for o_i, object in enumerate(objects, start=0):
+            #print(s_i, o_i)
+            sentence = subject + " " + verb + " " + object
+
+            #tokenize
+
+            #get sentence embedding
+            sentence_embedding = model.encode(sentence, convert_to_tensor=True)
+            #get fasttext s/o embeddings
+            subject_embedding = torch.Tensor(ft_model[subject])
+            object_embedding = torch.Tensor(ft_model[object])
         
-        for s_i, subject in enumerate(subjects, start=0):
-            for o_i, object in enumerate(objects, start=0):
-                #print(s_i, o_i)
-                sentence = subject + " " + verb + " " + object
+            s_o_embeddings.append((subject_embedding, object_embedding))
 
-                #tokenize
-
-                #get sentence embedding
-                sentence_embedding = model.encode(sentence, convert_to_tensor=True)
-                #get fasttext s/o embeddings
-                subject_embedding = torch.Tensor(ft_model[subject])
-                object_embedding = torch.Tensor(ft_model[object])
-            
-                s_o_embeddings.append((subject_embedding, object_embedding))
-
-                print(sentence_embedding.shape)
-                empirical_embeddings[v_i*num_nouns*num_nouns + s_i*num_nouns + o_i] = sentence_embedding
+            print(sentence_embedding.shape)
+            empirical_embeddings[s_i*num_nouns + o_i] = sentence_embedding
                 
     os.makedirs("data", exist_ok=True)
 
