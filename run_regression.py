@@ -72,12 +72,14 @@ def build_trans_verb_model(src, destination, model, epochs):
     file_in = open(src)
     data = json.load(file_in)
 
+    big_BERT = None
+
     for verb in data:
         #print(data[verb])
         pca, empirical_embeddings, s_o_embeddings = build_one_verb(data, verb, model)
         module = FullRankTensorRegression(300, 300)
         print(len(s_o_embeddings), len(empirical_embeddings))
-        k_word_regression(destination+f"/{verb}.pt", s_o_embeddings, empirical_embeddings, 
+        k_word_regression(destination+f"/{verb}", s_o_embeddings, empirical_embeddings, 
                           2, module, num_epochs=epochs, word_dim=300, lr=0.5, shuffle=True)
 
     
@@ -90,10 +92,10 @@ def build_trans_verb_model(src, destination, model, epochs):
 
 if __name__ == "__main__":
     #noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
-    transitive_verb_regression("models/hybrid_weights_dummy", epochs=400)
+    #transitive_verb_regression("models/hybrid_weights_dummy", epochs=400)
     #concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
 
 
-    # model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    # build_trans_verb_model("data/top_transitive.json","transitive_verb_model/", model, epochs=50)
-    # print("Regression complete.")
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    build_trans_verb_model("data/top_transitive.json","transitive_verb_model/", model, epochs=50)
+    print("Regression complete.")
