@@ -22,8 +22,11 @@ def build_lookup(first_build = False):
     file_in = open("temp.txt")
 
 def test():
-    word = "fudge"
+    with open("temp.txt", 'r') as file:
+        data = file.readlines()
     
+    for word in data:
+        print(word.strip())
 
 if __name__ == "__main__":
-    build_lookup()
+    test()
