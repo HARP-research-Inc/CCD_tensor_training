@@ -7,7 +7,7 @@ import json
 import joblib  # For saving the PCA model
 from util import get_embedding_in_parallel
 
-def build_trans(data, BERT_model, FT):
+def build_trans(data, ft_model, BERT_model, FT):
     
     num_nouns = 50
     num_verbs = len(data)
@@ -51,14 +51,14 @@ def build_trans(data, BERT_model, FT):
     return pca, empirical_embeddings, s_o_embeddings
 
 
-def build_one_verb(verb, BERT_model):
+def build_one_verb(data, verb, BERT_model):
     num_nouns = 50
     num_verbs = len(data)
     pca = PCA(n_components=300)
 
     print("Number of verbs: ", num_verbs)
 
-    empirical_embeddings = torch.zeros((num_verbs*num_nouns*num_nouns, 384))
+    empirical_embeddings = torch.zeros((num_nouns*num_nouns, 384))
     
     s_o_embeddings = list()
 
@@ -77,15 +77,28 @@ def build_one_verb(verb, BERT_model):
             #tokenize
 
             #get sentence embedding
-            sentence_embedding = model.encode(sentence, convert_to_tensor=True)
+            sentence_embedding = BERT_model.encode(sentence, convert_to_tensor=True)
             #get fasttext s/o embeddings
-            subject_embedding = torch.Tensor(ft_model[subject])
-            object_embedding = torch.Tensor(ft_model[object])
+            subject_embedding = get_embedding_in_parallel(subject)
+            object_embedding = get_embedding_in_parallel(object)
+
+            flag = False
+
+            if subject_embedding is None:
+                subject_embedding = torch.rand((1, 300))
+                flag = True
+
+            if object_embedding is None:
+                object_embedding = torch.rand((1, 300))
+                flag = True
         
             s_o_embeddings.append((subject_embedding, object_embedding))
 
-            print(sentence_embedding.shape)
-            empirical_embeddings[s_i*num_nouns + o_i] = sentence_embedding
+            if not flag:
+                empirical_embeddings[s_i*num_nouns + o_i] = sentence_embedding
+            else: 
+                #randomized to prevent mapping nonsense to real data
+                empirical_embeddings[s_i*num_nouns + o_i] = torch.rand((1,384))
                 
     os.makedirs("data", exist_ok=True)
 
@@ -100,14 +113,15 @@ if __name__ == "__main__":
 
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
+    build_one_verb(data, "strike", model)
 
-    #FastText
-    ft_model = api.load('fasttext-wiki-news-subwords-300')
+    # #FastText
+    # ft_model = api.load('fasttext-wiki-news-subwords-300')
     
-    pca, empirical_embeddings, s_o_embeddings = build_trans(data, model, ft_model)
+    # pca, empirical_embeddings, s_o_embeddings = build_trans(data, model, ft_model)
 
-    # Save the PCA model
-    joblib.dump(pca, "data/pca_model.pkl")
+    # # Save the PCA model
+    # joblib.dump(pca, "data/pca_model.pkl")
 
-    torch.save(empirical_embeddings, "data/hybrid_empirical_embeddings.pt")
-    torch.save(s_o_embeddings, "data/hybrid_dependent_data.pt")
+    # torch.save(empirical_embeddings, "data/hybrid_empirical_embeddings.pt")
+    # torch.save(s_o_embeddings, "data/hybrid_dependent_data.pt")

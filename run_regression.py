@@ -2,6 +2,7 @@ from regression import FullRankTensorRegression, k_word_regression, two_word_reg
 import torch
 from util import get_embedding_in_parallel
 from sentence_transformers import SentenceTransformer
+from transitive_build_embeddings import build_one_verb
 import json
 
 def update_version_tracking_json():
@@ -60,20 +61,39 @@ def concatenated_three_word_regression(destination, epochs):
                 sentence = subject + " " + verb + " " + object
                 empirical_data.append(model.encode(sentence))
 
-def build_trans_verb_model(destination, epochs):
+def build_trans_verb_model(src, destination, model, epochs):
+    """
+    Man was not made to type docstrings. I should be running naked through
+    a stream...
+    """
     response = input("WARNING: building this model will take up over 30 gb of space. Type \'YES\' to continue, type anything else to exit: ")
-    if(response != "YES"):
+    if response != "YES":
         return
+    file_in = open(src)
+    data = json.load(file_in)
+
+    for verb in data:
+        #print(data[verb])
+        pca, empirical_embeddings, s_o_embeddings = build_one_verb(data, verb, model)
+        module = FullRankTensorRegression(300, 300)
+        print(len(s_o_embeddings), len(empirical_embeddings))
+        k_word_regression(destination+f"/{verb}.pt", s_o_embeddings, empirical_embeddings, 
+                          2, module, num_epochs=epochs, word_dim=300, lr=0.5, shuffle=True)
+
+    
+
+
+    
     
     
 
 
 if __name__ == "__main__":
     #noun_adjective_pair_regression("models/adj_weights.pt", epochs=5)
-    #transitive_verb_regression("models/hybrid_weights_dummy.pt", epochs=400)
-
+    transitive_verb_regression("models/hybrid_weights_dummy", epochs=400)
     #concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
 
-    build_trans_verb_model("transitive_verb_model/", epochs=5)
 
-    print("Regression complete.")
+    # model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    # build_trans_verb_model("data/top_transitive.json","transitive_verb_model/", model, epochs=50)
+    # print("Regression complete.")

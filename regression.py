@@ -371,8 +371,8 @@ def k_word_regression(model_destination, embedding_set, ground_truth, tuple_len,
 
     t = ground_truth # t stores ground truth data
     s_o = embedding_set #s_o stores word data
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
-    if device == "cuda:3":
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    if device == "cuda:2":
         torch.cuda.empty_cache() 
     module.to(device)
 

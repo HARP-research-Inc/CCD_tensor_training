@@ -5,6 +5,9 @@ Research question:
 ___________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________
 _____Basic_____
 - Not (negation)
+    - Possible approach similar to claude where antonym 
+    space of a given word
+    - Dual embeddings
 - Adjectives
 - Verbs
     - Transitive
