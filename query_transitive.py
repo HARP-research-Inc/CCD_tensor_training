@@ -1,4 +1,5 @@
 from util import get_embedding_in_parallel, cosine_sim
+from regression import FullRankTensorRegression
 import torch
 
 def build_cache(file_path):
@@ -54,13 +55,27 @@ def linear_search(cache, word):
     
     return closest_word, closest_distance, closest_embedding
 
-        
+def load_model_in(cache, file_path, target_word):
+    for pair in cache:
+        if pair[0] == target_word:
+            model = FullRankTensorRegression(300, 300)
+            model.load_state_dict(torch.load(file_path+"/"+target_word, weights_only=False))
+            model.eval()
+            return model
+            
+    print("error: model not found")
+    return None
+
 
 
 if __name__ == "__main__":
     cache = build_cache("transitive_verb_model/table.reference")
     #print(cache)
 
-    data = linear_search(cache, "diet")
+    data = linear_search(cache, "break")
 
     print(data[0], data[1])
+
+    model = FullRankTensorRegression(300, 300)
+    model = load_model_in(cache, "transitive_verb_model", data[0])
+    print(model(get_embedding_in_parallel("ball"),get_embedding_in_parallel("bat")))
