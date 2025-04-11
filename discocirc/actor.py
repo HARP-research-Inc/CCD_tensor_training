@@ -1,6 +1,10 @@
 import torch
 from transformers import BertModel, BertTokenizer
 
+
+"""
+OLD: modify to use trained models, fastext, etc
+"""
 class Actor:
 
     def __init__(self, name: str, model: BertModel, tokenizer: BertTokenizer, debug = False):

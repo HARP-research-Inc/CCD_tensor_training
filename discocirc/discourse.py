@@ -2,6 +2,10 @@ import torch
 import actor as ac
 from transformers import BertModel, BertTokenizer
 
+"""
+OLD: modify to use trained models, fastext, etc
+"""
+
 class Discourse:
     def __init__(self, model: BertModel, tokenizer: BertTokenizer, debug = False):
         self.__actors : dict[str, ac.Actor] = {}
