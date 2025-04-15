@@ -91,7 +91,7 @@ def bert_on_bert(src, destination, model, epochs):
         module = FullRankTensorRegression(384, 384)
         print(empirical_embeddings.shape, len(s_o_embeddings))
         k_word_regression(destination+f"/{verb}", s_o_embeddings, empirical_embeddings, 
-                          2, module, num_epochs=epochs, sentence_dim=384, word_dim=384, lr=0.5, shuffle=False)
+                          2, module, num_epochs=epochs, sentence_dim=384, word_dim=384, lr=0.5, shuffle=True)
         
 
 

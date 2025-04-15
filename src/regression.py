@@ -341,8 +341,15 @@ def parallel_shuffle(data1, data2):
     random.shuffle(indices)
 
     # Shuffle both datasets using the same indices
-    data1[:] = [data1[i] for i in indices]
-    data2[:] = [data2[i] for i in indices]
+    if isinstance(data1, torch.Tensor):
+        data1[:] = torch.stack([data1[i] for i in indices])
+    else:
+        data1[:] = [data1[i] for i in indices]
+
+    if isinstance(data2, torch.Tensor):
+        data2[:] = torch.stack([data2[i] for i in indices])
+    else:
+        data2[:] = [data2[i] for i in indices]
 
 #############################################
 ############# k-word regression #############
