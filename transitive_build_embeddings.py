@@ -106,6 +106,42 @@ def build_one_verb(data, verb, BERT_model):
 
     return pca, empirical_embeddings, s_o_embeddings
 
+def BERT_only_no_PCA(data, verb, BERT_model):
+    num_nouns = 50
+    num_verbs = len(data)
+
+    print("Number of verbs: ", num_verbs)
+
+    empirical_embeddings = torch.zeros((num_nouns*num_nouns, 384))
+    
+    s_o_embeddings = list()
+
+    
+    #print("v_i: ", v_i)
+    nouns = data[verb]
+
+    subjects = nouns[0]
+    objects = nouns[1]        
+    
+    for s_i, subject in enumerate(subjects, start=0):
+        for o_i, object in enumerate(objects, start=0):
+            #print(s_i, o_i)
+            sentence = subject + " " + verb + " " + object
+
+            #tokenize
+
+            #get sentence embedding
+            sentence_embedding = BERT_model.encode(sentence, convert_to_tensor=True)
+
+            subject_embedding =  BERT_model.encode(subject, convert_to_tensor=True)
+            object_embedding = BERT_model.encode(object, convert_to_tensor=True)
+        
+            s_o_embeddings.append((subject_embedding, object_embedding))
+
+            empirical_embeddings[s_i*num_nouns + o_i] = sentence_embedding
+
+    return empirical_embeddings, s_o_embeddings
+
 if __name__ == "__main__":
 
     file_in = open("data/one_verb.json")

@@ -13,3 +13,4 @@ dummy_model.pt
 models
 transitive_verb_model
 discocirc/dummy_models
+embedding_caches

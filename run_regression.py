@@ -2,7 +2,7 @@ from regression import FullRankTensorRegression, k_word_regression, two_word_reg
 import torch
 from util import get_embedding_in_parallel
 from sentence_transformers import SentenceTransformer
-from transitive_build_embeddings import build_one_verb
+from transitive_build_embeddings import build_one_verb, BERT_only_no_PCA
 import json
 
 def update_version_tracking_json():
@@ -63,8 +63,7 @@ def concatenated_three_word_regression(destination, epochs):
 
 def build_trans_verb_model(src, destination, model, epochs):
     """
-    Man was not made to type docstrings. I should be running naked through
-    a stream...
+    
     """
     response = input("WARNING: building this model will take up over 30 gb of space. Type \'YES\' to continue, type anything else to exit: ")
     if response != "YES":
@@ -83,6 +82,17 @@ def build_trans_verb_model(src, destination, model, epochs):
                           2, module, num_epochs=epochs, word_dim=300, lr=0.5, shuffle=True)
 
     
+def bert_on_bert(src, destination, model, epochs):
+    with open(src) as file_in:
+        data = json.load(file_in)
+    
+    for verb in data:
+        empirical_embeddings, s_o_embeddings = BERT_only_no_PCA(data, verb, model)
+        module = FullRankTensorRegression(384, 384)
+        print(empirical_embeddings.shape, len(s_o_embeddings))
+        k_word_regression(destination+f"/{verb}", s_o_embeddings, empirical_embeddings, 
+                          2, module, num_epochs=epochs, sentence_dim=384, word_dim=384, lr=0.5, shuffle=False)
+        
 
 
     
@@ -96,6 +106,12 @@ if __name__ == "__main__":
     #concatenated_three_word_regression("models/three_word_weights.pt", epochs=10)
 
 
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    build_trans_verb_model("data/top_transitive.json","transitive_verb_model/", model, epochs=50)
+    # model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    # build_trans_verb_model("data/top_transitive.json","transitive_verb_model/", model, epochs=50)
+    
+
+    bert_on_bert("data/one_verb.json", "models/", SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2"), epochs=500)
+
+
+
     print("Regression complete.")
