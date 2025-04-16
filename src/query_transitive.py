@@ -1,5 +1,5 @@
 from util import get_embedding_in_parallel, cosine_sim
-from regression import FullRankTensorRegression
+from regression import TwoWordTensorRegression
 import torch
 
 import sys
@@ -64,7 +64,7 @@ def linear_search(cache, word):
 def load_model_in(cache, file_path, target_word):
     for pair in cache:
         if pair[0] == target_word:
-            model = FullRankTensorRegression(300, 300)
+            model = TwoWordTensorRegression(300, 300)
             model.load_state_dict(torch.load(file_path+"/"+target_word, weights_only=False))
             model.eval()
             return model
@@ -82,6 +82,6 @@ if __name__ == "__main__":
 
     print(data[0], data[1])
 
-    model = FullRankTensorRegression(300, 300)
+    model = TwoWordTensorRegression(300, 300)
     model = load_model_in(cache, "transitive_verb_model", data[0])
     print(model(get_embedding_in_parallel("ball"),get_embedding_in_parallel("bat")))

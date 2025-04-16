@@ -1,8 +1,7 @@
+archive
 training_venv
 tests/data
 tests/__pycache__
-polar_ANN/data
-polar_ANN/__pycache__
 data
 data_raw
 __pycache__
@@ -11,4 +10,3 @@ dummy_model.pt
 models
 src/discocirc/dummy_models
 src/embedding_caches
-archive

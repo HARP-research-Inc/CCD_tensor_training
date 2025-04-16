@@ -9,7 +9,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.append(str(BASE_DIR))
 
-class FullRankTensorRegression(nn.Module):
+class TwoWordTensorRegression(nn.Module):
     def __init__(self, noun_dim, sent_dim):
         """
         Regression initialization
@@ -164,7 +164,7 @@ def two_word_regression(model_destination, embedding_set, ground_truth,
         ground_truth_test[i] = torch.Tensor(sentence_test[i])
     print(">done!\n\n\n")
     
-    model = FullRankTensorRegression(embedding_dim, embedding_dim)
+    model = TwoWordTensorRegression(embedding_dim, embedding_dim)
 
     #utilizing Adadelta regularization
     optimizer = optim.Adadelta(model.parameters(), lr=lr)

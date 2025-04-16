@@ -6,7 +6,7 @@ import joblib
 import os
 import sys
 sys.path.insert(0, os.path.abspath(".."))
-from regression import FullRankTensorRegression
+from regression import TwoWordTensorRegression
 from util import cosine_sim, get_embedding_in_parallel, API_query_embedding, generate_embedding
 
 
@@ -17,7 +17,7 @@ if __name__ == "__main__":
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     #ft_model = api.load('fasttext-wiki-news-subwords-300')
 
-    tensor_function = FullRankTensorRegression(300, 300)
+    tensor_function = TwoWordTensorRegression(300, 300)
     tensor_function.load_state_dict(torch.load("../models/hybrid_weights_dummy"))
 
     tensor_function.eval()

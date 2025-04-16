@@ -25,13 +25,3 @@ def build_lookup(first_build = False):
         file_out.close()
     
     file_in = open("temp.txt")
-
-def test():
-    with open("temp.txt", 'r') as file:
-        data = file.readlines()
-    
-    for word in data:
-        print(word.strip())
-
-if __name__ == "__main__":
-    test()

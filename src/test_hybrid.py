@@ -3,7 +3,7 @@ import gensim.downloader as api
 from sentence_transformers import SentenceTransformer
 import joblib
 from util import cosine_sim
-from regression import FullRankTensorRegression
+from regression import TwoWordTensorRegression
 import torch.nn.functional as F
 
 import sys
@@ -20,7 +20,7 @@ if __name__ == "__main__":
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     ft_model = api.load('fasttext-wiki-news-subwords-300')
 
-    tensor_function = FullRankTensorRegression(300, 300)
+    tensor_function = TwoWordTensorRegression(300, 300)
     tensor_function.load_state_dict(torch.load("data/hybrid_weights.pt"))
 
     tensor_function.eval()

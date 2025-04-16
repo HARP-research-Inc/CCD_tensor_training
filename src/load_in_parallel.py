@@ -15,8 +15,6 @@ print("Done loading fastText model.")
 
 app = FastAPI()
 
-#print(ft_model['neologism'].shape)  
-
 @app.get("/embedding/{word}")
 def read_item(word: str):
     try:

@@ -3,7 +3,7 @@ import gensim.downloader as api
 from sentence_transformers import SentenceTransformer
 import joblib
 from util import cosine_sim
-from regression import FullRankTensorRegression
+from regression import TwoWordTensorRegression
 from util import API_query_embedding
 
 import sys
@@ -19,13 +19,13 @@ if __name__ == "__main__":
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     # Load the first model weights
-    tensor_function1 = FullRankTensorRegression(300, 300)
+    tensor_function1 = TwoWordTensorRegression(300, 300)
     model_path1 = "adj_weights_on_the_fly.pt"
     tensor_function1.load_state_dict(torch.load(model_path1))
     tensor_function1.eval()
 
     # Load the second model weights
-    tensor_function2 = FullRankTensorRegression(300, 300)
+    tensor_function2 = TwoWordTensorRegression(300, 300)
     model_path2 = "dummy_model.pt"
     tensor_function2.load_state_dict(torch.load(model_path2))
     tensor_function2.eval()

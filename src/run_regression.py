@@ -1,4 +1,4 @@
-from regression import FullRankTensorRegression, k_word_regression, two_word_regression
+from regression import TwoWordTensorRegression, k_word_regression, two_word_regression
 import torch
 from util import get_embedding_in_parallel
 from sentence_transformers import SentenceTransformer
@@ -22,7 +22,7 @@ def noun_adjective_pair_regression(destination, epochs = 100):
 
     empirical_data = torch.load("data/adj_empirical_embeddings.pt", weights_only=False)
     
-    module = FullRankTensorRegression(300, 300)
+    module = TwoWordTensorRegression(300, 300)
 
 
     k_word_regression(destination, dependent_data, empirical_data, 2, module, word_dim=300, sentence_dim=300, num_epochs=epochs, shuffle=True)
@@ -32,7 +32,7 @@ def transitive_verb_regression(destination, epochs):
     t = torch.load("data/hybrid_empirical_embeddings.pt", weights_only=False)
     s_o = torch.load("data/hybrid_dependent_data.pt", weights_only=False) # List of tuples of tensors
 
-    module = FullRankTensorRegression(300, 300)
+    module = TwoWordTensorRegression(300, 300)
     k_word_regression(destination, s_o, t, 2, module, word_dim=300, sentence_dim=300, num_epochs=epochs, shuffle=True)
 
 
@@ -82,7 +82,7 @@ def build_trans_verb_model(src, destination, model, epochs):
     for verb in data:
         #print(data[verb])
         pca, empirical_embeddings, s_o_embeddings = build_one_verb(data, verb, model)
-        module = FullRankTensorRegression(300, 300)
+        module = TwoWordTensorRegression(300, 300)
         print(len(s_o_embeddings), len(empirical_embeddings))
         k_word_regression(destination+f"/{verb}", s_o_embeddings, empirical_embeddings, 
                           2, module, num_epochs=epochs, word_dim=300, lr=0.5, shuffle=True)
@@ -94,7 +94,7 @@ def bert_on_bert(src, destination, model, epochs):
     
     for verb in data:
         empirical_embeddings, s_o_embeddings = BERT_only_no_PCA(data, verb, model)
-        module = FullRankTensorRegression(384, 384)
+        module = TwoWordTensorRegression(384, 384)
         print(empirical_embeddings.shape, len(s_o_embeddings))
         k_word_regression(destination+f"/{verb}", s_o_embeddings, empirical_embeddings, 
                           2, module, num_epochs=epochs, sentence_dim=384, word_dim=384, lr=0.5, shuffle=True)

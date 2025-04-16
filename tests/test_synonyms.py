@@ -6,7 +6,7 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath(".."))
 from util import cosine_sim, get_embedding_in_parallel
-from regression import FullRankTensorRegression
+from regression import TwoWordTensorRegression
 from similarity_demo import API_query_embedding
 
 
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # ft_model = api.load('fasttext-wiki-news-subwords-300')
     # print("*****done loading FastText model*****")
 
-    tensor_function = FullRankTensorRegression(300, 300)
+    tensor_function = TwoWordTensorRegression(300, 300)
     tensor_function.load_state_dict(torch.load("../models/adj_weights.pt"))
 
     tensor_function.eval()
