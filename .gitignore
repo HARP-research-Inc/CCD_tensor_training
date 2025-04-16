@@ -13,3 +13,4 @@ dummy_model.pt
 models
 src/discocirc/dummy_models
 src/embedding_caches
+archive
