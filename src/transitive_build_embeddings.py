@@ -7,6 +7,12 @@ import json
 import joblib  # For saving the PCA model
 from util import get_embedding_in_parallel
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 def build_trans(data, ft_model, BERT_model, FT):
     
     num_nouns = 50

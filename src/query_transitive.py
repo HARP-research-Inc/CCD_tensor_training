@@ -2,6 +2,12 @@ from util import get_embedding_in_parallel, cosine_sim
 from regression import FullRankTensorRegression
 import torch
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 def build_cache(file_path):
     with open(file_path,'r') as reference:
         data = reference.readlines()

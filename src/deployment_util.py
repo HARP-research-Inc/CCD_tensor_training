@@ -1,5 +1,10 @@
 import json
 import torch
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
 
 MODEL_PATH = "transitive_verb_model/"
 

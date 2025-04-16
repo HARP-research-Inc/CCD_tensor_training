@@ -1,16 +1,11 @@
-import torch
-from util import get_embedding_in_parallel
+import sys
+from pathlib import Path
 
-# if torch.cuda.is_available():
-#     device = torch.device('cuda')
-#     print('GPU is available')
-# else:
-#     device = torch.device('cpu')
-#     print('GPU is not available, using CPU instead')
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
 
-# print(f'Using device: {device}')
+import json
+with open("data/one_verb.json") as file_in:
+    data = json.load(file_in)
 
-# num_gpus = torch.cuda.device_count()
-# print(f'Number of GPUs available: {num_gpus}')
-
-print(get_embedding_in_parallel("test"))
+print("success")

@@ -5,6 +5,12 @@ from sentence_transformers import SentenceTransformer
 from transitive_build_embeddings import build_one_verb, BERT_only_no_PCA
 import json
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 def update_version_tracking_json():
     pass
 

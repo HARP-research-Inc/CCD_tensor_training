@@ -4,6 +4,12 @@ from tensorly.decomposition import parafac
 import requests
 import torch.nn.functional as F
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 def get_embedding_in_parallel(word):
     """
     Queries word embeddings from local server with fastText preloaded. 

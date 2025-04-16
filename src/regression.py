@@ -3,6 +3,12 @@ from torch import nn
 import torch.optim as optim
 import random
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 class FullRankTensorRegression(nn.Module):
     def __init__(self, noun_dim, sent_dim):
         """
