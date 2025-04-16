@@ -1,12 +1,43 @@
+# Compiled files
+*.class
+*.o
+*.pyc
+*.exe
+
+# Dependency directories
+node_modules/
+venv/
+.env/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs and debug
+*.log
+*.out
+
+# IDE/project settings
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+venv/
+.env
+
+# Project specific
 archive
 training_venv
-tests/data
-tests/__pycache__
-data
-data_raw
-__pycache__
-adj_weights_on_the_fly.pt
-dummy_model.pt
 models
 src/discocirc/dummy_models
 src/embedding_caches
+tests/data
+data
+data_raw
+
