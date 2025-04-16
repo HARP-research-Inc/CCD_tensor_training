@@ -6,8 +6,6 @@ polar_ANN/__pycache__
 data
 data_raw
 __pycache__
-archive/transitive_lemma.json
-archive/transitive_not_lemma.json
 adj_weights_on_the_fly.pt
 dummy_model.pt
 models
