@@ -3,6 +3,12 @@ from fastapi import FastAPI, HTTPException
 import numpy as np
 import torch
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 print("Loading fastText model...")
 ft_model = api.load('fasttext-wiki-news-subwords-300')
 print("Done loading fastText model.")

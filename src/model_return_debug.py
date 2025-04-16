@@ -6,6 +6,12 @@ from util import cosine_sim
 from regression import FullRankTensorRegression
 from util import API_query_embedding
 
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(str(BASE_DIR))
+
 if __name__ == "__main__":
     file = open("data/test_sentences.txt", 'r')
 
