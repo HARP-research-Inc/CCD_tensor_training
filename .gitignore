@@ -35,9 +35,8 @@ venv/
 archive
 training_venv
 models
-src/discocirc/dummy_models
 src/embedding_caches
 tests/data
 data
 data_raw
-
+src/discocirc/dummy_weights
