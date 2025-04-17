@@ -32,7 +32,7 @@ venv/
 .env
 
 # Project specific
-archive
+archive_dump
 training_venv
 models
 src/embedding_caches
