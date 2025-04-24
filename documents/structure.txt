@@ -1,0 +1,32 @@
+DisCoCirc
+
+
+categories.py
+    - class Circuit(object)
+        """
+        A graph
+        """
+        - __init__(self)
+            #defined as adjacency list
+    - class Wire(object)
+        - __init__(self, daughter, son)
+    - class Box(object)
+        - __init__(self)
+    - class Spider(object)
+        - __init__(self, daughter, son)
+    - class Actor(Wire)
+        - __init__(self, )
+
+pos.py
+    - class [Type](Box)
+        - __init__(self, grammar)
+    - class Noun(Box)
+        - __init__(self, )
+    - class State(Noun)
+        - __init__(self, )
+    - class Effect(Noun)
+        - __init__(self, )
+
+DisCoDeploy.py
+    - DisCoCat
+    - DisCoCirc
