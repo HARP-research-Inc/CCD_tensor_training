@@ -81,55 +81,36 @@ def estimate_discocirc_complexity(sentence, d=300):
 ###############################################################################
 # 3) BERT Complexity Estimation
 ###############################################################################
-def estimate_bert_complexity(sentence, model_name="bert-base-uncased"):
-    """
-    Approximate the FLOPs for processing 'sentence' with a standard BERT-base:
-      - BERT-base typical configuration:
-          - L layers = 12
-          - Hidden size H = 768
-          - Intermediate size (feed-forward) ~ 3072
-          - #Attention heads = 12
-      - We'll estimate:
-          FLOPs_per_layer ~ 2 * (L^2 * H)  [Self-attention: QK + V, merges, etc.]
-                           + 2 * (L * H * 4H) [FFN with 2 projections if int. dim=4H]
-        Then multiply by #layers.
-      - We'll get actual token length (L) by tokenizing with the specified BERT tokenizer.
-      - This is a known rough formula from "On the Parameterization and Complexity of Transformers."
-    
-    In practice, specialized kernels & parallelism can shift real values, but this is a standard reference.
-    """
-    # 3A) Load tokenizer
-    tokenizer = BertTokenizer.from_pretrained(model_name)
-    
-    # 3B) Tokenize
-    tokens = tokenizer.encode(sentence, add_special_tokens=True)
-    seq_len = len(tokens)  # L
-    
-    # 3C) "Standard BERT-base" approximate hyperparams
-    num_layers = 12
-    hidden_size = 768
-    intermediate_size = 3072  # typically 4 * hidden_size
-    
-    # 3D) Approximate cost per layer
-    #  - Self-attention: O(L^2 * H). 
-    #    There's often a factor of ~2 or 3 for Q,K,V, but we’ll approximate 2 * L^2 * H.
-    #  - Feed-forward: O(L * H * intermediate_size) * factor 2 (forward + projection back)
-    #    ~ 2 * L * H * 4H = 8 * L * H^2, if intermediate_size=4H
-    # So we combine them:
-    self_attention_flops = 2 * (seq_len**2) * hidden_size
-    feed_forward_flops = 2 * seq_len * hidden_size * intermediate_size
-    flops_per_layer = self_attention_flops + feed_forward_flops
-    
-    # Multiply by number of transformer layers
-    total_flops = flops_per_layer * num_layers
-    
-    return total_flops, seq_len
+MAC_FLOP = 2  # multiply + add
+
+def flops_transformer_layer(L: int, H: int) -> int:
+    """Forward FLOPs for one encoder layer (BERT style)."""
+    proj_qkv = 3 * MAC_FLOP * L * H * H
+    proj_out  =     MAC_FLOP * L * H * H
+    attn_matmul = 2 * MAC_FLOP * L * L * H          # QKᵀ + αV
+    scale_softmax = L * L + 6 * L * L               # scale + softmax
+    feedforward   = 2 * MAC_FLOP * L * H * 4*H      # Linear1 + Linear2
+    gelu          = 8 * L * 4 * H
+    layernorm     = 2 * 8 * L * H
+    residual_add  = 2 * L * H
+    return (proj_qkv + proj_out + attn_matmul +
+            scale_softmax + feedforward + gelu +
+            layernorm + residual_add)
+
+def bert_forward_flops(sentence: str,
+                       model_name="bert-base-uncased",
+                       layers=12, hidden=768):
+    tok = BertTokenizer.from_pretrained(model_name)
+    L = len(tok.encode(sentence, add_special_tokens=True))
+    per_layer = flops_transformer_layer(L, hidden)
+    return per_layer * layers, L
 
 ###############################################################################
 # 4) Example usage: Compare DisCoCirc vs BERT-base on a single sentence
 ###############################################################################
 if __name__ == "__main__":
     sentence = """The big dog quickly chased a ball in the yard."""
+    sentence = """Jack loves Diane."""
     
     # DisCoCirc estimate:
     discocirc_total, discocirc_breakdown = estimate_discocirc_complexity(sentence, d=300)
@@ -144,7 +125,7 @@ if __name__ == "__main__":
     print("\n" + "="*60 + "\n")
     
     # BERT-base estimate:
-    bert_total, L = estimate_bert_complexity(sentence, model_name="bert-base-uncased")
+    bert_total, L = bert_forward_flops(sentence, model_name="bert-base-uncased")
     print("[BERT-base Complexity Approximation]")
     print(f"Sentence: {sentence}")
     print(f"Tokenized length (with special tokens) = {L}")
