@@ -690,7 +690,34 @@ if __name__ == "__main__":
                       help='Do not resume from checkpoint')
     parser.add_argument('--force-resume', action='store_true',
                       help='Force resume even if previous run was completed')
+    parser.add_argument('--wikitext', action='store_true',
+                      help='Use WikiText-103 dataset')
+    parser.add_argument('--bert', action='store_true',
+                      help='Run in BERT-only mode')
+    parser.add_argument('--disco', action='store_true',
+                      help='Run in DisCoCirc-only mode')
+    parser.add_argument('--cpu', action='store_true',
+                      help='Force CPU usage for all operations')
+    parser.add_argument('--cpu-bert', action='store_true',
+                      help='Force CPU usage for BERT operations only')
+    parser.add_argument('--benchmark', action='store_true',
+                      help='Run benchmarks to determine optimal settings')
+    parser.add_argument('--fork', action='store_true',
+                      help='Use fork instead of spawn for multiprocessing')
+    parser.add_argument('--workers', type=int,
+                      help='Number of worker processes to use')
     args = parser.parse_args()
+
+    # Update global flags based on arguments
+    USE_WIKITEXT = args.wikitext and load_dataset is not None
+    BERT_ONLY = args.bert
+    DISCO_ONLY = args.disco
+    CPU_ONLY = args.cpu
+    CPU_BERT = args.cpu_bert
+    BENCHMARK = args.benchmark
+    USE_FORK = args.fork
+    if args.workers is not None:
+        MAX_WORKERS = args.workers
 
     # ------------------------------------------------------------------ config
     H_DIM   = 384          # unified embedding dimension for all models
