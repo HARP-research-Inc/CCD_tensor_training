@@ -60,15 +60,17 @@ def initialize_gpu():
         print("User requested --cpu-bert, forcing CPU usage for BERT operations only.")
         DEVICE = torch.device("cpu")
     else:
-        # Force CUDA device selection if available
+        # Check for multiple CUDA devices
         if torch.cuda.is_available():
             cuda_devices = [i for i in range(torch.cuda.device_count())]
             if cuda_devices:
-                nvidia_device = cuda_devices[0]
-                print(f"Found NVIDIA GPU at device {nvidia_device}")
-                print(f"Device name: {torch.cuda.get_device_name(nvidia_device)}")
+                print(f"Found {len(cuda_devices)} NVIDIA GPU(s):")
+                for device_id in cuda_devices:
+                    print(f"  Device {device_id}: {torch.cuda.get_device_name(device_id)}")
                 print(f"CUDA version: {torch.version.cuda}")
                 
+                # Use the first GPU as default
+                nvidia_device = cuda_devices[0]
                 torch.cuda.set_device(nvidia_device)
                 DEVICE = torch.device(f"cuda:{nvidia_device}")
                 
@@ -81,6 +83,11 @@ def initialize_gpu():
                 print("CUDA test computation successful!")
                 print(f"Test tensor device: {test_tensor.device}")
                 print(f"Test result device: {test_result.device}")
+                
+                # Enable multi-GPU processing if available
+                if len(cuda_devices) > 1:
+                    print(f"\nEnabling multi-GPU processing with {len(cuda_devices)} devices")
+                    torch.cuda.set_device('cuda')  # Use all available GPUs
             else:
                 print("No CUDA devices found!")
                 DEVICE = torch.device("cpu")
@@ -287,8 +294,13 @@ def process_sentence_batch(
         
         # BERT processing uses GPU if available (unless --cpu)
         if not DISCO_ONLY:
-            bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
-            bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
+            # Use DataParallel for multi-GPU processing
+            if torch.cuda.device_count() > 1 and not CPU_ONLY and not CPU_BERT:
+                bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
+                bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
+            else:
+                bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
+                bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
         else:
             bert_vanilla, bert_flash, seq_len = 0.0, 0.0, 0
             
@@ -772,6 +784,8 @@ if __name__ == "__main__":
                       help='Number of worker processes to use')
     parser.add_argument('--batch-size', type=int,
                       help='Batch size for processing (default: determined by benchmark)')
+    parser.add_argument('--gpu-id', type=int, default=None,
+                      help='Specific GPU ID to use (default: use all available GPUs)')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -784,6 +798,8 @@ if __name__ == "__main__":
     USE_FORK = args.fork
     if args.workers is not None:
         MAX_WORKERS = args.workers
+    if args.gpu_id is not None:
+        torch.cuda.set_device(args.gpu_id)
 
     # ------------------------------------------------------------------ config
     H_DIM   = 384          # unified embedding dimension for all models
