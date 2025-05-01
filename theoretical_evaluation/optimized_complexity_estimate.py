@@ -2,7 +2,6 @@ import spacy
 from transformers import BertTokenizer
 from tqdm import tqdm  # for progress bars
 import sys
-import os
 import concurrent.futures
 import multiprocessing
 import math
