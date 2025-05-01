@@ -10,6 +10,10 @@ import torch
 from typing import Optional, Tuple
 from functools import partial
 import time
+import json
+import pickle
+from datetime import datetime
+from pathlib import Path
 
 # Add datasets import at the top
 try:
@@ -297,49 +301,126 @@ def process_sentence_batch(
         })
     return results
 
+def save_checkpoint(corpus_results: dict, checkpoint_dir: str = "checkpoints", is_final: bool = False) -> str:
+    """Save current progress to a checkpoint file."""
+    # Create checkpoint directory if it doesn't exist
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Generate checkpoint filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_file = Path(checkpoint_dir) / f"checkpoint_{timestamp}.json"
+    
+    # Add status information
+    corpus_results["checkpoint_info"] = {
+        "timestamp": timestamp,
+        "is_final": is_final,
+        "status": "completed" if is_final else "in_progress"
+    }
+    
+    # Save results
+    with open(checkpoint_file, 'w') as f:
+        json.dump(corpus_results, f, indent=2)
+    
+    # Save latest checkpoint path
+    latest_file = Path(checkpoint_dir) / "latest_checkpoint.txt"
+    with open(latest_file, 'w') as f:
+        f.write(str(checkpoint_file))
+    
+    return str(checkpoint_file)
+
+def load_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[dict]:
+    """Load the most recent checkpoint if it exists."""
+    latest_file = Path(checkpoint_dir) / "latest_checkpoint.txt"
+    if not latest_file.exists():
+        return None
+    
+    with open(latest_file, 'r') as f:
+        checkpoint_path = f.read().strip()
+    
+    if not Path(checkpoint_path).exists():
+        return None
+    
+    with open(checkpoint_path, 'r') as f:
+        return json.load(f)
+
+def was_run_completed(checkpoint_dir: str = "checkpoints") -> bool:
+    """Check if the last run was completed successfully."""
+    latest_checkpoint = load_latest_checkpoint(checkpoint_dir)
+    if latest_checkpoint is None:
+        return False
+    
+    # Check if the last checkpoint was marked as final
+    checkpoint_info = latest_checkpoint.get("checkpoint_info", {})
+    return checkpoint_info.get("is_final", False)
+
 def estimate_corpus_complexity_from_sentences(
     sentences: list, 
     d: float=300, 
-    cp_rank: float=50,  # Changed from disco_factor to cp_rank
+    cp_rank: float=50,
     bert_optim_factor: float=1.0, 
-    use_progress_bar: bool=True
+    use_progress_bar: bool=True,
+    checkpoint_interval: int=100,  # Save every N sentences
+    checkpoint_dir: str="checkpoints",
+    resume: bool=True
 ) -> dict:
     """
     Process sentences in parallel using multiprocessing. 
     Returns aggregated complexity results.
     """
-    corpus_results = {
-        "num_sentences": len(sentences),
-        "discocirc_naive": 0.0,  # Updated key names to match new version
-        "discocirc_cp": 0.0,
-        "bert_vanilla": 0.0,
-        "bert_flash": 0.0,
-        "sentence_details": []
-    }
+    total_sentences = len(sentences)
+    
+    # Try to load from checkpoint if resuming
+    if resume:
+        corpus_results = load_latest_checkpoint(checkpoint_dir)
+        if corpus_results is not None:
+            # Check if the previous run was completed
+            if was_run_completed(checkpoint_dir):
+                print("\nPrevious run was completed successfully.")
+                if corpus_results["num_sentences"] >= total_sentences:
+                    print("All sentences already processed!")
+                    return corpus_results
+                else:
+                    print("Processing additional sentences...")
+            else:
+                print(f"\nResuming incomplete run with {corpus_results['num_sentences']} sentences processed")
+            
+            # Filter out already processed sentences
+            sentences = sentences[corpus_results['num_sentences']:]
+            if not sentences:
+                print("All sentences already processed!")
+                return corpus_results
+        else:
+            corpus_results = {
+                "num_sentences": 0,
+                "discocirc_naive": 0.0,
+                "discocirc_cp": 0.0,
+                "bert_vanilla": 0.0,
+                "bert_flash": 0.0,
+                "sentence_details": []
+            }
+    else:
+        corpus_results = {
+            "num_sentences": 0,
+            "discocirc_naive": 0.0,
+            "discocirc_cp": 0.0,
+            "bert_vanilla": 0.0,
+            "bert_flash": 0.0,
+            "sentence_details": []
+        }
     
     # Determine optimal number of workers (75% of CPU cores)
     n_workers = get_optimal_workers()
     print(f"\nUsing {n_workers} worker processes for parallel processing")
     
-    # Split sentences into chunks for parallel processing using improved formula
+    # Split sentences into chunks for parallel processing
     total_sentences = len(sentences)
-    
-    # Advanced optimization for very high core counts
-    # Scale more aggressively with higher core counts
-    # For 8 cores: ~100 sentences
-    # For 16 cores: ~200 sentences
-    # For 32 cores: ~400 sentences
-    # For 64 cores: ~800 sentences
-    # For 128 cores: ~1600 sentences
     base_chunk = 100
-    # Exponential scaling with worker count
-    chunk_multiplier = math.log2(n_workers) / math.log2(8)  # Scaled relative to 8 cores
+    chunk_multiplier = math.log2(n_workers) / math.log2(8)
     chunk_size = int(base_chunk * chunk_multiplier)
     chunk_size = max(50, min(2000, chunk_size))
     
-    # Make sure we don't have too many or too few chunks
-    max_chunks = n_workers * 4  # Aim for around 4 chunks per worker
-    min_chunks = n_workers  # At least one chunk per worker
+    max_chunks = n_workers * 4
+    min_chunks = n_workers
     
     total_chunks = max(1, total_sentences // chunk_size)
     if total_chunks < min_chunks:
@@ -366,13 +447,13 @@ def estimate_corpus_complexity_from_sentences(
                 desc = "Processing BERT+DisCoCirc"
                 
             # Enhanced progress bar with more information
-            completed_sentences = 0
-            disc_total_naive = 0.0
-            disc_total_cp = 0.0
-            bert_total_vanilla = 0.0
-            bert_total_flash = 0.0
+            completed_sentences = corpus_results["num_sentences"]
+            disc_total_naive = corpus_results["discocirc_naive"]
+            disc_total_cp = corpus_results["discocirc_cp"]
+            bert_total_vanilla = corpus_results["bert_vanilla"]
+            bert_total_flash = corpus_results["bert_flash"]
             
-            pbar = tqdm(total=total_sentences, desc=desc, position=0)
+            pbar = tqdm(total=total_sentences, initial=completed_sentences, desc=desc, position=0)
             
             for chunk_result in pool.imap(process_batch, sentence_chunks):
                 # Update metrics for this chunk
@@ -382,6 +463,19 @@ def estimate_corpus_complexity_from_sentences(
                     bert_total_vanilla += result["bert_naive"]
                     bert_total_flash += result["bert_opt"]
                     completed_sentences += 1
+                    
+                    corpus_results["discocirc_naive"] += result["disc_naive"]
+                    corpus_results["discocirc_cp"] += result["disc_cp"]
+                    corpus_results["bert_vanilla"] += result["bert_naive"]
+                    corpus_results["bert_flash"] += result["bert_opt"]
+                    corpus_results["sentence_details"].append({
+                        "discocirc_naive": result["disc_naive"],
+                        "discocirc_cp": result["disc_cp"],
+                        "bert_vanilla": result["bert_naive"],
+                        "bert_flash": result["bert_opt"],
+                        "token_count": result["token_count"]
+                    })
+                    corpus_results["num_sentences"] += 1
                 
                 # Update progress bar with detailed metrics
                 pbar.update(len(chunk_result))
@@ -396,25 +490,15 @@ def estimate_corpus_complexity_from_sentences(
                 status = " | ".join(status_parts)
                 pbar.set_postfix_str(f"{completed_sentences}/{total_sentences} sents | {status}")
                 
-                # Add to final results
-                for result in chunk_result:
-                    corpus_results["discocirc_naive"] += result["disc_naive"]
-                    corpus_results["discocirc_cp"] += result["disc_cp"]
-                    corpus_results["bert_vanilla"] += result["bert_naive"]
-                    corpus_results["bert_flash"] += result["bert_opt"]
-                    corpus_results["sentence_details"].append({
-                        "discocirc_naive": result["disc_naive"],
-                        "discocirc_cp": result["disc_cp"],
-                        "bert_vanilla": result["bert_naive"],
-                        "bert_flash": result["bert_opt"],
-                        "token_count": result["token_count"]
-                    })
+                # Save checkpoint periodically
+                if completed_sentences % checkpoint_interval == 0:
+                    checkpoint_file = save_checkpoint(corpus_results, checkpoint_dir)
+                    print(f"\nSaved checkpoint to {checkpoint_file}")
             
             pbar.close()
         else:
-            chunk_results = pool.map(process_batch, sentence_chunks)
-            # Aggregate results from all chunks if no progress bar
-            for chunk_result in chunk_results:
+            # Similar processing without progress bar
+            for chunk_result in pool.map(process_batch, sentence_chunks):
                 for result in chunk_result:
                     corpus_results["discocirc_naive"] += result["disc_naive"]
                     corpus_results["discocirc_cp"] += result["disc_cp"]
@@ -427,6 +511,16 @@ def estimate_corpus_complexity_from_sentences(
                         "bert_flash": result["bert_opt"],
                         "token_count": result["token_count"]
                     })
+                    corpus_results["num_sentences"] += 1
+                
+                # Save checkpoint periodically
+                if corpus_results["num_sentences"] % checkpoint_interval == 0:
+                    checkpoint_file = save_checkpoint(corpus_results, checkpoint_dir)
+                    print(f"\nSaved checkpoint to {checkpoint_file}")
+    
+    # Save final checkpoint with completion status
+    final_checkpoint = save_checkpoint(corpus_results, checkpoint_dir, is_final=True)
+    print(f"\nSaved final checkpoint to {final_checkpoint}")
     
     return corpus_results
 
@@ -585,6 +679,19 @@ def benchmark_processing_methods(sample_size=100):
 # 6) Main Execution  ––  UPDATED FOR NEW COMPLEXITY FORMULAS
 ###############################################################################
 if __name__ == "__main__":
+    # Add new command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Complexity estimation with checkpointing')
+    parser.add_argument('--checkpoint-interval', type=int, default=100,
+                      help='Save checkpoint every N sentences (default: 100)')
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
+                      help='Directory to save checkpoints (default: checkpoints)')
+    parser.add_argument('--no-resume', action='store_true',
+                      help='Do not resume from checkpoint')
+    parser.add_argument('--force-resume', action='store_true',
+                      help='Force resume even if previous run was completed')
+    args = parser.parse_args()
+
     # ------------------------------------------------------------------ config
     H_DIM   = 384          # unified embedding dimension for all models
     CP_RANK = 50           # CP decomposition rank for DisCoCirc
@@ -645,6 +752,12 @@ if __name__ == "__main__":
                         corpus_results["bert_vanilla"] += res["bert_naive"]
                         corpus_results["bert_flash"] += res["bert_opt"]
                         corpus_results["num_sentences"] += 1
+                    
+                    # Save checkpoint periodically
+                    if corpus_results["num_sentences"] % args.checkpoint_interval == 0:
+                        checkpoint_file = save_checkpoint(corpus_results, args.checkpoint_dir)
+                        print(f"\nSaved checkpoint to {checkpoint_file}")
+                    
                     current_sent.clear()
 
             # flush remainder
@@ -655,6 +768,10 @@ if __name__ == "__main__":
                     corpus_results["bert_vanilla"] += res["bert_naive"]
                     corpus_results["bert_flash"] += res["bert_opt"]
                     corpus_results["num_sentences"] += 1
+            
+            # Save final checkpoint
+            final_checkpoint = save_checkpoint(corpus_results, args.checkpoint_dir, is_final=True)
+            print(f"\nSaved final checkpoint to {final_checkpoint}")
     # ================================================================== FILE
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
@@ -667,6 +784,9 @@ if __name__ == "__main__":
             d=H_DIM,
             cp_rank=CP_RANK,
             use_progress_bar=True,
+            checkpoint_interval=args.checkpoint_interval,
+            checkpoint_dir=args.checkpoint_dir,
+            resume=not args.no_resume
         )
 
     # ---------------------------------------------------------------- summary
