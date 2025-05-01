@@ -571,12 +571,11 @@ def benchmark_processing_methods(sample_size=100):
             text = "The big dog quickly chased a ball in the yard."
         sample_texts = [text]
     
-    # Test different batch sizes
-    print("\nBenchmarking different batch sizes...")
-    batch_sizes = [100, 500, 1000, 2000, 5000]
-    batch_results = {}
+    # Binary search for optimal batch size
+    print("\nBenchmarking batch sizes (binary search)...")
     
-    for batch_size in batch_sizes:
+    def test_batch_size(batch_size):
+        """Test a specific batch size and return processing rate."""
         print(f"\nTesting batch size: {batch_size}")
         start_time = time.time()
         
@@ -642,18 +641,45 @@ def benchmark_processing_methods(sample_size=100):
         elapsed_time = time.time() - start_time
         sentences_per_second = total_sentences / elapsed_time
         
-        batch_results[batch_size] = {
-            "time": elapsed_time,
-            "sentences": total_sentences,
-            "rate": sentences_per_second
-        }
-        
         print(f"  Processed {total_sentences} sentences in {elapsed_time:.2f} seconds")
         print(f"  Rate: {sentences_per_second:.1f} sentences/second")
+        
+        return sentences_per_second
     
-    # Find optimal batch size
-    optimal_batch = max(batch_results.items(), key=lambda x: x[1]["rate"])
-    print(f"\nOptimal batch size: {optimal_batch[0]} (rate: {optimal_batch[1]['rate']:.1f} sentences/second)")
+    # Binary search parameters
+    min_batch = 100
+    max_batch = 50000  # Start with a high upper bound
+    best_rate = 0
+    best_batch = min_batch
+    tolerance = 0.01  # 1% improvement threshold
+    
+    # Initial test at min_batch
+    current_rate = test_batch_size(min_batch)
+    best_rate = current_rate
+    
+    # Binary search loop
+    while max_batch - min_batch > 100:  # Continue until batch sizes are close
+        mid_batch = (min_batch + max_batch) // 2
+        mid_rate = test_batch_size(mid_batch)
+        
+        if mid_rate > best_rate * (1 + tolerance):
+            # Found better rate, search higher
+            best_rate = mid_rate
+            best_batch = mid_batch
+            min_batch = mid_batch
+        else:
+            # No significant improvement, search lower
+            max_batch = mid_batch
+    
+    # Final test at best batch size
+    final_rate = test_batch_size(best_batch)
+    if final_rate > best_rate:
+        best_rate = final_rate
+    else:
+        best_batch = (best_batch + min_batch) // 2
+        best_rate = test_batch_size(best_batch)
+    
+    print(f"\nOptimal batch size: {best_batch} (rate: {best_rate:.1f} sentences/second)")
     
     # Test both CPU and GPU if available
     devices = ["cpu"]
@@ -739,8 +765,8 @@ def benchmark_processing_methods(sample_size=100):
     
     optimal_settings = {
         "use_cpu": fastest_device == "cpu",
-        "parallel_chunk_size": optimal_batch[0],
-        "batch_size": optimal_batch[0]
+        "parallel_chunk_size": best_batch,
+        "batch_size": best_batch
     }
     
     print("\n=== Optimal Settings ===")
