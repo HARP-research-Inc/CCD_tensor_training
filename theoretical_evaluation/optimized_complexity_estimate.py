@@ -69,10 +69,17 @@ def initialize_gpu():
                     print(f"  Device {device_id}: {torch.cuda.get_device_name(device_id)}")
                 print(f"CUDA version: {torch.version.cuda}")
                 
-                # Use the first GPU as default
-                nvidia_device = cuda_devices[0]
-                torch.cuda.set_device(nvidia_device)
-                DEVICE = torch.device(f"cuda:{nvidia_device}")
+                # Use all available GPUs
+                if len(cuda_devices) > 1:
+                    print(f"\nEnabling multi-GPU processing with {len(cuda_devices)} devices")
+                    # Set up for multi-GPU processing
+                    DEVICE = torch.device("cuda")
+                    # Set environment variable for multi-GPU
+                    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, cuda_devices))
+                else:
+                    # Single GPU case
+                    DEVICE = torch.device(f"cuda:{cuda_devices[0]}")
+                    torch.cuda.set_device(cuda_devices[0])
                 
                 # Force CUDA initialization
                 torch.cuda.init()
@@ -83,12 +90,6 @@ def initialize_gpu():
                 print("CUDA test computation successful!")
                 print(f"Test tensor device: {test_tensor.device}")
                 print(f"Test result device: {test_result.device}")
-                
-                # Enable multi-GPU processing if available
-                if len(cuda_devices) > 1:
-                    print(f"\nEnabling multi-GPU processing with {len(cuda_devices)} devices")
-                    # Set up DataParallel for multi-GPU processing
-                    torch.cuda.set_device(0)  # Set default device to first GPU
             else:
                 print("No CUDA devices found!")
                 DEVICE = torch.device("cpu")
@@ -111,7 +112,6 @@ if not BERT_ONLY:
 ###############################################################################
 # === PATCH START : accurate FLOP models =====================================
 ###############################################################################
-import math
 
 # --- DisCoCirc helpers -------------------------------------------------------­
 def get_token_rank(token):
@@ -285,33 +285,97 @@ def process_sentence_batch(
         nlp = spacy.load("en_core_web_sm")
     
     results = []
-    for sentence in sentences:
+    
+    # Process in smaller sub-batches for better GPU utilization
+    sub_batch_size = 32
+    for i in range(0, len(sentences), sub_batch_size):
+        sub_batch = sentences[i:i + sub_batch_size]
+        
         # DisCoCirc processing remains on CPU
         if not BERT_ONLY:
-            disc_naive = estimate_discocirc_complexity(sentence, d=d)
-            disc_cp = estimate_cp_discocirc_complexity(sentence, d=d, R=int(cp_rank))
-        else:
-            disc_naive, disc_cp = 0.0, 0.0
+            docs = list(nlp.pipe(sub_batch))
+            for doc in docs:
+                disc_naive = estimate_discocirc_complexity(doc.text, d=d)
+                disc_cp = estimate_cp_discocirc_complexity(doc.text, d=d, R=int(cp_rank))
+                results.append({
+                    "disc_naive": disc_naive,
+                    "disc_cp": disc_cp,
+                    "bert_naive": 0.0,
+                    "bert_opt": 0.0,
+                    "token_count": len(doc)
+                })
         
         # BERT processing uses GPU if available (unless --cpu)
         if not DISCO_ONLY:
-            # Use DataParallel for multi-GPU processing
-            if torch.cuda.device_count() > 1 and not CPU_ONLY and not CPU_BERT:
-                bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
-                bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
-            else:
-                bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
-                bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
-        else:
-            bert_vanilla, bert_flash, seq_len = 0.0, 0.0, 0
+            # Batch process with BERT tokenizer
+            encodings = BERT_TOKENIZER(sub_batch, 
+                                    add_special_tokens=True,
+                                    max_length=512,
+                                    truncation=True,
+                                    padding=True,
+                                    return_tensors="pt")
             
-        results.append({
-            "disc_naive": disc_naive,
-            "disc_cp": disc_cp,
-            "bert_naive": bert_vanilla,
-            "bert_opt": bert_flash,
-            "token_count": seq_len
-        })
+            # Move to GPU if available
+            if torch.cuda.is_available() and not CPU_ONLY and not CPU_BERT:
+                # Distribute across available GPUs
+                if torch.cuda.device_count() > 1:
+                    # Split the batch across GPUs
+                    batch_size = encodings["input_ids"].size(0)
+                    gpu_batch_size = batch_size // torch.cuda.device_count()
+                    gpu_batches = []
+                    
+                    for gpu_id in range(torch.cuda.device_count()):
+                        start_idx = gpu_id * gpu_batch_size
+                        end_idx = start_idx + gpu_batch_size if gpu_id < torch.cuda.device_count() - 1 else batch_size
+                        
+                        # Move this portion to the specific GPU
+                        gpu_batch = {
+                            k: v[start_idx:end_idx].cuda(gpu_id) 
+                            for k, v in encodings.items()
+                        }
+                        gpu_batches.append(gpu_batch)
+                    
+                    # Process each GPU's batch
+                    for gpu_batch in gpu_batches:
+                        seq_lens = [len(ids) for ids in gpu_batch["input_ids"]]
+                        for seq_len in seq_lens:
+                            bert_vanilla, _ = estimate_bert_complexity(seq_len, vanilla=True, hidden=d)
+                            bert_flash, _ = estimate_bert_complexity(seq_len, vanilla=False, hidden=d)
+                            results.append({
+                                "disc_naive": 0.0,
+                                "disc_cp": 0.0,
+                                "bert_naive": bert_vanilla,
+                                "bert_opt": bert_flash,
+                                "token_count": seq_len
+                            })
+                else:
+                    # Single GPU case
+                    encodings = {k: v.cuda() for k, v in encodings.items()}
+                    seq_lens = [len(ids) for ids in encodings["input_ids"]]
+                    for seq_len in seq_lens:
+                        bert_vanilla, _ = estimate_bert_complexity(seq_len, vanilla=True, hidden=d)
+                        bert_flash, _ = estimate_bert_complexity(seq_len, vanilla=False, hidden=d)
+                        results.append({
+                            "disc_naive": 0.0,
+                            "disc_cp": 0.0,
+                            "bert_naive": bert_vanilla,
+                            "bert_opt": bert_flash,
+                            "token_count": seq_len
+                        })
+            else:
+                # CPU processing
+                seq_lens = [len(ids) for ids in encodings["input_ids"]]
+                for seq_len in seq_lens:
+                    bert_vanilla, _ = estimate_bert_complexity(seq_len, vanilla=True, hidden=d)
+                    bert_flash, _ = estimate_bert_complexity(seq_len, vanilla=False, hidden=d)
+                    results.append({
+                        "disc_naive": 0.0,
+                        "disc_cp": 0.0,
+                        "bert_naive": bert_vanilla,
+                        "bert_opt": bert_flash,
+                        "token_count": seq_len
+                    })
+    
     return results
 
 def save_checkpoint(corpus_results: dict, checkpoint_dir: str = "checkpoints", is_final: bool = False) -> str:
@@ -374,7 +438,8 @@ def estimate_corpus_complexity_from_sentences(
     use_progress_bar: bool=True,
     checkpoint_interval: int=100,  # Save every N sentences
     checkpoint_dir: str="checkpoints",
-    resume: bool=True
+    resume: bool=True,
+    batch_size: Optional[int]=None
 ) -> dict:
     """
     Process sentences in parallel using multiprocessing. 
@@ -428,25 +493,41 @@ def estimate_corpus_complexity_from_sentences(
     # Split sentences into chunks for parallel processing
     total_sentences = len(sentences)
     base_chunk = 100
-    chunk_multiplier = math.log2(n_workers) / math.log2(8)
-    chunk_size = int(base_chunk * chunk_multiplier)
-    chunk_size = max(50, min(2000, chunk_size))
+    
+    # If we have a specified batch size, use it
+    if batch_size is not None:
+        # Use provided batch size
+        pass
+    else:
+        # Get optimal batch size from benchmark if available
+        batch_size = base_chunk
+        
+        # Scale batch size based on worker count
+        chunk_multiplier = math.log2(n_workers) / math.log2(8)
+        batch_size = int(base_chunk * chunk_multiplier)
+        batch_size = max(50, min(2000, batch_size))
     
     max_chunks = n_workers * 4
     min_chunks = n_workers
     
-    total_chunks = max(1, total_sentences // chunk_size)
+    total_chunks = max(1, total_sentences // batch_size)
     if total_chunks < min_chunks:
-        chunk_size = max(50, total_sentences // min_chunks)
+        batch_size = max(50, total_sentences // min_chunks)
     elif total_chunks > max_chunks:
-        chunk_size = max(50, total_sentences // max_chunks)
+        batch_size = max(50, total_sentences // max_chunks)
         
-    print(f"Using chunk size of {chunk_size} sentences per worker")
+    print(f"Using batch size of {batch_size} sentences per worker")
     
-    sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
+    sentence_chunks = [sentences[i:i + batch_size] for i in range(0, len(sentences), batch_size)]
     
     # Create a partial function with the fixed arguments
-    process_batch = partial(process_sentence_batch, d=d, cp_rank=cp_rank, bert_optim_factor=bert_optim_factor)
+    process_batch = partial(process_sentence_batch, 
+                           d=d, 
+                           cp_rank=cp_rank,
+                           bert_optim_factor=bert_optim_factor)
+    
+    # Get start time for rate calculations
+    start_time = time.time()
     
     # Process chunks in parallel
     with multiprocessing.Pool(processes=n_workers) as pool:
@@ -499,6 +580,11 @@ def estimate_corpus_complexity_from_sentences(
                     status_parts.append(f"DisCoCirc: {disc_total_naive:.2e}/{disc_total_cp:.2e}")
                 if not DISCO_ONLY:
                     status_parts.append(f"BERT: {bert_total_vanilla:.2e}/{bert_total_flash:.2e}")
+                
+                # Calculate processing rate
+                elapsed_time = time.time() - start_time
+                rate = completed_sentences / elapsed_time
+                status_parts.append(f"Rate: {rate:.1f} sent/s")
                 
                 status = " | ".join(status_parts)
                 pbar.set_postfix_str(f"{completed_sentences}/{total_sentences} sents | {status}")
@@ -577,12 +663,12 @@ def benchmark_processing_methods(sample_size=100):
             text = "The big dog quickly chased a ball in the yard."
         sample_texts = [text]
     
-    # Binary search for optimal batch size
-    print("\nBenchmarking batch sizes (binary search)...")
+    # First find the optimal batch size for CPU
+    print("\nFinding optimal batch size for CPU...")
     
-    def test_batch_size(batch_size):
+    def test_batch_size(batch_size, device="cpu"):
         """Test a specific batch size and return processing rate."""
-        print(f"\nTesting batch size: {batch_size}")
+        print(f"\nTesting batch size: {batch_size} on {device.upper()}")
         start_time = time.time()
         
         # Process in batches
@@ -595,7 +681,7 @@ def benchmark_processing_methods(sample_size=100):
             
             if len(current_batch) >= batch_size:
                 # Process batch
-                if not BERT_ONLY:
+                if not BERT_ONLY and device == "cpu":
                     # Use spaCy's pipe for faster processing
                     docs = list(nlp.pipe(current_batch))
                     for doc in docs:
@@ -612,25 +698,26 @@ def benchmark_processing_methods(sample_size=100):
                                             truncation=True,
                                             padding=True,
                                             return_tensors="pt")
-                    # Move to GPU if available
-                    if torch.cuda.is_available() and not CPU_ONLY:
-                        encodings = {k: v.cuda() for k, v in encodings.items()}
+                    # Move to GPU or keep on CPU based on device
+                    if device != "cpu" and torch.cuda.is_available():
+                        device_id = int(device.split(':')[1]) if ':' in device else 0
+                        encodings = {k: v.cuda(device_id) for k, v in encodings.items()}
                     
                     # Calculate FLOPs for the batch
                     seq_lens = [len(ids) for ids in encodings["input_ids"]]
                     for seq_len in seq_lens:
-                        self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
-                        feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
-                        flops_per_layer = self_attention_flops + feed_forward_flops
-                        naive_flops = flops_per_layer * BERT_NUM_LAYERS
-                        optimized_flops = naive_flops / 5.0
+                        # Calculate FLOPs manually instead of calling the function
+                        per_layer_vanilla = _layer_vanilla(seq_len, BERT_HIDDEN_SIZE)
+                        per_layer_flash = _layer_flash(seq_len, BERT_HIDDEN_SIZE)
+                        bert_vanilla = per_layer_vanilla * BERT_NUM_LAYERS
+                        bert_flash = per_layer_flash * BERT_NUM_LAYERS
                 
                 total_sentences += len(current_batch)
                 current_batch.clear()
         
         # Process remaining sentences
         if current_batch:
-            if not BERT_ONLY:
+            if not BERT_ONLY and device == "cpu":
                 docs = list(nlp.pipe(current_batch))
                 for doc in docs:
                     for token in doc:
@@ -645,16 +732,17 @@ def benchmark_processing_methods(sample_size=100):
                                         truncation=True,
                                         padding=True,
                                         return_tensors="pt")
-                if torch.cuda.is_available() and not CPU_ONLY:
-                    encodings = {k: v.cuda() for k, v in encodings.items()}
+                if device != "cpu" and torch.cuda.is_available():
+                    device_id = int(device.split(':')[1]) if ':' in device else 0
+                    encodings = {k: v.cuda(device_id) for k, v in encodings.items()}
                 
                 seq_lens = [len(ids) for ids in encodings["input_ids"]]
                 for seq_len in seq_lens:
-                    self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
-                    feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
-                    flops_per_layer = self_attention_flops + feed_forward_flops
-                    naive_flops = flops_per_layer * BERT_NUM_LAYERS
-                    optimized_flops = naive_flops / 5.0
+                    # Calculate FLOPs manually instead of calling the function
+                    per_layer_vanilla = _layer_vanilla(seq_len, BERT_HIDDEN_SIZE)
+                    per_layer_flash = _layer_flash(seq_len, BERT_HIDDEN_SIZE)
+                    bert_vanilla = per_layer_vanilla * BERT_NUM_LAYERS
+                    bert_flash = per_layer_flash * BERT_NUM_LAYERS
             
             total_sentences += len(current_batch)
         
@@ -666,124 +754,65 @@ def benchmark_processing_methods(sample_size=100):
         
         return sentences_per_second
     
-    # Binary search parameters
-    min_batch = 100
-    max_batch = 50000  # Start with a high upper bound
-    best_rate = 0
-    best_batch = min_batch
-    tolerance = 0.01  # 1% improvement threshold
-    
-    # Initial test at min_batch
-    current_rate = test_batch_size(min_batch)
-    best_rate = current_rate
-    
-    # Binary search loop
-    while max_batch - min_batch > 100:  # Continue until batch sizes are close
-        mid_batch = (min_batch + max_batch) // 2
-        mid_rate = test_batch_size(mid_batch)
+    # Function to find optimal batch size for a device using binary search
+    def find_optimal_batch_size(device):
+        print(f"\nFinding optimal batch size for {device.upper()}...")
         
-        if mid_rate > best_rate * (1 + tolerance):
-            # Found better rate, search higher
-            best_rate = mid_rate
-            best_batch = mid_batch
-            min_batch = mid_batch
+        # Binary search parameters
+        min_batch = 100
+        max_batch = 50000  # Start with a high upper bound
+        best_rate = 0
+        best_batch = min_batch
+        tolerance = 0.01  # 1% improvement threshold
+        
+        # Initial test at min_batch
+        current_rate = test_batch_size(min_batch, device)
+        best_rate = current_rate
+        
+        # Binary search loop
+        while max_batch - min_batch > 100:  # Continue until batch sizes are close
+            mid_batch = (min_batch + max_batch) // 2
+            mid_rate = test_batch_size(mid_batch, device)
+            
+            if mid_rate > best_rate * (1 + tolerance):
+                # Found better rate, search higher
+                best_rate = mid_rate
+                best_batch = mid_batch
+                min_batch = mid_batch
+            else:
+                # No significant improvement, search lower
+                max_batch = mid_batch
+        
+        # Final test at best batch size
+        final_rate = test_batch_size(best_batch, device)
+        if final_rate > best_rate:
+            best_rate = final_rate
         else:
-            # No significant improvement, search lower
-            max_batch = mid_batch
+            best_batch = (best_batch + min_batch) // 2
+            best_rate = test_batch_size(best_batch, device)
+        
+        print(f"\nOptimal batch size for {device.upper()}: {best_batch} (rate: {best_rate:.1f} sentences/second)")
+        return {"batch_size": best_batch, "rate": best_rate}
     
-    # Final test at best batch size
-    final_rate = test_batch_size(best_batch)
-    if final_rate > best_rate:
-        best_rate = final_rate
-    else:
-        best_batch = (best_batch + min_batch) // 2
-        best_rate = test_batch_size(best_batch)
+    # Find optimal batch sizes for each device
+    optimal_settings = {}
     
-    print(f"\nOptimal batch size: {best_batch} (rate: {best_rate:.1f} sentences/second)")
+    # Always benchmark CPU
+    optimal_settings["cpu"] = find_optimal_batch_size("cpu")
     
-    # Test both CPU and GPU if available
-    devices = ["cpu"]
+    # Benchmark each GPU if available
     if torch.cuda.is_available() and not CPU_ONLY and not DISCO_ONLY:
-        devices.append("cuda")
-    
-    print("\nBenchmarking BERT processing on different devices...")
-    bert_results = {}
-    for device in devices:
-        print(f"\nTesting on {device.upper()}")
-        bert_times = []
-        bert_pbar = tqdm(total=len(sample_texts), desc=f"BERT ({device.upper()})", position=1, leave=False)
-        
-        # Process in batches for better GPU utilization
-        batch_size = 32
-        current_batch = []
-        
-        for text in sample_texts:
-            current_batch.append(text)
-            
-            if len(current_batch) >= batch_size:
-                start_time = time.time()
-                # Batch process
-                encodings = BERT_TOKENIZER(current_batch, 
-                                        add_special_tokens=True,
-                                        max_length=512,
-                                        truncation=True,
-                                        padding=True,
-                                        return_tensors="pt")
-                if device == "cuda":
-                    encodings = {k: v.cuda() for k, v in encodings.items()}
-                
-                # Calculate FLOPs for the batch
-                seq_lens = [len(ids) for ids in encodings["input_ids"]]
-                for seq_len in seq_lens:
-                    self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
-                    feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
-                    flops_per_layer = self_attention_flops + feed_forward_flops
-                    naive_flops = flops_per_layer * BERT_NUM_LAYERS
-                    optimized_flops = naive_flops / 5.0
-                
-                bert_times.append(time.time() - start_time)
-                bert_pbar.update(len(current_batch))
-                current_batch.clear()
-        
-        # Process remaining texts
-        if current_batch:
-            start_time = time.time()
-            encodings = BERT_TOKENIZER(current_batch, 
-                                    add_special_tokens=True,
-                                    max_length=512,
-                                    truncation=True,
-                                    padding=True,
-                                    return_tensors="pt")
-            if device == "cuda":
-                encodings = {k: v.cuda() for k, v in encodings.items()}
-            
-            seq_lens = [len(ids) for ids in encodings["input_ids"]]
-            for seq_len in seq_lens:
-                self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
-                feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
-                flops_per_layer = self_attention_flops + feed_forward_flops
-                naive_flops = flops_per_layer * BERT_NUM_LAYERS
-                optimized_flops = naive_flops / 5.0
-            
-            bert_times.append(time.time() - start_time)
-            bert_pbar.update(len(current_batch))
-        
-        bert_pbar.close()
-        bert_results[device] = {
-            "times": bert_times,
-            "avg": sum(bert_times) / len(bert_times),
-            "min": min(bert_times),
-            "max": max(bert_times),
-            "total": sum(bert_times)
-        }
+        for i in range(torch.cuda.device_count()):
+            device = f"cuda:{i}"
+            optimal_settings[device] = find_optimal_batch_size(device)
     
     # Benchmark DisCoCirc processing (always on CPU)
     print("\nBenchmarking DisCoCirc processing...")
     disco_times = []
     disco_pbar = tqdm(total=len(sample_texts), desc="DisCoCirc", position=2, leave=False)
     
-    # Process in batches for better performance
-    batch_size = 32
+    # Use the CPU optimal batch size for DisCoCirc
+    batch_size = optimal_settings["cpu"]["batch_size"]
     current_batch = []
     
     for text in sample_texts:
@@ -823,18 +852,16 @@ def benchmark_processing_methods(sample_size=100):
             disco_pbar.update(len(current_batch))
     
     disco_pbar.close()
-    
+
     # Print benchmark results
     print("\n=== Benchmark Results ===")
     if not DISCO_ONLY:
         print("\nBERT Processing:")
-        for device in devices:
-            results = bert_results[device]
+        for device in optimal_settings.keys():
+            settings = optimal_settings[device]
             print(f"\n{device.upper()}:")
-            print(f"  Average time: {results['avg']:.4f} seconds")
-            print(f"  Min time:     {results['min']:.4f} seconds")
-            print(f"  Max time:     {results['max']:.4f} seconds")
-            print(f"  Total time:   {results['total']:.4f} seconds")
+            print(f"  Optimal batch size: {settings['batch_size']}")
+            print(f"  Processing rate: {settings['rate']:.1f} sentences/second")
     
     if not BERT_ONLY:
         print("\nDisCoCirc Processing:")
@@ -845,23 +872,24 @@ def benchmark_processing_methods(sample_size=100):
     
     # Determine optimal settings based on fastest device
     if not DISCO_ONLY:
-        fastest_device = min(devices, key=lambda d: bert_results[d]["avg"])
+        fastest_device = max(optimal_settings.keys(), key=lambda d: optimal_settings[d]["rate"])
     else:
         fastest_device = "cpu"  # Always use CPU in DisCoCirc-only mode
     
-    optimal_settings = {
-        "use_cpu": fastest_device == "cpu",
-        "parallel_chunk_size": best_batch,
-        "batch_size": best_batch
+    optimal_result = {
+        "use_cpu": "cpu" in fastest_device,
+        "fastest_device": fastest_device,
+        "device_settings": optimal_settings,
+        "batch_size": optimal_settings[fastest_device]["batch_size"]
     }
     
     print("\n=== Optimal Settings ===")
     print(f"Fastest device: {fastest_device.upper()}")
-    print(f"Using CPU: {optimal_settings['use_cpu']}")
-    print(f"Optimal batch size: {optimal_settings['batch_size']}")
+    print(f"Using CPU: {optimal_result['use_cpu']}")
+    print(f"Optimal batch size: {optimal_result['batch_size']}")
     print(f"Multiprocessing mode: {'fork' if USE_FORK else 'spawn'} (use --fork flag for possibly faster processing)")
     
-    return optimal_settings
+    return optimal_result
 
 def scan_article(article):
     """Process a single article and return its statistics."""
@@ -983,35 +1011,37 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Complexity estimation with checkpointing')
     parser.add_argument('--checkpoint-interval', type=int, default=100,
-                      help='Save checkpoint every N sentences (default: 100)')
+                       help='Save checkpoint every N sentences (default: 100)')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
-                      help='Directory to save checkpoints (default: checkpoints)')
+                       help='Directory to save checkpoints (default: checkpoints)')
     parser.add_argument('--no-resume', action='store_true',
-                      help='Do not resume from checkpoint')
+                       help='Do not resume from checkpoint')
     parser.add_argument('--force-resume', action='store_true',
-                      help='Force resume even if previous run was completed')
+                       help='Force resume even if previous run was completed')
     parser.add_argument('--wikitext', action='store_true',
-                      help='Use WikiText-103 dataset')
+                       help='Use WikiText-103 dataset')
     parser.add_argument('--bert', action='store_true',
-                      help='Run in BERT-only mode')
+                       help='Run in BERT-only mode')
     parser.add_argument('--disco', action='store_true',
-                      help='Run in DisCoCirc-only mode')
+                       help='Run in DisCoCirc-only mode')
     parser.add_argument('--cpu', action='store_true',
-                      help='Force CPU usage for all operations')
+                       help='Force CPU usage for all operations')
     parser.add_argument('--cpu-bert', action='store_true',
-                      help='Force CPU usage for BERT operations only')
+                       help='Force CPU usage for BERT operations only')
     parser.add_argument('--benchmark', action='store_true',
-                      help='Run benchmarks to determine optimal settings')
+                       help='Run benchmarks to determine optimal settings')
     parser.add_argument('--fork', action='store_true',
-                      help='Use fork instead of spawn for multiprocessing')
+                       help='Use fork instead of spawn for multiprocessing')
     parser.add_argument('--workers', type=int,
-                      help='Number of worker processes to use')
+                       help='Number of worker processes to use')
     parser.add_argument('--batch-size', type=int,
-                      help='Batch size for processing (default: determined by benchmark)')
+                       help='Batch size for processing (default: determined by benchmark)')
     parser.add_argument('--gpu-id', type=int, default=None,
-                      help='Specific GPU ID to use (default: use all available GPUs)')
+                       help='Specific GPU ID to use (default: use all available GPUs)')
+    parser.add_argument('--scan', action='store_true',
+                       help='Scan WikiText-103 size before processing')
     parser.add_argument('--scan-only', action='store_true',
-                      help='Only scan WikiText-103 size without processing')
+                       help='Only scan WikiText-103 size without processing')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -1042,27 +1072,50 @@ if __name__ == "__main__":
     print(f"\nSystem has {cpu_count} CPU cores; using {effective_workers} workers")
 
     # ------------------------------------------------------------------ BENCH
+    batch_size = None
     if BENCHMARK:
         optimal = benchmark_processing_methods()
         CPU_ONLY = optimal["use_cpu"]
-        print(f"\nBenchmark-selected device: {'CPU' if CPU_ONLY else 'GPU'}")
+        print(f"\nBenchmark-selected device: {'CPU' if CPU_ONLY else optimal['fastest_device']}")
+        
+        # Use bench-determined batch size unless user specified one
         if args.batch_size is None:
             batch_size = optimal["batch_size"]
+            print(f"Using benchmark-determined batch size: {batch_size}")
         else:
             batch_size = args.batch_size
+            print(f"Using user-specified batch size: {batch_size}")
+        
+        # If specific GPU was determined to be fastest, use it
+        if not optimal["use_cpu"] and ":" in optimal["fastest_device"]:
+            gpu_id = int(optimal["fastest_device"].split(':')[1])
+            print(f"Setting fastest GPU ({gpu_id}) as primary device")
+            torch.cuda.set_device(gpu_id)
     else:
         batch_size = args.batch_size if args.batch_size is not None else 1000
+        print(f"Using default/specified batch size: {batch_size}")
 
     # ------------------------------------------------------------------ WIKITEXT
     if USE_WIKITEXT:
-        # First scan the dataset size
-        dataset_stats = scan_wikitext_size()
+        # Optionally scan the dataset size
+        dataset_stats = None
+        if args.scan or args.scan_only:
+            print("\nScanning WikiText-103 dataset size...")
+            dataset_stats = scan_wikitext_size()
+            
+            if args.scan_only:
+                print("\nScan complete. Exiting as requested.")
+                sys.exit(0)
+        else:
+            # Use a rough estimate if not scanning
+            print("\nUsing estimated dataset size (use --scan for accurate size)")
+            dataset_stats = {
+                "total_articles": 1801350,  # Known size from dataset info
+                "total_sentences": 4700000,  # Rough estimate
+                "total_tokens": 103000000   # Rough estimate (103M tokens)
+            }
         
-        if args.scan_only:
-            print("\nScan complete. Exiting as requested.")
-            sys.exit(0)
-        
-        # Use the actual dataset size for better progress reporting
+        # Use the dataset stats for better progress reporting
         total_articles = dataset_stats["total_articles"]
         total_sentences = dataset_stats["total_sentences"]
         
@@ -1079,11 +1132,9 @@ if __name__ == "__main__":
             "dataset_stats": dataset_stats
         }
 
-        # Use benchmark-determined or user-specified batch size
-        current_sent = []
-        n_workers = get_optimal_workers()
-        print(f"Using {n_workers} worker processes with batch size {batch_size}")
-
+        # Initialize the sentences array
+        current_sentences = []
+        
         # Start timing
         start_time = time.time()
 
@@ -1097,16 +1148,16 @@ if __name__ == "__main__":
         if not USE_FORK:
             multiprocessing.set_start_method("spawn", force=True)
 
-        with multiprocessing.Pool(n_workers) as pool, \
+        with multiprocessing.Pool(effective_workers) as pool, \
              tqdm(total=total_articles, desc="Articles") as art_pbar:
 
             for example in dataset:
                 art_pbar.update(1)
-                current_sent.extend(chunk_text_into_sentences(example["text"]))
+                current_sentences.extend(chunk_text_into_sentences(example["text"]))
 
-                if len(current_sent) >= batch_size:
+                if len(current_sentences) >= batch_size:
                     # Process in larger batches
-                    results = pool.apply(proc_fn, (current_sent,))
+                    results = pool.apply(proc_fn, (current_sentences,))
                     for res in results:
                         corpus_results["discocirc_naive"] += res["disc_naive"]
                         corpus_results["discocirc_cp"] += res["disc_cp"]
@@ -1124,11 +1175,11 @@ if __name__ == "__main__":
                         print(f"Processing rate: {rate:.1f} sentences/second")
                         print(f"Progress: {corpus_results['num_sentences']:,}/{total_sentences:,} sentences")
                     
-                    current_sent.clear()
+                    current_sentences.clear()
 
             # flush remainder
-            if current_sent:
-                results = pool.apply(proc_fn, (current_sent,))
+            if current_sentences:
+                results = pool.apply(proc_fn, (current_sentences,))
                 for res in results:
                     corpus_results["discocirc_naive"] += res["disc_naive"]
                     corpus_results["discocirc_cp"] += res["disc_cp"]
@@ -1143,7 +1194,7 @@ if __name__ == "__main__":
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
         text = load_text_file(file_path) if os.path.exists(file_path) \
-               else "The big dog quickly chased a ball in the yard."
+                    else "The big dog quickly chased a ball in the yard."
         sentences = chunk_text_into_sentences(text)
 
         corpus_results = estimate_corpus_complexity_from_sentences(
@@ -1153,7 +1204,8 @@ if __name__ == "__main__":
             use_progress_bar=True,
             checkpoint_interval=args.checkpoint_interval,
             checkpoint_dir=args.checkpoint_dir,
-            resume=not args.no_resume
+            resume=not args.no_resume,
+            batch_size=batch_size
         )
 
     # ---------------------------------------------------------------- summary
@@ -1170,8 +1222,8 @@ if __name__ == "__main__":
                             - corpus_results["discocirc_naive"]
                            ) / corpus_results["bert_vanilla"]
         cp_gain = 100 * (corpus_results["bert_flash"]
-                          - corpus_results["discocirc_cp"]
-                         ) / corpus_results["bert_flash"]
+                            - corpus_results["discocirc_cp"]
+                           ) / corpus_results["bert_flash"]
         print("\nDisCoCirc vs BERT:")
         print(f"  Full-rank saves : {naive_gain:6.2f}% FLOPs over vanilla BERT")
         print(f"  CP-rank saves   : {cp_gain:6.2f}% FLOPs over Flash-BERT")
