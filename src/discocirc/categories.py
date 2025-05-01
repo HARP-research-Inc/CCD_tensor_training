@@ -1,12 +1,27 @@
 import torch
+from sentence_transformers import SentenceTransformer
 
-def dummy_compose():
+
+def atomic_compose(word, model: SentenceTransformer):
+    """
+    For nouns. Returns atomic type 
+    I -> 
+    """
     pass
 
-def compose(obj1, obj2, function):
+def two_compose(obj1, obj2, model):
     """
     composes two objects with a function
     """
+    pass
+
+def three_compose(obj1, obj2, obj3, model):
+    """
+    composes three objects with a function
+    """
+    pass
+
+def dummy_compose():
     pass
 
 class Category(object):
@@ -14,6 +29,10 @@ class Category(object):
     Abstract category class.
 
     """
+
+    # static variables
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
     def __init__(self, label):
         self.label = label
     
@@ -29,13 +48,20 @@ class Category(object):
         the abstract category is a ghost that is there but also not.
         """
         return self
+    def __str__(self):
+        """
+        string representation of the category.
+        """
+        return self.label
+    
     def __eq__(self, other):
         """
 
         """
-        if isinstance(other, self.__class__):
-            return self.label == other.label
-        return False
+        # if isinstance(other, self.__class__):
+        #     return self.label == other.label
+        # return False
+        return id(self) == id(other)
     
     def __hash__(self):
         return hash(self.label)
@@ -47,12 +73,54 @@ class Box(Category):
         self.composing_function = dummy_compose
         
         self.grammar = None
-        self.constituents: tuple[str] = tuple()
+
+        #these store labels, not the wires themselves.
+        self.in_wires: tuple[ Wire ] = None
+        self.out_wires: tuple[ Wire ] = None
     
     def get_label(self):
         return self.label
     
+    def is_state_or_effect(self):
+        """
+        returns: pair of booleans. Returns true at index 0 if the box
+        is a state, and true at index 1 if the box is an effect.
+        """
+        return self.in_wires is None, self.out_wires is None
+    
+    def set_in_wires(self, wires):
+        """
+        sets the in wires of the box.
+        """
+        self.in_wires = wires
+        return self
+    def set_out_wires(self, wires):
+        """
+        sets the out wires of the box.
+        """
+        self.out_wires = wires
+        return self
+    
+    def add_in_wire(self, wire):
+        """
+        adds a wire to the in wires of the box.
+        """
+        if self.in_wires is None:
+            self.in_wires = list()
+        self.in_wires.append(wire)
+        return self
+    
+    def add_out_wire(self, wire):
+        """
+        adds a wire to the out wires of the box.
+        """
+        if self.out_wires is None:
+            self.out_wires = list()
+        self.out_wires.append(wire)
+        return self
+
     def forward(self):
+        
         pass
 
 class Spider(Box):
@@ -82,6 +150,9 @@ class Wire(Category):
     
     def get_sink(self):
         return self.sink
+    
+    def __str__(self):
+        return self.label
 
 class Actor(Wire):
     def __init__():
@@ -100,25 +171,74 @@ class Circuit(Category):
     """
     def __init__(self, label, dimension=384):
         super().__init__(label)
-        self.adjacency_list = dict[Box, list[Wire]]
+        self.adjacency_list: dict[Box, list[Wire]] = {}
     def __str__(self):
         """
         string representation of the circuit.
         """
-        return_string = ""
+        return_string = self.label + "\n"
         for box, wires in self.adjacency_list.items():
-            return_string += f"{box.get_label()}: {wires}\n"
+            return_string += f"{box.get_label()}:"
+            for wire in wires:
+                return_string += f" {wire.get_label()}"
+            return_string += "\n"
+        return_string += "\n"
         return return_string
     
-    def add_node():
+    # def add_node(self, node: Box, wires: list[ Wire ]):
+    #     """
+    #     adds either spider or box.
+    #     """
+    #     if isinstance(node, Spider):
+    #         self.adjacency_list[node] = wires
+    #     elif isinstance(node, Box):
+    #         self.adjacency_list[node] = wires
+    #     else:
+    #         raise TypeError("Node must be a Spider or Box.")
+
+    def add_node(self, node:Box):
         """
         adds either spider or box.
         """
-        pass
-    def add_wire():
-        pass 
+        if node is None:
+            return False
+        
+        if(node in self.adjacency_list):
+            return True
+        
+        self.adjacency_list[node] = list()
+        return True
+        
+        
+    def add_wire(self, parentBox: Box, childBox: Box):
+        
+        self.add_node(parentBox) 
+        self.add_node(childBox)
+        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()}", childBox)
+
+
+
+        self.adjacency_list[parentBox].append(wire)
+
 
 
 if __name__ == "__main__":
-    test = Box("test")
-    print(test.__class__ == Category)
+    "Tall Alice hates short Bob"
+
+
+    test = Circuit("circuit1")\
+    
+    boxref1 = Box("box1")
+    boxref2 = Box("box2")
+
+    boxref3 = Box("box3")
+
+    test.add_node(boxref1)
+    test.add_node(boxref2)
+
+    test.add_wire(boxref1, boxref2)
+    test.add_wire(boxref1, boxref3)
+
+    print(test)
+    
+    
