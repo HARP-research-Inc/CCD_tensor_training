@@ -591,22 +591,33 @@ def benchmark_processing_methods(sample_size=100):
             if len(current_batch) >= batch_size:
                 # Process batch
                 if not BERT_ONLY:
-                    for sent in current_batch:
-                        doc = nlp(sent)
+                    # Use spaCy's pipe for faster processing
+                    docs = list(nlp.pipe(current_batch))
+                    for doc in docs:
                         for token in doc:
                             rank = get_token_rank(token)
                             naive = float(300**rank)
                             opt = naive / 20.0
                 
                 if not DISCO_ONLY:
-                    for sent in current_batch:
-                        # Handle BERT sequence length limit
-                        tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
-                                                     max_length=512, truncation=True)
-                        seq_len = len(tokens)
-                        num_layers = 12
-                        hidden_size = 768
-                        intermediate_size = 3072
+                    # Batch process with BERT tokenizer
+                    encodings = BERT_TOKENIZER(current_batch, 
+                                            add_special_tokens=True,
+                                            max_length=512,
+                                            truncation=True,
+                                            padding=True,
+                                            return_tensors="pt")
+                    # Move to GPU if available
+                    if torch.cuda.is_available() and not CPU_ONLY:
+                        encodings = {k: v.cuda() for k, v in encodings.items()}
+                    
+                    # Calculate FLOPs for the batch
+                    seq_lens = [len(ids) for ids in encodings["input_ids"]]
+                    num_layers = 12
+                    hidden_size = 768
+                    intermediate_size = 3072
+                    
+                    for seq_len in seq_lens:
                         self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
                         feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
                         flops_per_layer = self_attention_flops + feed_forward_flops
@@ -619,22 +630,25 @@ def benchmark_processing_methods(sample_size=100):
         # Process remaining sentences
         if current_batch:
             if not BERT_ONLY:
-                for sent in current_batch:
-                    doc = nlp(sent)
+                docs = list(nlp.pipe(current_batch))
+                for doc in docs:
                     for token in doc:
                         rank = get_token_rank(token)
                         naive = float(300**rank)
                         opt = naive / 20.0
             
             if not DISCO_ONLY:
-                for sent in current_batch:
-                    # Handle BERT sequence length limit
-                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True,
-                                                 max_length=512, truncation=True)
-                    seq_len = len(tokens)
-                    num_layers = 12
-                    hidden_size = 768
-                    intermediate_size = 3072
+                encodings = BERT_TOKENIZER(current_batch, 
+                                        add_special_tokens=True,
+                                        max_length=512,
+                                        truncation=True,
+                                        padding=True,
+                                        return_tensors="pt")
+                if torch.cuda.is_available() and not CPU_ONLY:
+                    encodings = {k: v.cuda() for k, v in encodings.items()}
+                
+                seq_lens = [len(ids) for ids in encodings["input_ids"]]
+                for seq_len in seq_lens:
                     self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
                     feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
                     flops_per_layer = self_attention_flops + feed_forward_flops
@@ -697,24 +711,62 @@ def benchmark_processing_methods(sample_size=100):
         print(f"\nTesting on {device.upper()}")
         bert_times = []
         bert_pbar = tqdm(total=len(sample_texts), desc=f"BERT ({device.upper()})", position=1, leave=False)
+        
+        # Process in batches for better GPU utilization
+        batch_size = 32
+        current_batch = []
+        
         for text in sample_texts:
+            current_batch.append(text)
+            
+            if len(current_batch) >= batch_size:
+                start_time = time.time()
+                # Batch process
+                encodings = BERT_TOKENIZER(current_batch, 
+                                        add_special_tokens=True,
+                                        max_length=512,
+                                        truncation=True,
+                                        padding=True,
+                                        return_tensors="pt")
+                if device == "cuda":
+                    encodings = {k: v.cuda() for k, v in encodings.items()}
+                
+                # Calculate FLOPs for the batch
+                seq_lens = [len(ids) for ids in encodings["input_ids"]]
+                for seq_len in seq_lens:
+                    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+                    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                    flops_per_layer = self_attention_flops + feed_forward_flops
+                    naive_flops = flops_per_layer * num_layers
+                    optimized_flops = naive_flops / 5.0
+                
+                bert_times.append(time.time() - start_time)
+                bert_pbar.update(len(current_batch))
+                current_batch.clear()
+        
+        # Process remaining texts
+        if current_batch:
             start_time = time.time()
-            # Process the entire text, including tokenization and FLOP calculation
-            tokens = BERT_TOKENIZER.encode(text, add_special_tokens=True)
+            encodings = BERT_TOKENIZER(current_batch, 
+                                    add_special_tokens=True,
+                                    max_length=512,
+                                    truncation=True,
+                                    padding=True,
+                                    return_tensors="pt")
             if device == "cuda":
-                tokens = torch.tensor(tokens, device=torch.device("cuda"))
-            seq_len = len(tokens)
-            # Calculate FLOPs (symbolic formula)
-            num_layers = 12
-            hidden_size = 768
-            intermediate_size = 3072
-            self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-            feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
-            flops_per_layer = self_attention_flops + feed_forward_flops
-            naive_flops = flops_per_layer * num_layers
-            optimized_flops = naive_flops / 5.0
+                encodings = {k: v.cuda() for k, v in encodings.items()}
+            
+            seq_lens = [len(ids) for ids in encodings["input_ids"]]
+            for seq_len in seq_lens:
+                self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+                feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                flops_per_layer = self_attention_flops + feed_forward_flops
+                naive_flops = flops_per_layer * num_layers
+                optimized_flops = naive_flops / 5.0
+            
             bert_times.append(time.time() - start_time)
-            bert_pbar.update(1)
+            bert_pbar.update(len(current_batch))
+        
         bert_pbar.close()
         bert_results[device] = {
             "times": bert_times,
@@ -728,19 +780,47 @@ def benchmark_processing_methods(sample_size=100):
     print("\nBenchmarking DisCoCirc processing...")
     disco_times = []
     disco_pbar = tqdm(total=len(sample_texts), desc="DisCoCirc", position=2, leave=False)
+    
+    # Process in batches for better performance
+    batch_size = 32
+    current_batch = []
+    
     for text in sample_texts:
+        current_batch.append(text)
+        
+        if len(current_batch) >= batch_size:
+            start_time = time.time()
+            # Process batch
+            docs = list(nlp.pipe(current_batch))
+            for doc in docs:
+                total_naive = 0.0
+                total_opt = 0.0
+                for token in doc:
+                    rank = get_token_rank(token)
+                    naive = float(300**rank)
+                    opt = naive / 20.0
+                    total_naive += naive
+                    total_opt += opt
+            disco_times.append(time.time() - start_time)
+            disco_pbar.update(len(current_batch))
+            current_batch.clear()
+    
+    # Process remaining texts
+    if current_batch:
         start_time = time.time()
-        doc = nlp(text)
-        total_naive = 0.0
-        total_opt = 0.0
-        for token in doc:
-            rank = get_token_rank(token)
-            naive = float(300**rank)
-            opt = naive / 20.0
-            total_naive += naive
-            total_opt += opt
-        disco_times.append(time.time() - start_time)
-        disco_pbar.update(1)
+        docs = list(nlp.pipe(current_batch))
+        for doc in docs:
+            total_naive = 0.0
+            total_opt = 0.0
+            for token in doc:
+                rank = get_token_rank(token)
+                naive = float(300**rank)
+                opt = naive / 20.0
+                total_naive += naive
+                total_opt += opt
+            disco_times.append(time.time() - start_time)
+            disco_pbar.update(len(current_batch))
+    
     disco_pbar.close()
     
     # Print benchmark results
@@ -828,36 +908,58 @@ def scan_wikitext_size():
     processed_articles = 0
     start_time = time.time()
     
-    # Process articles sequentially to avoid multiprocessing issues
+    # Use a larger batch size for GPU processing
+    batch_size = 1000
+    current_batch = []
+    
+    # Process articles in batches
     with tqdm(total=total_articles, desc="Scanning articles", unit="articles") as pbar:
         for article in dataset:
-            # Process single article
-            sentences = chunk_text_into_sentences(article["text"])
-            total_sentences += len(sentences)
-            
-            # Count tokens in each sentence
-            for sent in sentences:
-                if not BERT_ONLY:
-                    doc = nlp(sent)
-                    total_tokens += len(doc)
-                if not DISCO_ONLY:
-                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
-                                                 max_length=512, truncation=True)
-                    total_tokens += len(tokens)
-            
+            current_batch.append(article)
             processed_articles += 1
-            pbar.update(1)
             
-            # Print intermediate stats
-            if processed_articles % 10000 == 0:
-                elapsed_time = time.time() - start_time
-                rate = processed_articles / elapsed_time
-                print(f"\nIntermediate stats:")
-                print(f"  Articles processed: {processed_articles:,}/{total_articles:,}")
-                print(f"  Total sentences: {total_sentences:,}")
-                print(f"  Total tokens: {total_tokens:,}")
-                print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
-                print(f"  Processing rate: {rate:.1f} articles/second")
+            if len(current_batch) >= batch_size or processed_articles == total_articles:
+                # Process batch
+                batch_sentences = []
+                for art in current_batch:
+                    sentences = chunk_text_into_sentences(art["text"])
+                    batch_sentences.extend(sentences)
+                
+                # Process sentences in parallel using GPU
+                if not BERT_ONLY:
+                    # Use spaCy's pipe for faster processing
+                    docs = list(nlp.pipe(batch_sentences))
+                    total_tokens += sum(len(doc) for doc in docs)
+                
+                if not DISCO_ONLY:
+                    # Batch process with BERT tokenizer
+                    encodings = BERT_TOKENIZER(batch_sentences, 
+                                            add_special_tokens=True,
+                                            max_length=512,
+                                            truncation=True,
+                                            padding=True,
+                                            return_tensors="pt")
+                    # Move to GPU if available
+                    if torch.cuda.is_available() and not CPU_ONLY:
+                        encodings = {k: v.cuda() for k, v in encodings.items()}
+                    total_tokens += sum(len(ids) for ids in encodings["input_ids"])
+                
+                total_sentences += len(batch_sentences)
+                pbar.update(len(current_batch))
+                
+                # Print intermediate stats
+                if processed_articles % 10000 == 0:
+                    elapsed_time = time.time() - start_time
+                    rate = processed_articles / elapsed_time
+                    print(f"\nIntermediate stats:")
+                    print(f"  Articles processed: {processed_articles:,}/{total_articles:,}")
+                    print(f"  Total sentences: {total_sentences:,}")
+                    print(f"  Total tokens: {total_tokens:,}")
+                    print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
+                    print(f"  Processing rate: {rate:.1f} articles/second")
+                
+                # Clear batch
+                current_batch.clear()
     
     print("\n=== WikiText-103 Dataset Statistics ===")
     print(f"Total articles: {total_articles:,}")
