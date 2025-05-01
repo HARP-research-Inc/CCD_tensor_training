@@ -782,6 +782,60 @@ def benchmark_processing_methods(sample_size=100):
     
     return optimal_settings
 
+def scan_wikitext_size():
+    """Scan WikiText-103 to get total size and article count."""
+    print("\nScanning WikiText-103 dataset size...")
+    
+    # First get the total number of articles from the dataset info
+    dataset = load_dataset("wikitext", "wikitext-103-v1")
+    total_articles = len(dataset["train"])
+    print(f"Total articles in WikiText-103: {total_articles:,}")
+    
+    # Now stream through to get detailed stats
+    dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
+    
+    total_sentences = 0
+    total_tokens = 0
+    processed_articles = 0
+    
+    with tqdm(total=total_articles, desc="Scanning articles", unit="articles") as pbar:
+        for article in dataset:
+            processed_articles += 1
+            sentences = chunk_text_into_sentences(article["text"])
+            total_sentences += len(sentences)
+            
+            # Count tokens in each sentence
+            for sent in sentences:
+                if not BERT_ONLY:
+                    doc = nlp(sent)
+                    total_tokens += len(doc)
+                if not DISCO_ONLY:
+                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
+                                                 max_length=512, truncation=True)
+                    total_tokens += len(tokens)
+            
+            pbar.update(1)
+            # Print intermediate stats every 1000 articles
+            if processed_articles % 1000 == 0:
+                print(f"\nIntermediate stats:")
+                print(f"  Articles processed: {processed_articles:,}/{total_articles:,}")
+                print(f"  Total sentences: {total_sentences:,}")
+                print(f"  Total tokens: {total_tokens:,}")
+                print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
+    
+    print("\n=== WikiText-103 Dataset Statistics ===")
+    print(f"Total articles: {total_articles:,}")
+    print(f"Total sentences: {total_sentences:,}")
+    print(f"Total tokens: {total_tokens:,}")
+    print(f"Average sentences per article: {total_sentences/total_articles:.1f}")
+    print(f"Average tokens per sentence: {total_tokens/total_sentences:.1f}")
+    
+    return {
+        "total_articles": total_articles,
+        "total_sentences": total_sentences,
+        "total_tokens": total_tokens
+    }
+
 ###############################################################################
 # 6) Main Execution  ––  UPDATED FOR NEW COMPLEXITY FORMULAS
 ###############################################################################
@@ -817,6 +871,8 @@ if __name__ == "__main__":
                       help='Batch size for processing (default: determined by benchmark)')
     parser.add_argument('--gpu-id', type=int, default=None,
                       help='Specific GPU ID to use (default: use all available GPUs)')
+    parser.add_argument('--scan-only', action='store_true',
+                      help='Only scan WikiText-103 size without processing')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -858,8 +914,19 @@ if __name__ == "__main__":
     else:
         batch_size = args.batch_size if args.batch_size is not None else 1000
 
-    # ================================================================= WIKITEXT
+    # ------------------------------------------------------------------ WIKITEXT
     if USE_WIKITEXT:
+        # First scan the dataset size
+        dataset_stats = scan_wikitext_size()
+        
+        if args.scan_only:
+            print("\nScan complete. Exiting as requested.")
+            sys.exit(0)
+        
+        # Use the actual dataset size for better progress reporting
+        total_articles = dataset_stats["total_articles"]
+        total_sentences = dataset_stats["total_sentences"]
+        
         print("\nLoading WikiText-103 (streaming)…")
         dataset = load_dataset("wikitext", "wikitext-103-v1",
                                split="train", streaming=True)
@@ -870,6 +937,7 @@ if __name__ == "__main__":
             "discocirc_cp": 0.0,
             "bert_vanilla": 0.0,
             "bert_flash": 0.0,
+            "dataset_stats": dataset_stats
         }
 
         # Use benchmark-determined or user-specified batch size
@@ -891,7 +959,7 @@ if __name__ == "__main__":
             multiprocessing.set_start_method("spawn", force=True)
 
         with multiprocessing.Pool(n_workers) as pool, \
-             tqdm(total=28_475, desc="Articles") as art_pbar:
+             tqdm(total=total_articles, desc="Articles") as art_pbar:
 
             for example in dataset:
                 art_pbar.update(1)
@@ -915,6 +983,7 @@ if __name__ == "__main__":
                         elapsed_time = time.time() - start_time
                         rate = corpus_results["num_sentences"] / elapsed_time
                         print(f"Processing rate: {rate:.1f} sentences/second")
+                        print(f"Progress: {corpus_results['num_sentences']:,}/{total_sentences:,} sentences")
                     
                     current_sent.clear()
 
