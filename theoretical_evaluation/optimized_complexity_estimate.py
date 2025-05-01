@@ -254,7 +254,6 @@ def process_sentence_batch(
     for sentence in sentences:
         # DisCoCirc processing remains on CPU
         if not BERT_ONLY:
-            print(f"\rProcessing DisCoCirc: {sentence[:50]}{'...' if len(sentence) > 50 else ''}", end="", flush=True)
             disc_naive, disc_opt, _ = estimate_discocirc_complexity(
                 sentence, d=d, disco_factor=disco_factor, verbose=False
             )
@@ -263,7 +262,6 @@ def process_sentence_batch(
         
         # BERT processing uses GPU if available (unless --cpu)
         if not DISCO_ONLY:
-            print(f"\rProcessing BERT: {sentence[:50]}{'...' if len(sentence) > 50 else ''}", end="", flush=True)
             bert_naive, seq_len, bert_opt = estimate_bert_complexity(
                 sentence, bert_optim_factor=bert_optim_factor
             )
@@ -271,7 +269,6 @@ def process_sentence_batch(
             bert_naive, seq_len, bert_opt = 0.0, 0, 0.0
             
         results.append((disc_naive, disc_opt, bert_naive, bert_opt, seq_len))
-    print("\r" + " " * 80 + "\r", end="", flush=True)  # Clear the status line
     return results
 
 def estimate_corpus_complexity_from_sentences(
@@ -334,28 +331,76 @@ def estimate_corpus_complexity_from_sentences(
     # Process chunks in parallel
     with multiprocessing.Pool(processes=n_workers) as pool:
         if use_progress_bar:
-            chunk_results = list(tqdm(
-                pool.imap(process_batch, sentence_chunks),
-                total=len(sentence_chunks),
-                desc="Processing sentence chunks"
-            ))
+            # Determine which algorithms are being processed
+            if BERT_ONLY:
+                desc = "Processing BERT"
+            elif DISCO_ONLY:
+                desc = "Processing DisCoCirc"
+            else:
+                desc = "Processing BERT+DisCoCirc"
+                
+            # Enhanced progress bar with more information
+            completed_sentences = 0
+            disc_total_naive = 0.0
+            disc_total_opt = 0.0
+            bert_total_naive = 0.0
+            bert_total_opt = 0.0
+            
+            pbar = tqdm(total=total_sentences, desc=desc, position=0)
+            
+            for chunk_result in pool.imap(process_batch, sentence_chunks):
+                # Update metrics for this chunk
+                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
+                    disc_total_naive += disc_naive
+                    disc_total_opt += disc_opt
+                    bert_total_naive += bert_naive
+                    bert_total_opt += bert_opt
+                    completed_sentences += 1
+                
+                # Update progress bar with detailed metrics
+                pbar.update(len(chunk_result))
+                
+                # Create a dynamic status message based on which algorithms are active
+                status_parts = []
+                if not BERT_ONLY:
+                    status_parts.append(f"DisCoCirc: {disc_total_naive:.2e}/{disc_total_opt:.2e}")
+                if not DISCO_ONLY:
+                    status_parts.append(f"BERT: {bert_total_naive:.2e}/{bert_total_opt:.2e}")
+                
+                status = " | ".join(status_parts)
+                pbar.set_postfix_str(f"{completed_sentences}/{total_sentences} sents | {status}")
+                
+                # Add to final results
+                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
+                    corpus_results["discocirc_total_naive"] += disc_naive
+                    corpus_results["discocirc_total_optimized"] += disc_opt
+                    corpus_results["bert_total_naive"] += bert_naive
+                    corpus_results["bert_total_optimized"] += bert_opt
+                    corpus_results["sentence_details"].append({
+                        "discocirc_naive": disc_naive,
+                        "discocirc_optimized": disc_opt,
+                        "bert_naive": bert_naive,
+                        "bert_optimized": bert_opt,
+                        "token_count": seq_len
+                    })
+            
+            pbar.close()
         else:
             chunk_results = pool.map(process_batch, sentence_chunks)
-    
-    # Aggregate results from all chunks
-    for chunk_result in chunk_results:
-        for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
-            corpus_results["discocirc_total_naive"] += disc_naive
-            corpus_results["discocirc_total_optimized"] += disc_opt
-            corpus_results["bert_total_naive"] += bert_naive
-            corpus_results["bert_total_optimized"] += bert_opt
-            corpus_results["sentence_details"].append({
-                "discocirc_naive": disc_naive,
-                "discocirc_optimized": disc_opt,
-                "bert_naive": bert_naive,
-                "bert_optimized": bert_opt,
-                "token_count": seq_len
-            })
+            # Aggregate results from all chunks if no progress bar
+            for chunk_result in chunk_results:
+                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
+                    corpus_results["discocirc_total_naive"] += disc_naive
+                    corpus_results["discocirc_total_optimized"] += disc_opt
+                    corpus_results["bert_total_naive"] += bert_naive
+                    corpus_results["bert_total_optimized"] += bert_opt
+                    corpus_results["sentence_details"].append({
+                        "discocirc_naive": disc_naive,
+                        "discocirc_optimized": disc_opt,
+                        "bert_naive": bert_naive,
+                        "bert_optimized": bert_opt,
+                        "token_count": seq_len
+                    })
     
     return corpus_results
 
@@ -590,6 +635,9 @@ if __name__ == "__main__":
         else:
             print("\nProcessing mode: Both BERT and DisCoCirc")
         
+        # Set up a progress bar for WikiText articles
+        article_pbar = tqdm(total=total_articles, desc="WikiText Articles", position=0)
+        
         # Initialize multiprocessing pool
         with multiprocessing.Pool(processes=n_workers, initializer=None) as pool:
             for example in dataset:
@@ -603,10 +651,18 @@ if __name__ == "__main__":
                 
                 # Process batch when it reaches batch_size
                 if len(current_batch) >= batch_size:
+                    # Create a dynamic status message based on which algorithms are active
+                    status_parts = []
+                    if not BERT_ONLY:
+                        status_parts.append(f"DisCoCirc: {corpus_results['discocirc_total_naive']:.2e}/{corpus_results['discocirc_total_optimized']:.2e}")
+                    if not DISCO_ONLY:
+                        status_parts.append(f"BERT: {corpus_results['bert_total_naive']:.2e}/{corpus_results['bert_total_optimized']:.2e}")
+                    
+                    progress_status = " | ".join(status_parts)
+                    article_pbar.set_postfix_str(f"{corpus_results['num_sentences']}/{sentences_count} sents | {progress_status}")
+                    
                     # Process the batch in parallel
-                    print(f"\nProcessing batch of {len(current_batch)} sentences...")
                     batch_results = process_batch(current_batch)
-                    print(f"Completed batch processing.")
                     
                     # Accumulate results
                     for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
@@ -624,18 +680,6 @@ if __name__ == "__main__":
                     
                     corpus_results["num_sentences"] += len(current_batch)
                     current_batch = []
-                
-                # Update progress every 100 articles
-                if article_count % 100 == 0:
-                    article_pbar.set_postfix({
-                        "sentences": corpus_results["num_sentences"],
-                        "articles": article_count
-                    })
-                    # Print a summary of progress
-                    if not BERT_ONLY:
-                        print(f"\nDisCoCirc FLOPs so far: {corpus_results['discocirc_total_naive']:.2e} (naive) / {corpus_results['discocirc_total_optimized']:.2e} (optimized)")
-                    if not DISCO_ONLY:
-                        print(f"BERT FLOPs so far: {corpus_results['bert_total_naive']:.2e} (naive) / {corpus_results['bert_total_optimized']:.2e} (optimized)")
             
             # Process any remaining sentences
             if current_batch:
