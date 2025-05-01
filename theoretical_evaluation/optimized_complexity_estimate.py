@@ -12,6 +12,7 @@ from functools import partial
 import time
 import json
 import pickle
+import gc
 from datetime import datetime
 from pathlib import Path
 
@@ -415,66 +416,171 @@ def save_checkpoint(corpus_results: dict, checkpoint_dir: str = "checkpoints", i
     # On high-performance systems, writing to disk can be a bottleneck
     # Only save essential data and limit checkpoint frequency
     
-    # Create checkpoint directory if it doesn't exist
-    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    # Add debug info
+    print(f"\nDEBUG: Saving checkpoint to directory: {checkpoint_dir}")
+    print(f"DEBUG: Current working directory: {os.getcwd()}")
     
-    # Generate checkpoint filename with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_file = Path(checkpoint_dir) / f"checkpoint_{timestamp}.json"
-    
-    # For efficiency, only save the summary data, not all sentence details
-    checkpoint_data = {
-        "num_sentences": corpus_results["num_sentences"],
-        "discocirc_naive": corpus_results["discocirc_naive"],
-        "discocirc_cp": corpus_results["discocirc_cp"],
-        "bert_vanilla": corpus_results["bert_vanilla"],
-        "bert_flash": corpus_results["bert_flash"],
-        "checkpoint_info": {
-            "timestamp": timestamp,
-            "is_final": is_final,
-            "status": "completed" if is_final else "in_progress"
+    try:
+        # Create checkpoint directory if it doesn't exist
+        absolute_checkpoint_dir = os.path.abspath(checkpoint_dir)
+        print(f"DEBUG: Absolute checkpoint path: {absolute_checkpoint_dir}")
+        
+        Path(absolute_checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Generate checkpoint filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        checkpoint_file = Path(absolute_checkpoint_dir) / f"checkpoint_{timestamp}.json"
+        print(f"DEBUG: Full checkpoint file path: {checkpoint_file}")
+        
+        # For efficiency, only save the summary data, not all sentence details
+        checkpoint_data = {
+            "num_sentences": corpus_results["num_sentences"],
+            "discocirc_naive": corpus_results["discocirc_naive"],
+            "discocirc_cp": corpus_results["discocirc_cp"],
+            "bert_vanilla": corpus_results["bert_vanilla"],
+            "bert_flash": corpus_results["bert_flash"],
+            "checkpoint_info": {
+                "timestamp": timestamp,
+                "is_final": is_final,
+                "status": "completed" if is_final else "in_progress"
+            }
         }
-    }
+        
+        # Only save sentence details in the final checkpoint if needed
+        if is_final and "sentence_details" in corpus_results:
+            checkpoint_data["sentence_details"] = corpus_results["sentence_details"]
+        
+        # Save results with minimal indentation to reduce file size
+        with open(checkpoint_file, 'w') as f:
+            json.dump(checkpoint_data, f, indent=0)
+        
+        # Save latest checkpoint path
+        latest_file = Path(absolute_checkpoint_dir) / "latest_checkpoint.txt"
+        with open(latest_file, 'w') as f:
+            f.write(str(checkpoint_file))
+        
+        print(f"DEBUG: Successfully saved checkpoint to {checkpoint_file}")
+        print(f"DEBUG: Successfully saved latest pointer to {latest_file}")
+        
+        return str(checkpoint_file)
     
-    # Only save sentence details in the final checkpoint if needed
-    if is_final and "sentence_details" in corpus_results:
-        checkpoint_data["sentence_details"] = corpus_results["sentence_details"]
-    
-    # Save results with minimal indentation to reduce file size
-    with open(checkpoint_file, 'w') as f:
-        json.dump(checkpoint_data, f, indent=0)
-    
-    # Save latest checkpoint path
-    latest_file = Path(checkpoint_dir) / "latest_checkpoint.txt"
-    with open(latest_file, 'w') as f:
-        f.write(str(checkpoint_file))
-    
-    return str(checkpoint_file)
+    except Exception as e:
+        import traceback
+        print(f"\nERROR: Failed to save checkpoint!")
+        print(f"ERROR details: {str(e)}")
+        print("Stack trace:")
+        traceback.print_exc()
+        
+        # Try an alternate location as a fallback
+        try:
+            home_dir = os.path.expanduser("~")
+            fallback_dir = os.path.join(home_dir, "checkpoint_fallback")
+            print(f"\nAttempting to save to fallback location: {fallback_dir}")
+            
+            Path(fallback_dir).mkdir(parents=True, exist_ok=True)
+            fallback_file = os.path.join(fallback_dir, f"checkpoint_fallback_{timestamp}.json")
+            
+            with open(fallback_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=0)
+                
+            print(f"Successfully saved fallback checkpoint to {fallback_file}")
+            return fallback_file
+        except Exception as e2:
+            print(f"Failed to save fallback checkpoint: {str(e2)}")
+            
+        return "checkpoint_save_failed"
 
 def load_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[dict]:
     """Load the most recent checkpoint if it exists."""
-    latest_file = Path(checkpoint_dir) / "latest_checkpoint.txt"
-    if not latest_file.exists():
+    print(f"\nDEBUG: Trying to load checkpoint from directory: {checkpoint_dir}")
+    print(f"DEBUG: Current working directory: {os.getcwd()}")
+    
+    try:
+        # Use absolute path for consistency
+        absolute_checkpoint_dir = os.path.abspath(checkpoint_dir)
+        
+        latest_file = Path(absolute_checkpoint_dir) / "latest_checkpoint.txt"
+        print(f"DEBUG: Looking for latest pointer file at: {latest_file}")
+        
+        if not latest_file.exists():
+            print(f"DEBUG: Latest pointer file not found at {latest_file}")
+            # Try looking for checkpoint files directly
+            checkpoint_files = list(Path(absolute_checkpoint_dir).glob("checkpoint_*.json"))
+            if checkpoint_files:
+                # Sort by modification time (newest first)
+                checkpoint_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                latest_checkpoint_path = str(checkpoint_files[0])
+                print(f"DEBUG: Found checkpoint file directly: {latest_checkpoint_path}")
+            else:
+                print("DEBUG: No checkpoint files found in directory")
+                return None
+        else:
+            print(f"DEBUG: Latest pointer file found at {latest_file}")
+            with open(latest_file, 'r') as f:
+                latest_checkpoint_path = f.read().strip()
+            print(f"DEBUG: Latest checkpoint path from pointer: {latest_checkpoint_path}")
+        
+        checkpoint_path = Path(latest_checkpoint_path)
+        if not checkpoint_path.exists():
+            print(f"DEBUG: Checkpoint file not found at {checkpoint_path}")
+            return None
+        
+        print(f"DEBUG: Loading checkpoint from {checkpoint_path}")
+        with open(checkpoint_path, 'r') as f:
+            checkpoint_data = json.load(f)
+        
+        print(f"DEBUG: Successfully loaded checkpoint with {checkpoint_data.get('num_sentences', 0)} sentences")
+        return checkpoint_data
+    
+    except Exception as e:
+        import traceback
+        print(f"\nERROR: Failed to load checkpoint!")
+        print(f"ERROR details: {str(e)}")
+        print("Stack trace:")
+        traceback.print_exc()
+        
+        # Try fallback location
+        try:
+            home_dir = os.path.expanduser("~")
+            fallback_dir = os.path.join(home_dir, "checkpoint_fallback")
+            print(f"\nAttempting to load from fallback location: {fallback_dir}")
+            
+            if os.path.exists(fallback_dir):
+                fallback_files = list(Path(fallback_dir).glob("checkpoint_fallback_*.json"))
+                if fallback_files:
+                    # Sort by modification time (newest first)
+                    fallback_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    fallback_path = fallback_files[0]
+                    print(f"Found fallback checkpoint at {fallback_path}")
+                    
+                    with open(fallback_path, 'r') as f:
+                        checkpoint_data = json.load(f)
+                    
+                    print(f"Successfully loaded fallback checkpoint with {checkpoint_data.get('num_sentences', 0)} sentences")
+                    return checkpoint_data
+            
+            print("No fallback checkpoints found")
+        except Exception as e2:
+            print(f"Failed to load fallback checkpoint: {str(e2)}")
+        
         return None
-    
-    with open(latest_file, 'r') as f:
-        checkpoint_path = f.read().strip()
-    
-    if not Path(checkpoint_path).exists():
-        return None
-    
-    with open(checkpoint_path, 'r') as f:
-        return json.load(f)
 
 def was_run_completed(checkpoint_dir: str = "checkpoints") -> bool:
     """Check if the last run was completed successfully."""
-    latest_checkpoint = load_latest_checkpoint(checkpoint_dir)
-    if latest_checkpoint is None:
+    try:
+        # Use absolute path for consistency
+        absolute_checkpoint_dir = os.path.abspath(checkpoint_dir)
+        
+        latest_checkpoint = load_latest_checkpoint(absolute_checkpoint_dir)
+        if latest_checkpoint is None:
+            return False
+        
+        # Check if the last checkpoint was marked as final
+        checkpoint_info = latest_checkpoint.get("checkpoint_info", {})
+        return checkpoint_info.get("is_final", False)
+    except Exception as e:
+        print(f"Error checking run completion status: {e}")
         return False
-    
-    # Check if the last checkpoint was marked as final
-    checkpoint_info = latest_checkpoint.get("checkpoint_info", {})
-    return checkpoint_info.get("is_final", False)
 
 def estimate_corpus_complexity_from_sentences(
     sentences: list, 
@@ -485,12 +591,16 @@ def estimate_corpus_complexity_from_sentences(
     checkpoint_interval: int=100,  # Save every N sentences
     checkpoint_dir: str="checkpoints",
     resume: bool=True,
-    batch_size: Optional[int]=None
+    batch_size: Optional[int]=None,
+    output_file: Optional[str]=None
 ) -> dict:
     """
     Process sentences in parallel using multiprocessing. 
     Returns aggregated complexity results.
     """
+    # Start timing for total runtime
+    start_time = time.time()
+    
     total_sentences = len(sentences)
     
     # Try to load from checkpoint if resuming
@@ -637,6 +747,7 @@ def estimate_corpus_complexity_from_sentences(
                 
                 # Save checkpoint periodically
                 if completed_sentences % checkpoint_interval == 0:
+                    print(f"\nDEBUG: Creating checkpoint at {completed_sentences} sentences")
                     checkpoint_file = save_checkpoint(corpus_results, checkpoint_dir)
                     print(f"\nSaved checkpoint to {checkpoint_file}")
             
@@ -660,12 +771,22 @@ def estimate_corpus_complexity_from_sentences(
                 
                 # Save checkpoint periodically
                 if corpus_results["num_sentences"] % checkpoint_interval == 0:
+                    print(f"\nDEBUG: Creating checkpoint at {corpus_results['num_sentences']} sentences")
                     checkpoint_file = save_checkpoint(corpus_results, checkpoint_dir)
                     print(f"\nSaved checkpoint to {checkpoint_file}")
     
     # Save final checkpoint with completion status
     final_checkpoint = save_checkpoint(corpus_results, checkpoint_dir, is_final=True)
     print(f"\nSaved final checkpoint to {final_checkpoint}")
+    
+    # Calculate final runtime and save results to file
+    end_time = time.time()
+    corpus_results["runtime"] = end_time - start_time
+    corpus_results["h_dim"] = d
+    corpus_results["cp_rank"] = cp_rank
+    
+    # Save to output file
+    save_results_to_file(corpus_results, output_file)
     
     return corpus_results
 
@@ -1072,14 +1193,115 @@ def scan_wikitext_size(cache_file="wikitext_scan_cache.json"):
     return stats
 
 ###############################################################################
+# 7) Results Saving  
+###############################################################################
+def save_results_to_file(corpus_results, output_file=None):
+    """Save the final results to a human-readable file."""
+    if output_file is None:
+        # Generate a default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"complexity_results_{timestamp}.txt"
+    
+    with open(output_file, 'w') as f:
+        f.write("=" * 60 + "\n")
+        f.write("[Corpus-level FLOP Totals]\n")
+        f.write(f"Sentences processed : {corpus_results['num_sentences']:,}\n")
+        f.write(f"Full-rank DisCoCirc : {corpus_results['discocirc_naive']:,.2e}\n")
+        f.write(f"CP-rank-{corpus_results.get('cp_rank', 50)}   : {corpus_results['discocirc_cp']:,.2e}\n")
+        f.write(f"BERT vanilla        : {corpus_results['bert_vanilla']:,.2e}\n")
+        f.write(f"BERT FlashAttention : {corpus_results['bert_flash']:,.2e}\n")
+
+        # Add comparison of DisCoCirc vs BERT if both are calculated
+        if not (BERT_ONLY or DISCO_ONLY):
+            naive_gain = 100 * (corpus_results["bert_vanilla"] - 
+                               corpus_results["discocirc_naive"]) / corpus_results["bert_vanilla"]
+            cp_gain = 100 * (corpus_results["bert_flash"] - 
+                            corpus_results["discocirc_cp"]) / corpus_results["bert_flash"]
+            f.write("\nDisCoCirc vs BERT:\n")
+            f.write(f"  Full-rank saves : {naive_gain:6.2f}% FLOPs over vanilla BERT\n")
+            f.write(f"  CP-rank saves   : {cp_gain:6.2f}% FLOPs over Flash-BERT\n")
+        
+        # Add system information
+        f.write("\n" + "=" * 60 + "\n")
+        f.write("[System Information]\n")
+        f.write(f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        # GPU information
+        if torch.cuda.is_available():
+            f.write(f"GPU Count: {torch.cuda.device_count()}\n")
+            for i in range(torch.cuda.device_count()):
+                f.write(f"  Device {i}: {torch.cuda.get_device_name(i)}\n")
+            f.write(f"CUDA Version: {torch.version.cuda}\n")
+        else:
+            f.write("GPU: None (CPU-only)\n")
+        
+        # Processing information
+        f.write(f"PyTorch Version: {torch.__version__}\n")
+        f.write(f"Embedding Dimension: {corpus_results.get('h_dim', 768)}\n")
+        f.write(f"CP-rank: {corpus_results.get('cp_rank', 50)}\n")
+        
+        if 'runtime' in corpus_results:
+            f.write(f"Total Runtime: {corpus_results['runtime']:.2f} seconds\n")
+            f.write(f"Processing Speed: {corpus_results['num_sentences']/corpus_results['runtime']:.2f} sentences/second\n")
+    
+    print(f"\nResults saved to {output_file}")
+    return output_file
+
+###############################################################################
+# Memory Management Helper
+###############################################################################
+def manage_memory(force_gc=False):
+    """
+    Monitor and manage memory to avoid periodic halts.
+    Returns current memory usage statistics.
+    """
+    # Force garbage collection if requested
+    if force_gc:
+        gc.collect()
+    
+    mem_stats = {}
+    
+    # Get CPU memory stats
+    try:
+        import psutil
+        process = psutil.Process()
+        mem_stats['cpu_percent'] = process.cpu_percent()
+        mem_info = process.memory_info()
+        mem_stats['ram_used_mb'] = mem_info.rss / (1024 * 1024)
+        mem_stats['ram_percent'] = process.memory_percent()
+    except ImportError:
+        mem_stats['cpu_ram'] = "psutil not available"
+    
+    # Get CUDA memory stats if available
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            try:
+                mem_stats[f'cuda_{i}_allocated_mb'] = torch.cuda.memory_allocated(i) / (1024 * 1024)
+                mem_stats[f'cuda_{i}_reserved_mb'] = torch.cuda.memory_reserved(i) / (1024 * 1024)
+                # Get memory stats from nvidia-smi if possible
+                try:
+                    import subprocess
+                    result = subprocess.check_output(['nvidia-smi', f'--id={i}', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'])
+                    used, total = map(int, result.decode('utf-8').strip().split(','))
+                    mem_stats[f'cuda_{i}_used_mb'] = used
+                    mem_stats[f'cuda_{i}_total_mb'] = total
+                    mem_stats[f'cuda_{i}_percent'] = used / total * 100
+                except:
+                    pass
+            except:
+                mem_stats[f'cuda_{i}'] = "Error getting memory stats"
+    
+    return mem_stats
+
+###############################################################################
 # 6) Main Execution  ––  UPDATED FOR NEW COMPLEXITY FORMULAS
 ###############################################################################
 if __name__ == "__main__":
     # Add new command line arguments
     import argparse
     parser = argparse.ArgumentParser(description='Complexity estimation with checkpointing')
-    parser.add_argument('--checkpoint-interval', type=int, default=10000,
-                       help='Save checkpoint every N sentences (default: 10000)')
+    parser.add_argument('--checkpoint-interval', type=int, default=420,
+                       help='Save checkpoint every N sentences (default: 420)')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints (default: checkpoints)')
     parser.add_argument('--no-resume', action='store_true',
@@ -1112,6 +1334,8 @@ if __name__ == "__main__":
                        help='Only scan WikiText-103 size without processing')
     parser.add_argument('--scan-cache-file', type=str, default='wikitext_scan_cache.json',
                        help='File to cache WikiText scan results (default: wikitext_scan_cache.json)')
+    parser.add_argument('--output-file', type=str, default=None,
+                       help='File to save final results (default: auto-generated filename)')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -1130,7 +1354,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------ config
     H_DIM   = 384          # unified embedding dimension for all models
     CP_RANK = 50           # CP decomposition rank for DisCoCirc
-
+    
     # ------------------------------------------------------------------ init
     if not DISCO_ONLY:
         initialize_gpu()                 # sets DEVICE & tokenizer
@@ -1217,15 +1441,17 @@ if __name__ == "__main__":
         # Start timing
         start_time = time.time()
         last_checkpoint_time = start_time
-        checkpoint_min_interval = 300  # Minimum seconds between checkpoints
         sentences_since_checkpoint = 0
+        total_sentences_processed = 0
 
         # Configure multiprocessing for optimal performance
-        if USE_FORK:
+        if USE_FORK and (CPU_ONLY or DISCO_ONLY):
+            # Only use fork if no CUDA operations are needed
             print("Using 'fork' start method for multiprocessing")
             multiprocessing.set_start_method("fork", force=True)
         else:
-            print("Using 'spawn' start method for multiprocessing")
+            # Always use spawn when using CUDA (fork doesn't work with CUDA)
+            print("Using 'spawn' start method for multiprocessing (required for CUDA)")
             multiprocessing.set_start_method("spawn", force=True)
 
         # process_sentence_batch now uses H_DIM & CP_RANK
@@ -1243,41 +1469,118 @@ if __name__ == "__main__":
         with multiprocessing.Pool(effective_workers) as pool, \
              tqdm(total=total_articles, desc="Articles") as art_pbar:
 
+            # Memory management variables
+            last_mem_check = time.time()
+            mem_check_interval = 60  # Check memory every 60 seconds
+            processed_since_gc = 0
+            gc_threshold = 5000      # Garbage collect after this many sentences
+            mem_stats = {}
+            
             for example in dataset:
                 art_pbar.update(1)
                 current_sentences.extend(chunk_text_into_sentences(example["text"]))
 
                 if len(current_sentences) >= batch_size:
+                    # Periodically check memory and potentially clean up
+                    now = time.time()
+                    if (now - last_mem_check) > mem_check_interval or processed_since_gc > gc_threshold:
+                        mem_stats = manage_memory(force_gc=(processed_since_gc > gc_threshold))
+                        last_mem_check = now
+                        processed_since_gc = 0
+                        
+                        # Print memory stats if there might be an issue
+                        if any(('percent' in k and v > 80) for k, v in mem_stats.items() if isinstance(v, (int, float))):
+                            print("\nHigh memory usage detected:")
+                            for k, v in mem_stats.items():
+                                if isinstance(v, float):
+                                    print(f"  {k}: {v:.1f}")
+                                else:
+                                    print(f"  {k}: {v}")
+                            print("Triggering garbage collection...")
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                    
                     # Process in larger batches, with optimal chunksize for GPUs
-                    results = pool.apply(proc_fn, (current_sentences,))
-                    for res in results:
-                        corpus_results["discocirc_naive"] += res["disc_naive"]
-                        corpus_results["discocirc_cp"] += res["disc_cp"]
-                        corpus_results["bert_vanilla"] += res["bert_naive"]
-                        corpus_results["bert_flash"] += res["bert_opt"]
-                        corpus_results["num_sentences"] += 1
-                        sentences_since_checkpoint += 1
-                    
-                    # Check if we should checkpoint based on count AND minimum time elapsed
-                    current_time = time.time()
-                    time_since_checkpoint = current_time - last_checkpoint_time
-                    
-                    if (sentences_since_checkpoint >= args.checkpoint_interval and 
-                        time_since_checkpoint >= checkpoint_min_interval):
-                        checkpoint_file = save_checkpoint(corpus_results, args.checkpoint_dir)
-                        print(f"\nSaved checkpoint to {checkpoint_file}")
+                    try:
+                        results = pool.apply(proc_fn, (current_sentences,))
+                        for res in results:
+                            corpus_results["discocirc_naive"] += res["disc_naive"]
+                            corpus_results["discocirc_cp"] += res["disc_cp"]
+                            corpus_results["bert_vanilla"] += res["bert_naive"]
+                            corpus_results["bert_flash"] += res["bert_opt"]
+                            corpus_results["num_sentences"] += 1
+                            sentences_since_checkpoint += 1
+                            processed_since_gc += 1
+                            total_sentences_processed += 1
                         
-                        # Print current processing rate
-                        elapsed_time = current_time - start_time
-                        rate = corpus_results["num_sentences"] / elapsed_time
-                        print(f"Processing rate: {rate:.1f} sentences/second")
-                        print(f"Progress: {corpus_results['num_sentences']:,}/{total_sentences:,} sentences")
+                            # Print sentence count status regularly
+                            if total_sentences_processed % 100 == 0:
+                                print(f"\nDEBUG: Sentences processed: {total_sentences_processed}, since last checkpoint: {sentences_since_checkpoint}")
+                                print(f"DEBUG: Checkpoint will be created at {args.checkpoint_interval} sentences")
+                                
+                            # Log checkpoint conditions if we're getting close
+                            if sentences_since_checkpoint >= args.checkpoint_interval * 0.9 and sentences_since_checkpoint % 10 == 0:
+                                print(f"\nDEBUG: Getting close to checkpoint! {sentences_since_checkpoint}/{args.checkpoint_interval} sentences")
                         
-                        # Reset counters
-                        last_checkpoint_time = current_time
-                        sentences_since_checkpoint = 0
-                    
-                    current_sentences.clear()
+                            # Create a checkpoint when we've processed enough sentences (no waiting time)
+                            if sentences_since_checkpoint >= args.checkpoint_interval:
+                                print(f"\nDEBUG: Creating checkpoint at {sentences_since_checkpoint} sentences")
+                                checkpoint_file = save_checkpoint(corpus_results, args.checkpoint_dir)
+                                print(f"\nSaved checkpoint to {checkpoint_file}")
+                                
+                                # Print memory stats along with checkpoint
+                                mem_stats = manage_memory(force_gc=False)
+                                print("\nMemory usage at checkpoint:")
+                                for k, v in mem_stats.items():
+                                    if isinstance(v, float):
+                                        print(f"  {k}: {v:.1f}")
+                                    else:
+                                        print(f"  {k}: {v}")
+                                
+                                # Print current processing rate
+                                elapsed_time = time.time() - start_time
+                                rate = corpus_results["num_sentences"] / elapsed_time
+                                print(f"Processing rate: {rate:.1f} sentences/second")
+                                print(f"Progress: {corpus_results['num_sentences']:,}/{total_sentences:,} sentences")
+                                
+                                # Reset counters
+                                last_checkpoint_time = time.time()
+                                sentences_since_checkpoint = 0
+                        
+                        current_sentences.clear()
+                        
+                    except Exception as e:
+                        print(f"\nError processing batch: {e}")
+                        # Try to recover by clearing memory and reducing batch size
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        print("Recovered from error. Continuing with a smaller batch...")
+                        
+                        # Reduce batch size temporarily
+                        if len(current_sentences) > 1000:
+                            print(f"Reducing batch from {len(current_sentences)} to 1000 sentences")
+                            reduced_batch = current_sentences[:1000]
+                            try:
+                                results = pool.apply(proc_fn, (reduced_batch,))
+                                for res in results:
+                                    corpus_results["discocirc_naive"] += res["disc_naive"]
+                                    corpus_results["discocirc_cp"] += res["disc_cp"]
+                                    corpus_results["bert_vanilla"] += res["bert_naive"]
+                                    corpus_results["bert_flash"] += res["bert_opt"]
+                                    corpus_results["num_sentences"] += 1
+                                
+                                # Keep remainder
+                                current_sentences = current_sentences[1000:]
+                            except:
+                                # If still failing, just skip this batch
+                                print("Still failing, skipping batch")
+                                current_sentences.clear()
+                        else:
+                            # If batch is already small, just skip it
+                            print("Skipping problematic batch")
+                            current_sentences.clear()
 
             # flush remainder
             if current_sentences:
@@ -1292,6 +1595,15 @@ if __name__ == "__main__":
             # Save final checkpoint
             final_checkpoint = save_checkpoint(corpus_results, args.checkpoint_dir, is_final=True)
             print(f"\nSaved final checkpoint to {final_checkpoint}")
+            
+            # Calculate final runtime and save results to file
+            end_time = time.time()
+            corpus_results["runtime"] = end_time - start_time
+            corpus_results["h_dim"] = H_DIM
+            corpus_results["cp_rank"] = CP_RANK
+            
+            # Save to output file
+            save_results_to_file(corpus_results, args.output_file)
     # ================================================================== FILE
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
@@ -1307,7 +1619,8 @@ if __name__ == "__main__":
             checkpoint_interval=args.checkpoint_interval,
             checkpoint_dir=args.checkpoint_dir,
             resume=not args.no_resume,
-            batch_size=batch_size
+            batch_size=batch_size,
+            output_file=args.output_file
         )
 
     # ---------------------------------------------------------------- summary
@@ -1329,3 +1642,5 @@ if __name__ == "__main__":
         print("\nDisCoCirc vs BERT:")
         print(f"  Full-rank saves : {naive_gain:6.2f}% FLOPs over vanilla BERT")
         print(f"  CP-rank saves   : {cp_gain:6.2f}% FLOPs over Flash-BERT")
+
+    save_results_to_file(corpus_results, args.output_file)
