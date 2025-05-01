@@ -75,23 +75,33 @@ def API_query_embedding(line, pca, model, tensor_function, pos = "transitive ver
         actual_sentence_embedding: actual sentence embedding
     """
     sentence = line.strip("\n").strip(".").lower()
+    # split the sentence into words
     words = sentence.split()
 
+    # take the first word: [jack] loves [diane]
     word1 = words[0]
+    # if the pos is transitive verb, take the third word, otherwise take the second word
     if pos == "transitive verb":
+        # jack loves [diane]
         word2 = words[2]
     else:
+        # big [jack]
         word2 = words[1]
 
+    # encode the sentence using BERT
     expected_sentence_embedding = model.encode(sentence, convert_to_tensor=True)
+    # reshape the embedding to be a 1D tensor
     expected_sentence_embedding = expected_sentence_embedding.cpu().numpy().reshape(1, -1)
+    # reduce the dimensionality of the embedding to 300 with PCA
     expected_sentence_embedding = torch.tensor(pca.transform(expected_sentence_embedding))
 
     #print("BERT embedding shape:", expected_sentence_embedding.shape)
     
+    # get the embeddings for the subject and object from the fastText model
     subject_embedding = get_embedding_in_parallel(word1)  # Add batch dimension
     object_embedding = get_embedding_in_parallel(word2)  # Add batch dimension
 
+    # pass the subject and object embeddings to the tensor function, evaluate the tensor function for those embeddings
     actual_sentence_embedding = tensor_function(subject_embedding, object_embedding)
 
     # Ensure both embeddings are on the same device and have the same shape
