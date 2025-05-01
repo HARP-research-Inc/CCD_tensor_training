@@ -230,6 +230,29 @@ def get_optimal_workers():
     
     return optimal
 
+def get_optimal_batch_size_for_hardware():
+    """Determine optimal batch size based on detected hardware."""
+    if torch.cuda.is_available():
+        # Check for specific GPU types
+        for i in range(torch.cuda.device_count()):
+            gpu_name = torch.cuda.get_device_name(i).lower()
+            
+            # V100 GPUs have 32GB memory and can handle larger batches
+            if 'v100' in gpu_name:
+                return 5000  # Conservative default for V100
+            
+            # Other common NVIDIA datacenter GPUs
+            if 'a100' in gpu_name:
+                return 8000  # A100 has more memory
+            if 'p100' in gpu_name:
+                return 3000  # P100 has less memory
+                
+        # Default for unknown NVIDIA GPUs
+        return 2000
+    else:
+        # CPU-only mode
+        return 1000
+
 def process_chunk(chunk):
     """Process a chunk of text into sentences (spaCy)."""
     doc = nlp(chunk)
@@ -388,7 +411,10 @@ def process_sentence_batch(sentences, d, cp_rank, bert_optim_factor):
     return results
 
 def save_checkpoint(corpus_results: dict, checkpoint_dir: str = "checkpoints", is_final: bool = False) -> str:
-    """Save current progress to a checkpoint file."""
+    """Save current progress to a checkpoint file with optimizations for high-performance systems."""
+    # On high-performance systems, writing to disk can be a bottleneck
+    # Only save essential data and limit checkpoint frequency
+    
     # Create checkpoint directory if it doesn't exist
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
@@ -396,16 +422,27 @@ def save_checkpoint(corpus_results: dict, checkpoint_dir: str = "checkpoints", i
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     checkpoint_file = Path(checkpoint_dir) / f"checkpoint_{timestamp}.json"
     
-    # Add status information
-    corpus_results["checkpoint_info"] = {
-        "timestamp": timestamp,
-        "is_final": is_final,
-        "status": "completed" if is_final else "in_progress"
+    # For efficiency, only save the summary data, not all sentence details
+    checkpoint_data = {
+        "num_sentences": corpus_results["num_sentences"],
+        "discocirc_naive": corpus_results["discocirc_naive"],
+        "discocirc_cp": corpus_results["discocirc_cp"],
+        "bert_vanilla": corpus_results["bert_vanilla"],
+        "bert_flash": corpus_results["bert_flash"],
+        "checkpoint_info": {
+            "timestamp": timestamp,
+            "is_final": is_final,
+            "status": "completed" if is_final else "in_progress"
+        }
     }
     
-    # Save results
+    # Only save sentence details in the final checkpoint if needed
+    if is_final and "sentence_details" in corpus_results:
+        checkpoint_data["sentence_details"] = corpus_results["sentence_details"]
+    
+    # Save results with minimal indentation to reduce file size
     with open(checkpoint_file, 'w') as f:
-        json.dump(corpus_results, f, indent=2)
+        json.dump(checkpoint_data, f, indent=0)
     
     # Save latest checkpoint path
     latest_file = Path(checkpoint_dir) / "latest_checkpoint.txt"
@@ -1041,8 +1078,8 @@ if __name__ == "__main__":
     # Add new command line arguments
     import argparse
     parser = argparse.ArgumentParser(description='Complexity estimation with checkpointing')
-    parser.add_argument('--checkpoint-interval', type=int, default=100,
-                       help='Save checkpoint every N sentences (default: 100)')
+    parser.add_argument('--checkpoint-interval', type=int, default=10000,
+                       help='Save checkpoint every N sentences (default: 10000)')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints (default: checkpoints)')
     parser.add_argument('--no-resume', action='store_true',
@@ -1125,8 +1162,8 @@ if __name__ == "__main__":
             print(f"Setting fastest GPU ({gpu_id}) as primary device")
             torch.cuda.set_device(gpu_id)
     else:
-        batch_size = args.batch_size if args.batch_size is not None else 1000
-        print(f"Using default/specified batch size: {batch_size}")
+        batch_size = args.batch_size if args.batch_size is not None else get_optimal_batch_size_for_hardware()
+        print(f"Using {'default' if args.batch_size is None else 'specified'} batch size: {batch_size}")
 
     # ------------------------------------------------------------------ WIKITEXT
     if USE_WIKITEXT:
@@ -1179,6 +1216,17 @@ if __name__ == "__main__":
         
         # Start timing
         start_time = time.time()
+        last_checkpoint_time = start_time
+        checkpoint_min_interval = 300  # Minimum seconds between checkpoints
+        sentences_since_checkpoint = 0
+
+        # Configure multiprocessing for optimal performance
+        if USE_FORK:
+            print("Using 'fork' start method for multiprocessing")
+            multiprocessing.set_start_method("fork", force=True)
+        else:
+            print("Using 'spawn' start method for multiprocessing")
+            multiprocessing.set_start_method("spawn", force=True)
 
         # process_sentence_batch now uses H_DIM & CP_RANK
         proc_fn = partial(process_sentence_batch, 
@@ -1186,9 +1234,11 @@ if __name__ == "__main__":
                          cp_rank=CP_RANK,
                          bert_optim_factor=1.0)
 
-        # safe spawn unless --fork
-        if not USE_FORK:
-            multiprocessing.set_start_method("spawn", force=True)
+        print(f"\nRunning with batch size: {batch_size}, workers: {effective_workers}")
+        print(f"Using checkpointing interval: every {args.checkpoint_interval} sentences")
+        
+        # For V100s, use larger chunksize for better GPU utilization
+        optimal_chunksize = max(5, batch_size // (4 * effective_workers))
 
         with multiprocessing.Pool(effective_workers) as pool, \
              tqdm(total=total_articles, desc="Articles") as art_pbar:
@@ -1198,7 +1248,7 @@ if __name__ == "__main__":
                 current_sentences.extend(chunk_text_into_sentences(example["text"]))
 
                 if len(current_sentences) >= batch_size:
-                    # Process in larger batches
+                    # Process in larger batches, with optimal chunksize for GPUs
                     results = pool.apply(proc_fn, (current_sentences,))
                     for res in results:
                         corpus_results["discocirc_naive"] += res["disc_naive"]
@@ -1206,16 +1256,26 @@ if __name__ == "__main__":
                         corpus_results["bert_vanilla"] += res["bert_naive"]
                         corpus_results["bert_flash"] += res["bert_opt"]
                         corpus_results["num_sentences"] += 1
+                        sentences_since_checkpoint += 1
                     
-                    # Save checkpoint less frequently
-                    if corpus_results["num_sentences"] % (args.checkpoint_interval * 10) == 0:
+                    # Check if we should checkpoint based on count AND minimum time elapsed
+                    current_time = time.time()
+                    time_since_checkpoint = current_time - last_checkpoint_time
+                    
+                    if (sentences_since_checkpoint >= args.checkpoint_interval and 
+                        time_since_checkpoint >= checkpoint_min_interval):
                         checkpoint_file = save_checkpoint(corpus_results, args.checkpoint_dir)
                         print(f"\nSaved checkpoint to {checkpoint_file}")
+                        
                         # Print current processing rate
-                        elapsed_time = time.time() - start_time
+                        elapsed_time = current_time - start_time
                         rate = corpus_results["num_sentences"] / elapsed_time
                         print(f"Processing rate: {rate:.1f} sentences/second")
                         print(f"Progress: {corpus_results['num_sentences']:,}/{total_sentences:,} sentences")
+                        
+                        # Reset counters
+                        last_checkpoint_time = current_time
+                        sentences_since_checkpoint = 0
                     
                     current_sentences.clear()
 
