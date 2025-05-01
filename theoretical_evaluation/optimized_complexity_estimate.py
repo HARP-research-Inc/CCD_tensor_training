@@ -923,9 +923,25 @@ def scan_article(article):
         "tokens": total_tokens
     }
 
-def scan_wikitext_size():
-    """Scan WikiText-103 to get total size and article count."""
-    print("\nScanning WikiText-103 dataset size...")
+def scan_wikitext_size(cache_file="wikitext_scan_cache.json"):
+    """Scan WikiText-103 to get total size and article count, with caching."""
+    # Check if we have a cached result already
+    if os.path.exists(cache_file):
+        print(f"\nLoading cached WikiText-103 statistics from {cache_file}...")
+        try:
+            with open(cache_file, 'r') as f:
+                cached_stats = json.load(f)
+            print("\n=== WikiText-103 Dataset Statistics (Cached) ===")
+            print(f"Total articles: {cached_stats['total_articles']:,}")
+            print(f"Total sentences: {cached_stats['total_sentences']:,}")
+            print(f"Total tokens: {cached_stats['total_tokens']:,}")
+            print(f"Average sentences per article: {cached_stats['total_sentences']/cached_stats['total_articles']:.1f}")
+            print(f"Average tokens per sentence: {cached_stats['total_tokens']/cached_stats['total_sentences']:.1f}")
+            return cached_stats
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"Error reading cache file: {e}. Will rescan dataset.")
+    
+    print("\nScanning WikiText-103 dataset size (this may take a while)...")
     
     # First get the total number of articles from the dataset info
     dataset = load_dataset("wikitext", "wikitext-103-v1")
@@ -979,9 +995,35 @@ def scan_wikitext_size():
                     print(f"  Total tokens: {total_tokens:,}")
                     print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
                     print(f"  Processing rate: {rate:.1f} articles/second")
+                    
+                    # Save intermediate cache in case of interruption
+                    intermediate_stats = {
+                        "total_articles": total_articles,
+                        "total_sentences": total_sentences,
+                        "total_tokens": total_tokens,
+                        "processed_articles": processed_articles,
+                        "is_complete": False,
+                        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
+                    }
+                    with open(cache_file + ".partial", 'w') as f:
+                        json.dump(intermediate_stats, f, indent=2)
                 
                 # Clear batch
                 current_batch.clear()
+    
+    # Calculate stats
+    stats = {
+        "total_articles": total_articles,
+        "total_sentences": total_sentences,
+        "total_tokens": total_tokens,
+        "is_complete": True,
+        "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S")
+    }
+    
+    # Save to cache file
+    print(f"\nSaving WikiText-103 statistics to cache file {cache_file}...")
+    with open(cache_file, 'w') as f:
+        json.dump(stats, f, indent=2)
     
     print("\n=== WikiText-103 Dataset Statistics ===")
     print(f"Total articles: {total_articles:,}")
@@ -990,11 +1032,7 @@ def scan_wikitext_size():
     print(f"Average sentences per article: {total_sentences/total_articles:.1f}")
     print(f"Average tokens per sentence: {total_tokens/total_sentences:.1f}")
     
-    return {
-        "total_articles": total_articles,
-        "total_sentences": total_sentences,
-        "total_tokens": total_tokens
-    }
+    return stats
 
 ###############################################################################
 # 6) Main Execution  ––  UPDATED FOR NEW COMPLEXITY FORMULAS
@@ -1035,6 +1073,8 @@ if __name__ == "__main__":
                        help='Scan WikiText-103 size before processing')
     parser.add_argument('--scan-only', action='store_true',
                        help='Only scan WikiText-103 size without processing')
+    parser.add_argument('--scan-cache-file', type=str, default='wikitext_scan_cache.json',
+                       help='File to cache WikiText scan results (default: wikitext_scan_cache.json)')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -1094,19 +1134,28 @@ if __name__ == "__main__":
         dataset_stats = None
         if args.scan or args.scan_only:
             print("\nScanning WikiText-103 dataset size...")
-            dataset_stats = scan_wikitext_size()
+            dataset_stats = scan_wikitext_size(cache_file=args.scan_cache_file)
             
             if args.scan_only:
                 print("\nScan complete. Exiting as requested.")
                 sys.exit(0)
         else:
-            # Use a rough estimate if not scanning
-            print("\nUsing estimated dataset size (use --scan for accurate size)")
-            dataset_stats = {
-                "total_articles": 1801350,  # Known size from dataset info
-                "total_sentences": 4700000,  # Rough estimate
-                "total_tokens": 103000000   # Rough estimate (103M tokens)
-            }
+            # Try to load from cache first
+            if os.path.exists(args.scan_cache_file):
+                print(f"\nLoading cached dataset statistics from {args.scan_cache_file}...")
+                try:
+                    with open(args.scan_cache_file, 'r') as f:
+                        dataset_stats = json.load(f)
+                    print("Using cached dataset statistics")
+                except (json.JSONDecodeError, KeyError) as e:
+                    print(f"Error reading cache file: {e}. Using estimates instead.")
+                    # No cache file exists
+                    print("\nNo scan cache found. Using estimated dataset size (use --scan for accurate size)")
+                    dataset_stats = {
+                        "total_articles": 1801350,  # Known size from dataset info
+                        "total_sentences": 4700000,  # Rough estimate
+                        "total_tokens": 103000000   # Rough estimate (103M tokens)
+                    }
         
         # Use the dataset stats for better progress reporting
         total_articles = dataset_stats["total_articles"]
