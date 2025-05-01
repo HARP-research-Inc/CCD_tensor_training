@@ -1473,7 +1473,7 @@ if __name__ == "__main__":
             last_mem_check = time.time()
             mem_check_interval = 60  # Check memory every 60 seconds
             processed_since_gc = 0
-            gc_threshold = 5000      # Garbage collect after this many sentences
+            gc_threshold = 2000      # Garbage collect after this many sentences
             mem_stats = {}
             
             for example in dataset:
