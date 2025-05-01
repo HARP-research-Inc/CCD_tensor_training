@@ -599,7 +599,9 @@ def benchmark_processing_methods(sample_size=100):
                 
                 if not DISCO_ONLY:
                     for sent in current_batch:
-                        tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
+                        # Handle BERT sequence length limit
+                        tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
+                                                     max_length=512, truncation=True)
                         seq_len = len(tokens)
                         num_layers = 12
                         hidden_size = 768
@@ -625,7 +627,9 @@ def benchmark_processing_methods(sample_size=100):
             
             if not DISCO_ONLY:
                 for sent in current_batch:
-                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
+                    # Handle BERT sequence length limit
+                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True,
+                                                 max_length=512, truncation=True)
                     seq_len = len(tokens)
                     num_layers = 12
                     hidden_size = 768
