@@ -1,0 +1,280 @@
+{
+  "num_sentences": 38,
+  "discocirc_naive": 13310709504.0,
+  "discocirc_cp": 98841600.0,
+  "bert_vanilla": 70548189348.0,
+  "bert_flash": 69382969344.0,
+  "sentence_details": [
+    {
+      "discocirc_naive": 569042304,
+      "discocirc_cp": 3859200,
+      "bert_vanilla": 2583620148,
+      "bert_flash": 2542546944,
+      "token_count": 59
+    },
+    {
+      "discocirc_naive": 227088768,
+      "discocirc_cp": 1670400,
+      "bert_vanilla": 1122657744,
+      "bert_flash": 1112537088,
+      "token_count": 26
+    },
+    {
+      "discocirc_naive": 227824128,
+      "discocirc_cp": 1766400,
+      "bert_vanilla": 1166336820,
+      "bert_flash": 1155575808,
+      "token_count": 27
+    },
+    {
+      "discocirc_naive": 455057280,
+      "discocirc_cp": 3052800,
+      "bert_vanilla": 2270349120,
+      "bert_flash": 2237534208,
+      "token_count": 52
+    },
+    {
+      "discocirc_naive": 682439424,
+      "discocirc_cp": 4646400,
+      "bert_vanilla": 3079569360,
+      "bert_flash": 3023677440,
+      "token_count": 70
+    },
+    {
+      "discocirc_naive": 56919936,
+      "discocirc_cp": 537600,
+      "bert_vanilla": 428828880,
+      "bert_flash": 426424320,
+      "token_count": 10
+    },
+    {
+      "discocirc_naive": 114432000,
+      "discocirc_cp": 1728000,
+      "bert_vanilla": 1253806068,
+      "bert_flash": 1241708544,
+      "token_count": 29
+    },
+    {
+      "discocirc_naive": 114576384,
+      "discocirc_cp": 1344000,
+      "bert_vanilla": 991842708,
+      "bert_flash": 983531520,
+      "token_count": 23
+    },
+    {
+      "discocirc_naive": 285186432,
+      "discocirc_cp": 2534400,
+      "bert_vanilla": 1693374228,
+      "bert_flash": 1673478144,
+      "token_count": 39
+    },
+    {
+      "discocirc_naive": 115167744,
+      "discocirc_cp": 1881600,
+      "bert_vanilla": 1253806068,
+      "bert_flash": 1241708544,
+      "token_count": 29
+    },
+    {
+      "discocirc_naive": 170755584,
+      "discocirc_cp": 979200,
+      "bert_vanilla": 644632020,
+      "bert_flash": 640327680,
+      "token_count": 15
+    },
+    {
+      "discocirc_naive": 57657984,
+      "discocirc_cp": 1036800,
+      "bert_vanilla": 774558288,
+      "bert_flash": 768890880,
+      "token_count": 18
+    },
+    {
+      "discocirc_naive": 283711104,
+      "discocirc_cp": 1651200,
+      "bert_vanilla": 1122657744,
+      "bert_flash": 1112537088,
+      "token_count": 26
+    },
+    {
+      "discocirc_naive": 228118272,
+      "discocirc_cp": 1804800,
+      "bert_vanilla": 1122657744,
+      "bert_flash": 1112537088,
+      "token_count": 26
+    },
+    {
+      "discocirc_naive": 285488640,
+      "discocirc_cp": 3782400,
+      "bert_vanilla": 2493928980,
+      "bert_flash": 2455308288,
+      "token_count": 57
+    },
+    {
+      "discocirc_naive": 624926592,
+      "discocirc_cp": 3340800,
+      "bert_vanilla": 2181176400,
+      "bert_flash": 2150553600,
+      "token_count": 50
+    },
+    {
+      "discocirc_naive": 567271296,
+      "discocirc_cp": 2707200,
+      "bert_vanilla": 1737534720,
+      "bert_flash": 1716756480,
+      "token_count": 40
+    },
+    {
+      "discocirc_naive": 626264064,
+      "discocirc_cp": 5587200,
+      "bert_vanilla": 4131033588,
+      "bert_flash": 4036884480,
+      "token_count": 93
+    },
+    {
+      "discocirc_naive": 738916608,
+      "discocirc_cp": 4896000,
+      "bert_vanilla": 3351975744,
+      "bert_flash": 3287052288,
+      "token_count": 76
+    },
+    {
+      "discocirc_naive": 341071488,
+      "discocirc_cp": 2131200,
+      "bert_vanilla": 1473127248,
+      "bert_flash": 1457362944,
+      "token_count": 34
+    },
+    {
+      "discocirc_naive": 342253440,
+      "discocirc_cp": 3091200,
+      "bert_vanilla": 1914547008,
+      "bert_flash": 1890054144,
+      "token_count": 44
+    },
+    {
+      "discocirc_naive": 399470592,
+      "discocirc_cp": 4128000,
+      "bert_vanilla": 2808496128,
+      "bert_flash": 2760966144,
+      "token_count": 64
+    },
+    {
+      "discocirc_naive": 226939392,
+      "discocirc_cp": 1305600,
+      "bert_vanilla": 948311760,
+      "bert_flash": 940566528,
+      "token_count": 22
+    },
+    {
+      "discocirc_naive": 170460672,
+      "discocirc_cp": 825600,
+      "bert_vanilla": 644632020,
+      "bert_flash": 640327680,
+      "token_count": 15
+    },
+    {
+      "discocirc_naive": 794949504,
+      "discocirc_cp": 4627200,
+      "bert_vanilla": 3351975744,
+      "bert_flash": 3287052288,
+      "token_count": 76
+    },
+    {
+      "discocirc_naive": 227971584,
+      "discocirc_cp": 1843200,
+      "bert_vanilla": 1341423444,
+      "bert_flash": 1327915008,
+      "token_count": 31
+    },
+    {
+      "discocirc_naive": 397996800,
+      "discocirc_cp": 3475200,
+      "bert_vanilla": 2808496128,
+      "bert_flash": 2760966144,
+      "token_count": 64
+    },
+    {
+      "discocirc_naive": 171349632,
+      "discocirc_cp": 1920000,
+      "bert_vanilla": 1693374228,
+      "bert_flash": 1673478144,
+      "token_count": 39
+    },
+    {
+      "discocirc_naive": 1193099520,
+      "discocirc_cp": 9043200,
+      "bert_vanilla": 7451681268,
+      "bert_flash": 7180554240,
+      "token_count": 163
+    },
+    {
+      "discocirc_naive": 170319360,
+      "discocirc_cp": 1670400,
+      "bert_vanilla": 1385287680,
+      "bert_flash": 1371045888,
+      "token_count": 32
+    },
+    {
+      "discocirc_naive": 738920064,
+      "discocirc_cp": 5414400,
+      "bert_vanilla": 3717258048,
+      "bert_flash": 3639250944,
+      "token_count": 84
+    },
+    {
+      "discocirc_naive": 170611200,
+      "discocirc_cp": 1363200,
+      "bert_vanilla": 1079015700,
+      "bert_flash": 1069516800,
+      "token_count": 25
+    },
+    {
+      "discocirc_naive": 170756352,
+      "discocirc_cp": 1094400,
+      "bert_vanilla": 774558288,
+      "bert_flash": 768890880,
+      "token_count": 18
+    },
+    {
+      "discocirc_naive": 113543424,
+      "discocirc_cp": 691200,
+      "bert_vanilla": 644632020,
+      "bert_flash": 640327680,
+      "token_count": 15
+    },
+    {
+      "discocirc_naive": 396516096,
+      "discocirc_cp": 1785600,
+      "bert_vanilla": 1253806068,
+      "bert_flash": 1241708544,
+      "token_count": 29
+    },
+    {
+      "discocirc_naive": 228266112,
+      "discocirc_cp": 1939200,
+      "bert_vanilla": 1385287680,
+      "bert_flash": 1371045888,
+      "token_count": 32
+    },
+    {
+      "discocirc_naive": 170609280,
+      "discocirc_cp": 1075200,
+      "bert_vanilla": 774558288,
+      "bert_flash": 768890880,
+      "token_count": 18
+    },
+    {
+      "discocirc_naive": 454760448,
+      "discocirc_cp": 2611200,
+      "bert_vanilla": 1693374228,
+      "bert_flash": 1673478144,
+      "token_count": 39
+    }
+  ],
+  "checkpoint_info": {
+    "timestamp": "20250501_170613",
+    "is_final": true,
+    "status": "completed"
+  }
+}
