@@ -784,6 +784,13 @@ def benchmark_processing_methods(sample_size=100):
 
 def scan_article(article):
     """Process a single article and return its statistics."""
+    # Initialize tokenizer in worker process if needed
+    global BERT_TOKENIZER, nlp
+    if BERT_TOKENIZER is None and not DISCO_ONLY:
+        BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
+    if nlp is None and not BERT_ONLY:
+        nlp = spacy.load("en_core_web_sm")
+    
     sentences = chunk_text_into_sentences(article["text"])
     total_sentences = len(sentences)
     total_tokens = 0
@@ -819,44 +826,38 @@ def scan_wikitext_size():
     total_sentences = 0
     total_tokens = 0
     processed_articles = 0
+    start_time = time.time()
     
-    # Get optimal number of workers
-    n_workers = get_optimal_workers()
-    print(f"Using {n_workers} worker processes for scanning")
-    
-    # Create a pool of workers
-    with multiprocessing.Pool(processes=n_workers) as pool:
-        # Process articles in chunks
-        chunk_size = 1000  # Process 1000 articles at a time
-        current_chunk = []
-        
-        with tqdm(total=total_articles, desc="Scanning articles", unit="articles") as pbar:
-            for article in dataset:
-                current_chunk.append(article)
-                processed_articles += 1
-                
-                if len(current_chunk) >= chunk_size or processed_articles == total_articles:
-                    # Process the current chunk in parallel
-                    chunk_results = pool.map(scan_article, current_chunk)
-                    
-                    # Aggregate results
-                    for result in chunk_results:
-                        total_sentences += result["sentences"]
-                        total_tokens += result["tokens"]
-                    
-                    # Update progress
-                    pbar.update(len(current_chunk))
-                    
-                    # Print intermediate stats
-                    if processed_articles % 10000 == 0:
-                        print(f"\nIntermediate stats:")
-                        print(f"  Articles processed: {processed_articles:,}/{total_articles:,}")
-                        print(f"  Total sentences: {total_sentences:,}")
-                        print(f"  Total tokens: {total_tokens:,}")
-                        print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
-                    
-                    # Clear the chunk
-                    current_chunk.clear()
+    # Process articles sequentially to avoid multiprocessing issues
+    with tqdm(total=total_articles, desc="Scanning articles", unit="articles") as pbar:
+        for article in dataset:
+            # Process single article
+            sentences = chunk_text_into_sentences(article["text"])
+            total_sentences += len(sentences)
+            
+            # Count tokens in each sentence
+            for sent in sentences:
+                if not BERT_ONLY:
+                    doc = nlp(sent)
+                    total_tokens += len(doc)
+                if not DISCO_ONLY:
+                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
+                                                 max_length=512, truncation=True)
+                    total_tokens += len(tokens)
+            
+            processed_articles += 1
+            pbar.update(1)
+            
+            # Print intermediate stats
+            if processed_articles % 10000 == 0:
+                elapsed_time = time.time() - start_time
+                rate = processed_articles / elapsed_time
+                print(f"\nIntermediate stats:")
+                print(f"  Articles processed: {processed_articles:,}/{total_articles:,}")
+                print(f"  Total sentences: {total_sentences:,}")
+                print(f"  Total tokens: {total_tokens:,}")
+                print(f"  Progress: {(processed_articles/total_articles)*100:.1f}%")
+                print(f"  Processing rate: {rate:.1f} articles/second")
     
     print("\n=== WikiText-103 Dataset Statistics ===")
     print(f"Total articles: {total_articles:,}")
