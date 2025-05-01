@@ -759,7 +759,10 @@ if __name__ == "__main__":
         print(f"Using {n_workers} worker processes")
 
         # process_sentence_batch now uses H_DIM & CP_RANK
-        proc_fn = partial(process_sentence_batch, d=H_DIM, cp_rank=CP_RANK)
+        proc_fn = partial(process_sentence_batch, 
+                         d=H_DIM, 
+                         cp_rank=CP_RANK,
+                         bert_optim_factor=1.0)  # Add bert_optim_factor parameter
 
         # safe spawn unless --fork
         if not USE_FORK:
