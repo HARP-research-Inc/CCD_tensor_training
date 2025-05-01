@@ -902,26 +902,21 @@ def benchmark_processing_methods(sample_size=100):
 
 def scan_article(article):
     """Process a single article and return its statistics."""
-    # Initialize tokenizer in worker process if needed
-    global BERT_TOKENIZER, nlp
-    if BERT_TOKENIZER is None and not DISCO_ONLY:
-        BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
-    if nlp is None and not BERT_ONLY:
-        nlp = spacy.load("en_core_web_sm")
+    # Simple sentence splitting by periods
+    text = article["text"]
+    sentences = []
+    for line in text.split('\n'):
+        for sent in line.split('.'):
+            sent = sent.strip()
+            if sent:  # Only add non-empty sentences
+                sentences.append(sent)
     
-    sentences = chunk_text_into_sentences(article["text"])
     total_sentences = len(sentences)
     total_tokens = 0
     
-    # Count tokens in each sentence
+    # Count tokens using simple whitespace splitting for all modes
     for sent in sentences:
-        if not BERT_ONLY:
-            doc = nlp(sent)
-            total_tokens += len(doc)
-        if not DISCO_ONLY:
-            tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True, 
-                                         max_length=512, truncation=True)
-            total_tokens += len(tokens)
+        total_tokens += len(sent.split())
     
     return {
         "sentences": total_sentences,
@@ -946,7 +941,7 @@ def scan_wikitext_size():
     processed_articles = 0
     start_time = time.time()
     
-    # Use a larger batch size for GPU processing
+    # Use a larger batch size for processing
     batch_size = 1000
     current_batch = []
     
@@ -959,29 +954,18 @@ def scan_wikitext_size():
             if len(current_batch) >= batch_size or processed_articles == total_articles:
                 # Process batch
                 batch_sentences = []
+                
+                # Simple sentence splitting by periods
                 for art in current_batch:
-                    sentences = chunk_text_into_sentences(art["text"])
-                    batch_sentences.extend(sentences)
+                    text = art["text"]
+                    for line in text.split('\n'):
+                        for sent in line.split('.'):
+                            sent = sent.strip()
+                            if sent:  # Only add non-empty sentences
+                                batch_sentences.append(sent)
                 
-                # Process sentences in parallel using GPU
-                if not BERT_ONLY:
-                    # Use spaCy's pipe for faster processing
-                    docs = list(nlp.pipe(batch_sentences))
-                    total_tokens += sum(len(doc) for doc in docs)
-                
-                if not DISCO_ONLY:
-                    # Batch process with BERT tokenizer
-                    encodings = BERT_TOKENIZER(batch_sentences, 
-                                            add_special_tokens=True,
-                                            max_length=512,
-                                            truncation=True,
-                                            padding=True,
-                                            return_tensors="pt")
-                    # Move to GPU if available
-                    if torch.cuda.is_available() and not CPU_ONLY:
-                        encodings = {k: v.cuda() for k, v in encodings.items()}
-                    total_tokens += sum(len(ids) for ids in encodings["input_ids"])
-                
+                # Count tokens using simple whitespace splitting
+                total_tokens += sum(len(sent.split()) for sent in batch_sentences)
                 total_sentences += len(batch_sentences)
                 pbar.update(len(current_batch))
                 
