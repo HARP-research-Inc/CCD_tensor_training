@@ -559,6 +559,90 @@ def benchmark_processing_methods(sample_size=100):
             text = "The big dog quickly chased a ball in the yard."
         sample_texts = [text]
     
+    # Test different batch sizes
+    print("\nBenchmarking different batch sizes...")
+    batch_sizes = [100, 500, 1000, 2000, 5000]
+    batch_results = {}
+    
+    for batch_size in batch_sizes:
+        print(f"\nTesting batch size: {batch_size}")
+        start_time = time.time()
+        
+        # Process in batches
+        current_batch = []
+        total_sentences = 0
+        
+        for text in sample_texts:
+            sentences = chunk_text_into_sentences(text)
+            current_batch.extend(sentences)
+            
+            if len(current_batch) >= batch_size:
+                # Process batch
+                if not BERT_ONLY:
+                    for sent in current_batch:
+                        doc = nlp(sent)
+                        for token in doc:
+                            rank = get_token_rank(token)
+                            naive = float(300**rank)
+                            opt = naive / 20.0
+                
+                if not DISCO_ONLY:
+                    for sent in current_batch:
+                        tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
+                        seq_len = len(tokens)
+                        num_layers = 12
+                        hidden_size = 768
+                        intermediate_size = 3072
+                        self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+                        feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                        flops_per_layer = self_attention_flops + feed_forward_flops
+                        naive_flops = flops_per_layer * num_layers
+                        optimized_flops = naive_flops / 5.0
+                
+                total_sentences += len(current_batch)
+                current_batch.clear()
+        
+        # Process remaining sentences
+        if current_batch:
+            if not BERT_ONLY:
+                for sent in current_batch:
+                    doc = nlp(sent)
+                    for token in doc:
+                        rank = get_token_rank(token)
+                        naive = float(300**rank)
+                        opt = naive / 20.0
+            
+            if not DISCO_ONLY:
+                for sent in current_batch:
+                    tokens = BERT_TOKENIZER.encode(sent, add_special_tokens=True)
+                    seq_len = len(tokens)
+                    num_layers = 12
+                    hidden_size = 768
+                    intermediate_size = 3072
+                    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
+                    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                    flops_per_layer = self_attention_flops + feed_forward_flops
+                    naive_flops = flops_per_layer * num_layers
+                    optimized_flops = naive_flops / 5.0
+            
+            total_sentences += len(current_batch)
+        
+        elapsed_time = time.time() - start_time
+        sentences_per_second = total_sentences / elapsed_time
+        
+        batch_results[batch_size] = {
+            "time": elapsed_time,
+            "sentences": total_sentences,
+            "rate": sentences_per_second
+        }
+        
+        print(f"  Processed {total_sentences} sentences in {elapsed_time:.2f} seconds")
+        print(f"  Rate: {sentences_per_second:.1f} sentences/second")
+    
+    # Find optimal batch size
+    optimal_batch = max(batch_results.items(), key=lambda x: x[1]["rate"])
+    print(f"\nOptimal batch size: {optimal_batch[0]} (rate: {optimal_batch[1]['rate']:.1f} sentences/second)")
+    
     # Test both CPU and GPU if available
     devices = ["cpu"]
     if torch.cuda.is_available() and not CPU_ONLY and not DISCO_ONLY:
@@ -641,36 +725,16 @@ def benchmark_processing_methods(sample_size=100):
     else:
         fastest_device = "cpu"  # Always use CPU in DisCoCirc-only mode
     
-    # Calculate optimal chunk size based on CPU cores - improved for high core counts
-    cpu_count = multiprocessing.cpu_count()
-    
-    # Advanced optimization for very high core counts
-    # Scale more aggressively with higher core counts
-    # For 8 cores: ~50 sentences
-    # For 16 cores: ~100 sentences
-    # For 32 cores: ~200 sentences
-    # For 64 cores: ~400 sentences
-    # For 128 cores: ~800 sentences
-    base_chunk = 50
-    # Exponential scaling with core count
-    chunk_multiplier = math.log2(cpu_count) / math.log2(8)  # Scaled relative to 8 cores
-    suggested_chunk_size = int(base_chunk * chunk_multiplier)
-    optimal_chunk_size = max(50, min(1000, suggested_chunk_size))
-    
-    # Adjust based on timing results
-    # If DisCoCirc is much slower than BERT, use larger chunks to amortize overhead
-    if sum(disco_times) > 5 * sum(bert_results[fastest_device]["times"]):
-        optimal_chunk_size = min(1000, optimal_chunk_size * 2)
-    
     optimal_settings = {
         "use_cpu": fastest_device == "cpu",
-        "parallel_chunk_size": optimal_chunk_size
+        "parallel_chunk_size": optimal_batch[0],
+        "batch_size": optimal_batch[0]
     }
     
     print("\n=== Optimal Settings ===")
     print(f"Fastest device: {fastest_device.upper()}")
     print(f"Using CPU: {optimal_settings['use_cpu']}")
-    print(f"Parallel chunk size: {optimal_settings['parallel_chunk_size']} (based on {cpu_count} CPU cores)")
+    print(f"Optimal batch size: {optimal_settings['batch_size']}")
     print(f"Multiprocessing mode: {'fork' if USE_FORK else 'spawn'} (use --fork flag for possibly faster processing)")
     
     return optimal_settings
@@ -706,6 +770,8 @@ if __name__ == "__main__":
                       help='Use fork instead of spawn for multiprocessing')
     parser.add_argument('--workers', type=int,
                       help='Number of worker processes to use')
+    parser.add_argument('--batch-size', type=int,
+                      help='Batch size for processing (default: determined by benchmark)')
     args = parser.parse_args()
 
     # Update global flags based on arguments
@@ -738,6 +804,12 @@ if __name__ == "__main__":
         optimal = benchmark_processing_methods()
         CPU_ONLY = optimal["use_cpu"]
         print(f"\nBenchmark-selected device: {'CPU' if CPU_ONLY else 'GPU'}")
+        if args.batch_size is None:
+            batch_size = optimal["batch_size"]
+        else:
+            batch_size = args.batch_size
+    else:
+        batch_size = args.batch_size if args.batch_size is not None else 1000
 
     # ================================================================= WIKITEXT
     if USE_WIKITEXT:
@@ -753,11 +825,10 @@ if __name__ == "__main__":
             "bert_flash": 0.0,
         }
 
-        # Increase batch size for better throughput
-        batch_size = 1000  # Increased from 100
+        # Use benchmark-determined or user-specified batch size
         current_sent = []
         n_workers = get_optimal_workers()
-        print(f"Using {n_workers} worker processes")
+        print(f"Using {n_workers} worker processes with batch size {batch_size}")
 
         # Start timing
         start_time = time.time()
