@@ -87,7 +87,8 @@ def initialize_gpu():
                 # Enable multi-GPU processing if available
                 if len(cuda_devices) > 1:
                     print(f"\nEnabling multi-GPU processing with {len(cuda_devices)} devices")
-                    torch.cuda.set_device('cuda')  # Use all available GPUs
+                    # Set up DataParallel for multi-GPU processing
+                    torch.cuda.set_device(0)  # Set default device to first GPU
             else:
                 print("No CUDA devices found!")
                 DEVICE = torch.device("cpu")
