@@ -552,6 +552,11 @@ def benchmark_processing_methods(sample_size=100):
     # Make sure we have initialized everything
     if BERT_TOKENIZER is None or DEVICE is None:
         initialize_gpu()
+    
+    # BERT model parameters
+    BERT_NUM_LAYERS = 12
+    BERT_HIDDEN_SIZE = 768
+    BERT_INTERMEDIATE_SIZE = 3072
         
     print("\n=== Running Benchmark ===")
     
@@ -613,15 +618,11 @@ def benchmark_processing_methods(sample_size=100):
                     
                     # Calculate FLOPs for the batch
                     seq_lens = [len(ids) for ids in encodings["input_ids"]]
-                    num_layers = 12
-                    hidden_size = 768
-                    intermediate_size = 3072
-                    
                     for seq_len in seq_lens:
-                        self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-                        feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                        self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
+                        feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
                         flops_per_layer = self_attention_flops + feed_forward_flops
-                        naive_flops = flops_per_layer * num_layers
+                        naive_flops = flops_per_layer * BERT_NUM_LAYERS
                         optimized_flops = naive_flops / 5.0
                 
                 total_sentences += len(current_batch)
@@ -649,10 +650,10 @@ def benchmark_processing_methods(sample_size=100):
                 
                 seq_lens = [len(ids) for ids in encodings["input_ids"]]
                 for seq_len in seq_lens:
-                    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-                    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                    self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
+                    feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
                     flops_per_layer = self_attention_flops + feed_forward_flops
-                    naive_flops = flops_per_layer * num_layers
+                    naive_flops = flops_per_layer * BERT_NUM_LAYERS
                     optimized_flops = naive_flops / 5.0
             
             total_sentences += len(current_batch)
@@ -734,10 +735,10 @@ def benchmark_processing_methods(sample_size=100):
                 # Calculate FLOPs for the batch
                 seq_lens = [len(ids) for ids in encodings["input_ids"]]
                 for seq_len in seq_lens:
-                    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-                    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                    self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
+                    feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
                     flops_per_layer = self_attention_flops + feed_forward_flops
-                    naive_flops = flops_per_layer * num_layers
+                    naive_flops = flops_per_layer * BERT_NUM_LAYERS
                     optimized_flops = naive_flops / 5.0
                 
                 bert_times.append(time.time() - start_time)
@@ -758,10 +759,10 @@ def benchmark_processing_methods(sample_size=100):
             
             seq_lens = [len(ids) for ids in encodings["input_ids"]]
             for seq_len in seq_lens:
-                self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-                feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
+                self_attention_flops = 2.0 * (seq_len ** 2) * BERT_HIDDEN_SIZE
+                feed_forward_flops = 2.0 * seq_len * BERT_HIDDEN_SIZE * BERT_INTERMEDIATE_SIZE
                 flops_per_layer = self_attention_flops + feed_forward_flops
-                naive_flops = flops_per_layer * num_layers
+                naive_flops = flops_per_layer * BERT_NUM_LAYERS
                 optimized_flops = naive_flops / 5.0
             
             bert_times.append(time.time() - start_time)
