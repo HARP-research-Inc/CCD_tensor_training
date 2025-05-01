@@ -753,16 +753,20 @@ if __name__ == "__main__":
             "bert_flash": 0.0,
         }
 
-        batch_size = 100
+        # Increase batch size for better throughput
+        batch_size = 1000  # Increased from 100
         current_sent = []
         n_workers = get_optimal_workers()
         print(f"Using {n_workers} worker processes")
+
+        # Start timing
+        start_time = time.time()
 
         # process_sentence_batch now uses H_DIM & CP_RANK
         proc_fn = partial(process_sentence_batch, 
                          d=H_DIM, 
                          cp_rank=CP_RANK,
-                         bert_optim_factor=1.0)  # Add bert_optim_factor parameter
+                         bert_optim_factor=1.0)
 
         # safe spawn unless --fork
         if not USE_FORK:
@@ -776,23 +780,30 @@ if __name__ == "__main__":
                 current_sent.extend(chunk_text_into_sentences(example["text"]))
 
                 if len(current_sent) >= batch_size:
-                    for res in pool.apply(proc_fn, (current_sent,)):
+                    # Process in larger batches
+                    results = pool.apply(proc_fn, (current_sent,))
+                    for res in results:
                         corpus_results["discocirc_naive"] += res["disc_naive"]
                         corpus_results["discocirc_cp"] += res["disc_cp"]
                         corpus_results["bert_vanilla"] += res["bert_naive"]
                         corpus_results["bert_flash"] += res["bert_opt"]
                         corpus_results["num_sentences"] += 1
                     
-                    # Save checkpoint periodically
-                    if corpus_results["num_sentences"] % args.checkpoint_interval == 0:
+                    # Save checkpoint less frequently
+                    if corpus_results["num_sentences"] % (args.checkpoint_interval * 10) == 0:
                         checkpoint_file = save_checkpoint(corpus_results, args.checkpoint_dir)
                         print(f"\nSaved checkpoint to {checkpoint_file}")
+                        # Print current processing rate
+                        elapsed_time = time.time() - start_time
+                        rate = corpus_results["num_sentences"] / elapsed_time
+                        print(f"Processing rate: {rate:.1f} sentences/second")
                     
                     current_sent.clear()
 
             # flush remainder
             if current_sent:
-                for res in pool.apply(proc_fn, (current_sent,)):
+                results = pool.apply(proc_fn, (current_sent,))
+                for res in results:
                     corpus_results["discocirc_naive"] += res["disc_naive"]
                     corpus_results["discocirc_cp"] += res["disc_cp"]
                     corpus_results["bert_vanilla"] += res["bert_naive"]
