@@ -11,8 +11,15 @@ from typing import Optional, Tuple
 from functools import partial
 import time
 
+# Add datasets import at the top
+try:
+    from datasets import load_dataset
+except ImportError:
+    print("Warning: datasets package not installed. WikiText functionality will be disabled.")
+    load_dataset = None
+
 # Flags for different modes
-USE_WIKITEXT = "--wikitext" in sys.argv
+USE_WIKITEXT = "--wikitext" in sys.argv and load_dataset is not None
 BERT_ONLY   = "--bert"     in sys.argv
 DISCO_ONLY  = "--disco"    in sys.argv
 CPU_ONLY    = "--cpu"      in sys.argv
@@ -28,13 +35,6 @@ for arg in sys.argv:
             MAX_WORKERS = int(arg.split("=")[1])
         except (ValueError, IndexError):
             print("Warning: Invalid value for --workers flag.")
-
-if USE_WIKITEXT:
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("Please install the huggingface datasets library: pip install datasets")
-        sys.exit(1)
 
 # Initialize global variables to be set in initialize_gpu()
 DEVICE = None
@@ -97,91 +97,104 @@ if not BERT_ONLY:
     nlp = spacy.load("en_core_web_sm")
 
 ###############################################################################
-# 2) DisCoCirc Complexity Estimation
+# === PATCH START : accurate FLOP models =====================================
 ###############################################################################
+import math
+
+# --- DisCoCirc helpers -------------------------------------------------------­
 def get_token_rank(token):
+    """Return the multilinear order k for each word-token."""
     if token.pos_ in {"NOUN", "PROPN", "PRON"}:
         return 1
-    if token.pos_ in {"ADJ", "ADV", "DET"}:
+    if token.pos_ in {"ADJ", "ADV", "DET", "AUX"}:
         return 2
     if token.pos_ in {"ADP", "CCONJ", "SCONJ"}:
-        return 3
-    if token.pos_ == "INTJ":
-        return 1
-    if token.pos_ == "AUX":
-        return 2
-    if token.pos_ == "VERB":
-        has_dobj = any(child.dep_ in {"dobj", "obj"} for child in token.children)
-        has_iobj = any(child.dep_ == "iobj" for child in token.children)
-        if has_dobj and has_iobj:
-            return 4  # ditransitive
-        elif has_dobj:
-            return 3  # transitive
-        else:
-            return 2  # intransitive
-    return 1
+        return 3                # preps / conjunctions
+    if token.pos_ == "VERB":     # de-trans / trans / di-trans
+        has_dobj = any(c.dep_ in {"obj", "dobj"} for c in token.children)
+        has_iobj = any(c.dep_ == "iobj"          for c in token.children)
+        return 4 if (has_dobj and has_iobj) else 3 if has_dobj else 2
+    return 1                     # fallback / INTJ / SYM / etc.
 
-def estimate_discocirc_complexity(sentence, d=300, disco_factor=1.0, verbose=False):
-    """Compute naive and optimized FLOPs for DisCoCirc, if not in BERT-only mode."""
-    if BERT_ONLY:
-        return 0.0, 0.0, []  # no DisCoCirc computations in BERT-only mode
+def estimate_discocirc_complexity(sentence: str,
+                                  d: int = 768
+                                  ) -> float:
+    """
+    FLOPs for *full-rank* DisCoCirc evaluation on one sentence.
+      • Each rank-k operator   ⇒   d**k  multiplies + adds  (≈ 2·d**k FLOPs)
+        We count the dominant term only (no *2) for readability.
+    Returns a single float (total FLOPs).
+    """
+    global nlp
+    if nlp is None:
+        nlp = spacy.load("en_core_web_sm")
     
     doc = nlp(sentence)
-    total_naive = 0.0
-    total_optimized = 0.0
-    breakdown = []
-    for token in doc:
-        rank = get_token_rank(token)
-        naive_cost = float(d ** rank)
-        optimized_cost = naive_cost / disco_factor
-        total_naive += naive_cost
-        total_optimized += optimized_cost
-        if verbose:
-            breakdown.append((token.text, token.pos_, rank, naive_cost, optimized_cost))
-    return total_naive, total_optimized, breakdown
+    return sum(d ** get_token_rank(tok) for tok in doc)
 
-###############################################################################
-# 3) BERT Complexity Estimation (GPU-accelerated unless --cpu is used)
-###############################################################################
-def estimate_bert_complexity(
-    sentence: str, 
-    model_name: str = "bert-base-uncased", 
-    bert_optim_factor: float = 1.0
-) -> Tuple[float, int, float]:
+def estimate_cp_discocirc_complexity(sentence: str,
+                                     d: int = 768,
+                                     R: int = 50
+                                     ) -> float:
     """
-    GPU-accelerated BERT complexity estimation (symbolic, not a real forward pass).
-    Returns: (naive_flops, seq_len, optimized_flops)
+    FLOPs for a CP-decomposed DisCoCirc where each k-linear map
+        V ≈  Σ_{r=1..R}  a_r ⊗ b_r^(1) ⊗ … ⊗ b_r^(k)
+    gives cost  R · (k+2) · d        (see derivation in previous answer).
     """
-    global BERT_TOKENIZER, DEVICE
+    global nlp
+    if nlp is None:
+        nlp = spacy.load("en_core_web_sm")
     
-    # Skip BERT calculations in DisCoCirc-only mode
-    if DISCO_ONLY:
-        return 0.0, 0, 0.0  # no BERT computations in DisCoCirc-only mode
-    
-    # Ensure tokenizer and device are initialized
+    doc = nlp(sentence)
+    return sum(R * (get_token_rank(tok) + 2) * d for tok in doc)
+
+# --- BERT helpers ------------------------------------------------------------­
+MAC = 2                            # multiply+add counted as 2 FLOPs
+
+def _layer_vanilla(L: int, H: int) -> int:
+    """One encoder layer, classical kernels (no fusions)."""
+    proj_qkv  = 3 * MAC * L * H * H
+    proj_out  =     MAC * L * H * H
+    attn_mat  = 2 * MAC * L * L * H          #  QKᵀ  +  αV
+    softmax   =       7 * L * L              #  scale + exp + norm
+    ffw       = 2 * MAC * L * H * 4 * H      #  two dense layers
+    gelu      =       8 * L * 4 * H
+    norm      =       2 * 8 * L * H          #  mean + var + scale + shift
+    res       =       2 * L * H
+    return (proj_qkv + proj_out + attn_mat +
+            softmax  + ffw      + gelu +
+            norm     + res)
+
+def _layer_flash(L: int, H: int) -> int:
+    """Encoder layer with FlashAttention-2 & fused GELU/LayerNorm."""
+    proj_qkv  = 3 * MAC * L * H * H          # fused GEMM; FLOPs same
+    proj_out  =     MAC * L * H * H
+    attn_mat  =     MAC * L * L * H          # QKᵀ+αV in one pass (½ cost)
+    ffw       = 2 * MAC * L * H * 4 * H
+    norm      =       2 * 8 * L * H          # still need µ,σ
+    res       =       2 * L * H
+    return proj_qkv + proj_out + attn_mat + ffw + norm + res
+
+def estimate_bert_complexity(sentence: str,
+                             vanilla: bool = True,
+                             layers: int = 12,
+                             hidden: int = 768
+                             ) -> Tuple[float, int]:
+    """
+    Symbolic FLOP count for BERT-base forward pass.
+    Returns (total_flops, seq_len).
+    """
+    global BERT_TOKENIZER
     if BERT_TOKENIZER is None:
         BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
     
-    # Use the global tokenizer
     tokens = BERT_TOKENIZER.encode(sentence, add_special_tokens=True)
-    
-    if DEVICE is not None and DEVICE.type == 'cuda':
-        # Move tokens to GPU
-        tokens = torch.tensor(tokens, device=DEVICE)
-    
-    seq_len = len(tokens)
-    num_layers = 12
-    hidden_size = 768
-    intermediate_size = 3072  # typically 4 * hidden_size
-    
-    # Calculate FLOPs (symbolic formula)
-    self_attention_flops = 2.0 * (seq_len ** 2) * hidden_size
-    feed_forward_flops = 2.0 * seq_len * hidden_size * intermediate_size
-    flops_per_layer = self_attention_flops + feed_forward_flops
-    naive_flops = flops_per_layer * num_layers
-    optimized_flops = naive_flops / bert_optim_factor
-    
-    return naive_flops, seq_len, optimized_flops
+    L = len(tokens)
+    per_layer = _layer_vanilla(L, hidden) if vanilla else _layer_flash(L, hidden)
+    return per_layer * layers, L
+###############################################################################
+# === PATCH END ===============================================================
+###############################################################################
 
 ###############################################################################
 # 4) Corpus Analysis and Parallel Sentence Processing
@@ -247,34 +260,47 @@ def chunk_text_into_sentences(text, max_chunk=None):
         return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
 def process_sentence_batch(
-    sentences: list, d: float, disco_factor: float, bert_optim_factor: float
+    sentences: list, d: float, cp_rank: float, bert_optim_factor: float
 ) -> list:
-    """Process a batch of sentences, computing (disc_naive, disc_opt, bert_naive, bert_opt, seq_len)."""
+    """Process a batch of sentences, computing complexity metrics."""
+    # Initialize tokenizer in worker process if needed
+    global BERT_TOKENIZER, nlp
+    if BERT_TOKENIZER is None and not DISCO_ONLY:
+        BERT_TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
+    
+    # Initialize spaCy in worker process if needed
+    if nlp is None and not BERT_ONLY:
+        nlp = spacy.load("en_core_web_sm")
+    
     results = []
     for sentence in sentences:
         # DisCoCirc processing remains on CPU
         if not BERT_ONLY:
-            disc_naive, disc_opt, _ = estimate_discocirc_complexity(
-                sentence, d=d, disco_factor=disco_factor, verbose=False
-            )
+            disc_naive = estimate_discocirc_complexity(sentence, d=d)
+            disc_cp = estimate_cp_discocirc_complexity(sentence, d=d, R=int(cp_rank))
         else:
-            disc_naive, disc_opt = 0.0, 0.0
+            disc_naive, disc_cp = 0.0, 0.0
         
         # BERT processing uses GPU if available (unless --cpu)
         if not DISCO_ONLY:
-            bert_naive, seq_len, bert_opt = estimate_bert_complexity(
-                sentence, bert_optim_factor=bert_optim_factor
-            )
+            bert_vanilla, seq_len = estimate_bert_complexity(sentence, vanilla=True, hidden=d)
+            bert_flash, _ = estimate_bert_complexity(sentence, vanilla=False, hidden=d)
         else:
-            bert_naive, seq_len, bert_opt = 0.0, 0, 0.0
+            bert_vanilla, bert_flash, seq_len = 0.0, 0.0, 0
             
-        results.append((disc_naive, disc_opt, bert_naive, bert_opt, seq_len))
+        results.append({
+            "disc_naive": disc_naive,
+            "disc_cp": disc_cp,
+            "bert_naive": bert_vanilla,
+            "bert_opt": bert_flash,
+            "token_count": seq_len
+        })
     return results
 
 def estimate_corpus_complexity_from_sentences(
     sentences: list, 
     d: float=300, 
-    disco_factor: float=1.0, 
+    cp_rank: float=50,  # Changed from disco_factor to cp_rank
     bert_optim_factor: float=1.0, 
     use_progress_bar: bool=True
 ) -> dict:
@@ -284,10 +310,10 @@ def estimate_corpus_complexity_from_sentences(
     """
     corpus_results = {
         "num_sentences": len(sentences),
-        "discocirc_total_naive": 0.0,
-        "discocirc_total_optimized": 0.0,
-        "bert_total_naive": 0.0,
-        "bert_total_optimized": 0.0,
+        "discocirc_naive": 0.0,  # Updated key names to match new version
+        "discocirc_cp": 0.0,
+        "bert_vanilla": 0.0,
+        "bert_flash": 0.0,
         "sentence_details": []
     }
     
@@ -326,7 +352,7 @@ def estimate_corpus_complexity_from_sentences(
     sentence_chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
     
     # Create a partial function with the fixed arguments
-    process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
+    process_batch = partial(process_sentence_batch, d=d, cp_rank=cp_rank, bert_optim_factor=bert_optim_factor)
     
     # Process chunks in parallel
     with multiprocessing.Pool(processes=n_workers) as pool:
@@ -342,19 +368,19 @@ def estimate_corpus_complexity_from_sentences(
             # Enhanced progress bar with more information
             completed_sentences = 0
             disc_total_naive = 0.0
-            disc_total_opt = 0.0
-            bert_total_naive = 0.0
-            bert_total_opt = 0.0
+            disc_total_cp = 0.0
+            bert_total_vanilla = 0.0
+            bert_total_flash = 0.0
             
             pbar = tqdm(total=total_sentences, desc=desc, position=0)
             
             for chunk_result in pool.imap(process_batch, sentence_chunks):
                 # Update metrics for this chunk
-                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
-                    disc_total_naive += disc_naive
-                    disc_total_opt += disc_opt
-                    bert_total_naive += bert_naive
-                    bert_total_opt += bert_opt
+                for result in chunk_result:
+                    disc_total_naive += result["disc_naive"]
+                    disc_total_cp += result["disc_cp"]
+                    bert_total_vanilla += result["bert_naive"]
+                    bert_total_flash += result["bert_opt"]
                     completed_sentences += 1
                 
                 # Update progress bar with detailed metrics
@@ -363,25 +389,25 @@ def estimate_corpus_complexity_from_sentences(
                 # Create a dynamic status message based on which algorithms are active
                 status_parts = []
                 if not BERT_ONLY:
-                    status_parts.append(f"DisCoCirc: {disc_total_naive:.2e}/{disc_total_opt:.2e}")
+                    status_parts.append(f"DisCoCirc: {disc_total_naive:.2e}/{disc_total_cp:.2e}")
                 if not DISCO_ONLY:
-                    status_parts.append(f"BERT: {bert_total_naive:.2e}/{bert_total_opt:.2e}")
+                    status_parts.append(f"BERT: {bert_total_vanilla:.2e}/{bert_total_flash:.2e}")
                 
                 status = " | ".join(status_parts)
                 pbar.set_postfix_str(f"{completed_sentences}/{total_sentences} sents | {status}")
                 
                 # Add to final results
-                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
-                    corpus_results["discocirc_total_naive"] += disc_naive
-                    corpus_results["discocirc_total_optimized"] += disc_opt
-                    corpus_results["bert_total_naive"] += bert_naive
-                    corpus_results["bert_total_optimized"] += bert_opt
+                for result in chunk_result:
+                    corpus_results["discocirc_naive"] += result["disc_naive"]
+                    corpus_results["discocirc_cp"] += result["disc_cp"]
+                    corpus_results["bert_vanilla"] += result["bert_naive"]
+                    corpus_results["bert_flash"] += result["bert_opt"]
                     corpus_results["sentence_details"].append({
-                        "discocirc_naive": disc_naive,
-                        "discocirc_optimized": disc_opt,
-                        "bert_naive": bert_naive,
-                        "bert_optimized": bert_opt,
-                        "token_count": seq_len
+                        "discocirc_naive": result["disc_naive"],
+                        "discocirc_cp": result["disc_cp"],
+                        "bert_vanilla": result["bert_naive"],
+                        "bert_flash": result["bert_opt"],
+                        "token_count": result["token_count"]
                     })
             
             pbar.close()
@@ -389,17 +415,17 @@ def estimate_corpus_complexity_from_sentences(
             chunk_results = pool.map(process_batch, sentence_chunks)
             # Aggregate results from all chunks if no progress bar
             for chunk_result in chunk_results:
-                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in chunk_result:
-                    corpus_results["discocirc_total_naive"] += disc_naive
-                    corpus_results["discocirc_total_optimized"] += disc_opt
-                    corpus_results["bert_total_naive"] += bert_naive
-                    corpus_results["bert_total_optimized"] += bert_opt
+                for result in chunk_result:
+                    corpus_results["discocirc_naive"] += result["disc_naive"]
+                    corpus_results["discocirc_cp"] += result["disc_cp"]
+                    corpus_results["bert_vanilla"] += result["bert_naive"]
+                    corpus_results["bert_flash"] += result["bert_opt"]
                     corpus_results["sentence_details"].append({
-                        "discocirc_naive": disc_naive,
-                        "discocirc_optimized": disc_opt,
-                        "bert_naive": bert_naive,
-                        "bert_optimized": bert_opt,
-                        "token_count": seq_len
+                        "discocirc_naive": result["disc_naive"],
+                        "discocirc_cp": result["disc_cp"],
+                        "bert_vanilla": result["bert_naive"],
+                        "bert_flash": result["bert_opt"],
+                        "token_count": result["token_count"]
                     })
     
     return corpus_results
@@ -556,207 +582,109 @@ def benchmark_processing_methods(sample_size=100):
     return optimal_settings
 
 ###############################################################################
-# 6) Main Execution
+# 6) Main Execution  ––  UPDATED FOR NEW COMPLEXITY FORMULAS
 ###############################################################################
 if __name__ == "__main__":
-    # Initialize GPU and tokenizer in the main process only
+    # ------------------------------------------------------------------ config
+    H_DIM   = 384          # unified embedding dimension for all models
+    CP_RANK = 50           # CP decomposition rank for DisCoCirc
+
+    # ------------------------------------------------------------------ init
     if not DISCO_ONLY:
-        initialize_gpu()
+        initialize_gpu()                 # sets DEVICE & tokenizer
     else:
-        print("\nRunning in DisCoCirc-only mode, skipping GPU initialization")
-    
-    # Print info about worker limits
+        print("\nRunning in DisCoCirc-only mode, skipping GPU init")
+
     cpu_count = multiprocessing.cpu_count()
     effective_workers = get_optimal_workers()
-    print(f"\nSystem has {cpu_count} CPU cores, using {effective_workers} worker processes")
-    if MAX_WORKERS is not None:
-        print(f"Worker count limited by --workers={MAX_WORKERS} flag")
-    else:
-        print("For better performance on many-core systems, consider using --workers=16")
-    
-    disco_factor = 20.0     
-    bert_optim_factor = 5.0 
-    d = 300               
-    
-    # Run benchmark first if requested
+    print(f"\nSystem has {cpu_count} CPU cores; using {effective_workers} workers")
+
+    # ------------------------------------------------------------------ BENCH
     if BENCHMARK:
-        optimal_settings = benchmark_processing_methods()
-        # Update global settings based on benchmark
-        if optimal_settings["use_cpu"]:
-            CPU_ONLY = True
-            print("\nUsing CPU mode based on benchmark results")
-        else:
-            print("\nUsing GPU mode based on benchmark results")
-    
+        optimal = benchmark_processing_methods()
+        CPU_ONLY = optimal["use_cpu"]
+        print(f"\nBenchmark-selected device: {'CPU' if CPU_ONLY else 'GPU'}")
+
+    # ================================================================= WIKITEXT
     if USE_WIKITEXT:
-        print("\nLoading WikiText-103 using Hugging Face datasets in streaming mode...")
-        from datasets import load_dataset
-        dataset = load_dataset("wikitext", "wikitext-103-v1", split="train", streaming=True)
-        
-        total_articles = 28475
-        article_pbar = tqdm(total=total_articles, desc="WikiText Articles", position=0)
-        
-        # Initialize results
+        print("\nLoading WikiText-103 (streaming)…")
+        dataset = load_dataset("wikitext", "wikitext-103-v1",
+                               split="train", streaming=True)
+
         corpus_results = {
             "num_sentences": 0,
-            "discocirc_total_naive": 0.0,
-            "discocirc_total_optimized": 0.0,
-            "bert_total_naive": 0.0,
-            "bert_total_optimized": 0.0,
-            "sentence_details": []
+            "discocirc_naive": 0.0,
+            "discocirc_cp": 0.0,
+            "bert_vanilla": 0.0,
+            "bert_flash": 0.0,
         }
-        
-        # Process articles in batches for better performance
+
         batch_size = 100
-        current_batch = []
-        article_count = 0
-        sentences_count = 0
-        
-        # Determine optimal number of workers
+        current_sent = []
         n_workers = get_optimal_workers()
-        print(f"\nUsing {n_workers} worker processes for parallel processing")
-        
-        # Create a partial function with the fixed arguments
-        process_batch = partial(process_sentence_batch, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor)
-        
-        # Configure multiprocessing to use 'spawn' method to prevent duplicate initialization
-        # unless fork is explicitly requested
-        if __name__ == "__main__" and not USE_FORK:
-            print("\nUsing 'spawn' multiprocessing method (safer but slower)")
-            multiprocessing.set_start_method('spawn', force=True)
-        elif __name__ == "__main__" and USE_FORK:
-            print("\nUsing 'fork' multiprocessing method (faster but less reliable)")
-        
-        # Print which methods are being processed
-        if BERT_ONLY:
-            print("\nProcessing mode: BERT only")
-        elif DISCO_ONLY:
-            print("\nProcessing mode: DisCoCirc only")
-        else:
-            print("\nProcessing mode: Both BERT and DisCoCirc")
-        
-        # Set up a progress bar for WikiText articles
-        article_pbar = tqdm(total=total_articles, desc="WikiText Articles", position=0)
-        
-        # Initialize multiprocessing pool
-        with multiprocessing.Pool(processes=n_workers, initializer=None) as pool:
+        print(f"Using {n_workers} worker processes")
+
+        # process_sentence_batch now uses H_DIM & CP_RANK
+        proc_fn = partial(process_sentence_batch, d=H_DIM, cp_rank=CP_RANK)
+
+        # safe spawn unless --fork
+        if not USE_FORK:
+            multiprocessing.set_start_method("spawn", force=True)
+
+        with multiprocessing.Pool(n_workers) as pool, \
+             tqdm(total=28_475, desc="Articles") as art_pbar:
+
             for example in dataset:
-                article_count += 1
-                article_pbar.update(1)
-                
-                example_text = example["text"]
-                sents = chunk_text_into_sentences(example_text)
-                current_batch.extend(sents)
-                sentences_count += len(sents)
-                
-                # Process batch when it reaches batch_size
-                if len(current_batch) >= batch_size:
-                    # Create a dynamic status message based on which algorithms are active
-                    status_parts = []
-                    if not BERT_ONLY:
-                        status_parts.append(f"DisCoCirc: {corpus_results['discocirc_total_naive']:.2e}/{corpus_results['discocirc_total_optimized']:.2e}")
-                    if not DISCO_ONLY:
-                        status_parts.append(f"BERT: {corpus_results['bert_total_naive']:.2e}/{corpus_results['bert_total_optimized']:.2e}")
-                    
-                    progress_status = " | ".join(status_parts)
-                    article_pbar.set_postfix_str(f"{corpus_results['num_sentences']}/{sentences_count} sents | {progress_status}")
-                    
-                    # Process the batch in parallel
-                    batch_results = process_batch(current_batch)
-                    
-                    # Accumulate results
-                    for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
-                        corpus_results["discocirc_total_naive"] += disc_naive
-                        corpus_results["discocirc_total_optimized"] += disc_opt
-                        corpus_results["bert_total_naive"] += bert_naive
-                        corpus_results["bert_total_optimized"] += bert_opt
-                        corpus_results["sentence_details"].append({
-                            "discocirc_naive": disc_naive,
-                            "discocirc_optimized": disc_opt,
-                            "bert_naive": bert_naive,
-                            "bert_optimized": bert_opt,
-                            "token_count": seq_len
-                        })
-                    
-                    corpus_results["num_sentences"] += len(current_batch)
-                    current_batch = []
-            
-            # Process any remaining sentences
-            if current_batch:
-                batch_results = process_batch(current_batch)
-                for disc_naive, disc_opt, bert_naive, bert_opt, seq_len in batch_results:
-                    corpus_results["discocirc_total_naive"] += disc_naive
-                    corpus_results["discocirc_total_optimized"] += disc_opt
-                    corpus_results["bert_total_naive"] += bert_naive
-                    corpus_results["bert_total_optimized"] += bert_opt
-                    corpus_results["sentence_details"].append({
-                        "discocirc_naive": disc_naive,
-                        "discocirc_optimized": disc_opt,
-                        "bert_naive": bert_naive,
-                        "bert_optimized": bert_opt,
-                        "token_count": seq_len
-                    })
-                corpus_results["num_sentences"] += len(current_batch)
-        
-        article_pbar.close()
-        print(f"\nTotal processed sentences: {corpus_results['num_sentences']:,}")
+                art_pbar.update(1)
+                current_sent.extend(chunk_text_into_sentences(example["text"]))
+
+                if len(current_sent) >= batch_size:
+                    for res in pool.apply(proc_fn, (current_sent,)):
+                        corpus_results["discocirc_naive"] += res["disc_naive"]
+                        corpus_results["discocirc_cp"] += res["disc_cp"]
+                        corpus_results["bert_vanilla"] += res["bert_naive"]
+                        corpus_results["bert_flash"] += res["bert_opt"]
+                        corpus_results["num_sentences"] += 1
+                    current_sent.clear()
+
+            # flush remainder
+            if current_sent:
+                for res in pool.apply(proc_fn, (current_sent,)):
+                    corpus_results["discocirc_naive"] += res["disc_naive"]
+                    corpus_results["discocirc_cp"] += res["disc_cp"]
+                    corpus_results["bert_vanilla"] += res["bert_naive"]
+                    corpus_results["bert_flash"] += res["bert_opt"]
+                    corpus_results["num_sentences"] += 1
+    # ================================================================== FILE
     else:
         file_path = os.path.join(os.path.dirname(__file__), "the_raven.txt")
-        if os.path.exists(file_path):
-            print(f"Loading text file: {file_path}")
-            text = load_text_file(file_path)
-        else:
-            text = "The big dog quickly chased a ball in the yard."
-        
-        # Print which methods are being processed
-        if BERT_ONLY:
-            print("\nProcessing mode: BERT only")
-        elif DISCO_ONLY:
-            print("\nProcessing mode: DisCoCirc only")
-        else:
-            print("\nProcessing mode: Both BERT and DisCoCirc")
-        
+        text = load_text_file(file_path) if os.path.exists(file_path) \
+               else "The big dog quickly chased a ball in the yard."
         sentences = chunk_text_into_sentences(text)
+
         corpus_results = estimate_corpus_complexity_from_sentences(
-            sentences, d=d, disco_factor=disco_factor, bert_optim_factor=bert_optim_factor,
-            use_progress_bar=True
+            sentences,
+            d=H_DIM,
+            cp_rank=CP_RANK,
+            use_progress_bar=True,
         )
-    
-    print("\n" + "="*60)
-    print("[Corpus Complexity Analysis (Optimized and Unoptimized)]")
-    print(f"Number of sentences: {corpus_results['num_sentences']}")
-    
-    # DisCoCirc results
-    if DISCO_ONLY:
-        print("\n-- DisCoCirc --")
-        print("N/A (DisCoCirc-only mode)")
-    else:
-        print("\n-- DisCoCirc (Aggregated) --")
-        print(f"Naive Total FLOPs:     {corpus_results['discocirc_total_naive']:,.2f}")
-        print(f"Optimized Total FLOPs: {corpus_results['discocirc_total_optimized']:,.2f}")
-    
-    # BERT results
-    print("\n-- BERT-base (Aggregated) --")
-    if DISCO_ONLY:
-        print("N/A (DisCoCirc-only mode)")
-    else:
-        print(f"Naive Total FLOPs:     {corpus_results['bert_total_naive']:,.0f}")
-        print(f"Optimized Total FLOPs: {corpus_results['bert_total_optimized']:,.0f}")
-    
-    # If not in BERT-only mode, show comparative improvement
-    if not BERT_ONLY and not DISCO_ONLY:
-        naive_improvement = 100 * (
-            corpus_results['bert_total_naive'] - corpus_results['discocirc_total_naive']
-        ) / corpus_results['bert_total_naive'] if corpus_results['bert_total_naive'] else 0
-        
-        optimized_improvement = 100 * (
-            corpus_results['bert_total_optimized'] - corpus_results['discocirc_total_optimized']
-        ) / corpus_results['bert_total_optimized'] if corpus_results['bert_total_optimized'] else 0
-        
-        print("\n-- Improvement of DisCoCirc over BERT (Aggregated) --")
-        print(f"Naive:     DisCoCirc uses {naive_improvement:.2f}% fewer FLOPs than BERT-base")
-        print(f"Optimized: DisCoCirc uses {optimized_improvement:.2f}% fewer FLOPs than BERT-base")
-    elif BERT_ONLY:
-        print("\n-- BERT-only mode: DisCoCirc comparison not available --")
-    elif DISCO_ONLY:
-        print("\n-- DisCoCirc-only mode: BERT comparison not available --")
+
+    # ---------------------------------------------------------------- summary
+    print("\n" + "=" * 60)
+    print("[Corpus-level FLOP Totals]")
+    print(f"Sentences processed : {corpus_results['num_sentences']:,}")
+    print(f"Full-rank DisCoCirc : {corpus_results['discocirc_naive']:,.2e}")
+    print(f"CP-rank-{CP_RANK}   : {corpus_results['discocirc_cp']:,.2e}")
+    print(f"BERT vanilla        : {corpus_results['bert_vanilla']:,.2e}")
+    print(f"BERT FlashAttention : {corpus_results['bert_flash']:,.2e}")
+
+    if not (BERT_ONLY or DISCO_ONLY):
+        naive_gain = 100 * (corpus_results["bert_vanilla"]
+                            - corpus_results["discocirc_naive"]
+                           ) / corpus_results["bert_vanilla"]
+        cp_gain = 100 * (corpus_results["bert_flash"]
+                          - corpus_results["discocirc_cp"]
+                         ) / corpus_results["bert_flash"]
+        print("\nDisCoCirc vs BERT:")
+        print(f"  Full-rank saves : {naive_gain:6.2f}% FLOPs over vanilla BERT")
+        print(f"  CP-rank saves   : {cp_gain:6.2f}% FLOPs over Flash-BERT")

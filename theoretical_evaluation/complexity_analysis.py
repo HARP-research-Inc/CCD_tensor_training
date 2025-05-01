@@ -106,7 +106,7 @@ def bert_forward_flops(sentence: str,
 # 4) Example comparison
 ###############################################################################
 if __name__ == "__main__":
-    sentence = "Jack loves Diane."
+    sentence = "Once upon a midnight dreary, while I pondered, weak and weary, over many a quaint and curious volume of forgotten lore, while I nodded, nearly napping, suddenly there came a tapping, as of some one gently rapping, rapping at my chamber door."
 
     H = 384        # Unified dimensionality for all systems
     R = 50         # CP rank
