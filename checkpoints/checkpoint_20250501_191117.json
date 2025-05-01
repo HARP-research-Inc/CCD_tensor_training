@@ -1,0 +1,12 @@
+{
+"num_sentences": 2844,
+"discocirc_naive": 770840597760.0,
+"discocirc_cp": 4872441600.0,
+"bert_vanilla": 15020297799804.0,
+"bert_flash": 14592699998208.0,
+"checkpoint_info": {
+"timestamp": "20250501_191117",
+"is_final": false,
+"status": "in_progress"
+}
+}
