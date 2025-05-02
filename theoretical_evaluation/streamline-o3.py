@@ -11,11 +11,12 @@ Highlights of this clean rewrite
 * Works identical for WikiText streaming or plain files
 * Progress tracking with ETA display
 * Resume from checkpoint functionality
+* Preprocessing cache for faster repeated runs
 """
 
 from __future__ import annotations
 
-import argparse, json, math, os, sys, time, gc, subprocess, re
+import argparse, json, math, os, sys, time, gc, subprocess, re, hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 from functools import partial
@@ -37,6 +38,51 @@ WIKITEXT_STATS = {
     "sentences": 4548336,
     "tokens": 97989460
 }
+
+# Cache directory for preprocessed text
+CACHE_DIR = Path("cache")
+CACHE_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# ---------------------------  ── CACHE  ──  ------------------------------
+# ---------------------------------------------------------------------------
+
+def get_cache_key(text: str, dataset_name: str = "", chunk_id: int = 0) -> str:
+    """Generate a cache key for the text."""
+    if dataset_name:
+        # For dataset chunks, use deterministic ID
+        return f"{dataset_name}_{chunk_id}"
+    else:
+        # For arbitrary text, use hash
+        return hashlib.md5(text.encode()).hexdigest()
+
+def save_to_cache(sentences: List[str], cache_key: str):
+    """Save preprocessed sentences to cache."""
+    cache_file = CACHE_DIR / f"{cache_key}.json"
+    with open(cache_file, 'w', encoding='utf-8') as f:
+        json.dump(sentences, f)
+    return cache_file
+
+def load_from_cache(cache_key: str) -> Optional[List[str]]:
+    """Load preprocessed sentences from cache if available."""
+    cache_file = CACHE_DIR / f"{cache_key}.json"
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARN] Failed to load cache: {e}")
+    return None
+
+def get_cache_stats():
+    """Return statistics about the cache."""
+    files = list(CACHE_DIR.glob("*.json"))
+    total_size = sum(f.stat().st_size for f in files)
+    return {
+        "num_files": len(files),
+        "total_size_mb": total_size / (1024 * 1024),
+        "last_modified": max((f.stat().st_mtime for f in files), default=0)
+    }
 
 # ---------------------------------------------------------------------------
 # ---------------------------  ── GPU / DEVICE  ──  -------------------------
@@ -152,15 +198,75 @@ def bert_flops(sent: str | int, flash: bool = False) -> Tuple[float, int]:
 # ---------------------------  ── SENTENCE SPLIT  ──  -----------------------
 # ---------------------------------------------------------------------------
 
-def sentences_spacy(text: str) -> List[str]:
+def sentences_spacy(text: str, use_cache: bool = True, cache_key: str = "", 
+                   dataset_name: str = "", chunk_id: int = 0, fast_mode: bool = False) -> List[str]:
+    """Split text into sentences using spaCy with caching support."""
+    if not text or len(text.strip()) == 0:
+        return []
+    
+    # Generate cache key if not provided
+    if use_cache and not cache_key:
+        cache_key = get_cache_key(text, dataset_name, chunk_id)
+        
+    # Try to load from cache first
+    if use_cache:
+        cached_sentences = load_from_cache(cache_key)
+        if cached_sentences:
+            return cached_sentences
+    
+    # For very long texts, use a more efficient approach
+    if len(text) > 100000 or fast_mode:  # 100KB threshold or fast mode
+        if len(text) > 100000:
+            print(f"[INFO] Processing large text ({len(text)/1024:.1f} KB)")
+        
+        # Fast mode: simple paragraph and sentence splitting
+        if fast_mode:
+            sentences = []
+            paragraphs = text.split('\n')
+            for para in paragraphs:
+                if para.strip():
+                    # Simple sentence splitting by punctuation
+                    for sent in re.split(r'(?<=[.!?])\s+', para):
+                        if sent.strip():
+                            sentences.append(sent.strip())
+            if use_cache:
+                save_to_cache(sentences, cache_key)
+            return sentences
+        
+        # Regular processing for large text: split by newlines first
+        paragraphs = text.split('\n')
+        sentences = []
+        for para in tqdm(paragraphs, desc="Parsing paragraphs", leave=False):
+            if para.strip():
+                try:
+                    doc = NLPROC(para)
+                    sentences.extend([s.text.strip() for s in doc.sents if s.text.strip()])
+                except Exception as e:
+                    print(f"[WARN] Error parsing paragraph: {e}")
+                    # Fallback to simple sentence splitting
+                    sentences.extend([s.strip() for s in para.split('.') if s.strip()])
+        
+        # Cache the results
+        if use_cache:
+            save_to_cache(sentences, cache_key)
+        return sentences
+    
+    # Normal case for smaller texts
     doc = NLPROC(text)
-    return [s.text.strip() for s in doc.sents if s.text.strip()]
+    sentences = [s.text.strip() for s in doc.sents if s.text.strip()]
+    
+    # Cache the results
+    if use_cache:
+        save_to_cache(sentences, cache_key)
+    return sentences
 
 # fallback splitter for BERT‑only mode
-
 def crude_split(text: str) -> List[str]:
+    """Simple sentence splitter that doesn't require SpaCy."""
     sents = []
     for line in text.split("\n"):
+        if not line.strip():
+            continue
         for sub in line.split('.'):
             sub = sub.strip()
             if sub:
@@ -238,17 +344,30 @@ def format_flops(flops):
 
 
 def save_ckpt(stats: Dict, final: bool = False, dataset_position: int = None):
+    """Save checkpoint with processing stats and position."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     fname = CKPT_DIR / f"checkpoint_{ts}.json"
-    data = {
-        **stats,
-        "checkpoint_info": {
-            "timestamp": ts,
-            "is_final": final,
-            "dataset_position": dataset_position
-        },
-    }
-    json.dump(data, open(fname, "w"), indent=2)
+    
+    # Ensure dataset_position is saved
+    data = {**stats}
+    if dataset_position is not None:
+        # Store in both places for backward compatibility
+        data["processed_examples"] = dataset_position
+        if "checkpoint_info" not in data:
+            data["checkpoint_info"] = {}
+        data["checkpoint_info"]["dataset_position"] = dataset_position
+    
+    # Add timestamp
+    if "checkpoint_info" not in data:
+        data["checkpoint_info"] = {}
+    data["checkpoint_info"]["timestamp"] = ts
+    data["checkpoint_info"]["is_final"] = final
+    
+    # Save to file
+    with open(fname, "w") as f:
+        json.dump(data, f, indent=2)
+    
+    # Update latest checkpoint pointer
     (CKPT_DIR / "latest_checkpoint.txt").write_text(str(fname))
     return fname
 
@@ -264,7 +383,12 @@ def load_latest_checkpoint():
         if ckpt_path.exists():
             print(f"Loading checkpoint: {ckpt_path}")
             with open(ckpt_path, 'r') as f:
-                return json.load(f)
+                checkpoint = json.load(f)
+                # Debug info about position
+                pos1 = checkpoint.get("processed_examples", None)
+                pos2 = checkpoint.get("checkpoint_info", {}).get("dataset_position", None)
+                print(f"Checkpoint positions: processed_examples={pos1}, dataset_position={pos2}")
+                return checkpoint
     except Exception as e:
         print(f"Error loading checkpoint: {e}")
     
@@ -285,7 +409,10 @@ def run_stream(
     ckpt_every: int,
     total_examples: int = None,
     resume_position: int = 0,
-    est_runtime_minutes: int = None
+    est_runtime_minutes: int = None,
+    use_cache: bool = True,
+    fast_mode: bool = False,
+    checkpoint_stats: Dict = None
 ):
     stats = {
         "num_sentences": 0,
@@ -294,19 +421,43 @@ def run_stream(
         "bert_vanilla": 0.0,
         "bert_flash": 0.0,
         "start_time": time.time(),
-        "processed_examples": resume_position
+        "processed_examples": resume_position,
+        "last_update_time": time.time()
     }
+    
+    # Restore stats from checkpoint if available
+    if checkpoint_stats:
+        for key in ["num_sentences", "discocirc_naive", "discocirc_cp", "bert_vanilla", "bert_flash"]:
+            if key in checkpoint_stats:
+                stats[key] = checkpoint_stats[key]
+        print(f"Restored stats from checkpoint: {stats['num_sentences']} sentences processed")
 
-    # Skip to resume position if needed
+    # Skip to resume position if needed - IMPORTANT PART FOR RESUME FUNCTIONALITY
     if resume_position > 0:
-        print(f"Resuming from position {resume_position}")
-        for _ in range(resume_position):
+        # Explicitly check what kind of dataset we're working with
+        if hasattr(dataset_iter, '__iter__') and not hasattr(dataset_iter, '__getitem__'):
+            # It's a regular iterator/generator, need to consume items
+            print(f"Skipping to position {resume_position} in streaming dataset...")
             try:
-                next(dataset_iter)
+                iterator = iter(dataset_iter)
+                for _ in tqdm(range(resume_position), desc="Skipping", unit="examples"):
+                    next(iterator)
+                # Reset the iterator to the current position
+                dataset_iter = iterator
+                print(f"Successfully skipped {resume_position} examples")
             except StopIteration:
                 print("Warning: Resume position exceeds dataset length")
-                break
-
+        elif isinstance(dataset_iter, list):
+            # It's a list, so we can slice it
+            print(f"Slicing list dataset to start at position {resume_position}")
+            if resume_position < len(dataset_iter):
+                dataset_iter = dataset_iter[resume_position:]
+            else:
+                print("Warning: Resume position exceeds dataset length")
+                dataset_iter = []
+        else:
+            print(f"Warning: Unknown dataset type, can't skip to position {resume_position}")
+    
     workers = max(1, math.floor(mp.cpu_count() * 0.75))
     process_fn = partial(process_batch, d=d, cp_rank=cp_rank, do_disco=do_disco, do_bert=do_bert)
     
@@ -328,6 +479,7 @@ def run_stream(
                 examples_processed += 1
                 stats["processed_examples"] = examples_processed
                 
+                # Progress reporting
                 if progress_bar:
                     progress_bar.update(1)
                 elif time.time() - last_status_time > 10:  # Status update every 10 seconds
@@ -372,7 +524,39 @@ def run_stream(
                     print("=" * 40)
                     last_status_time = time.time()
                 
-                current.extend(sentences_spacy(ex["text"]))
+                # Verbose processing status
+                if time.time() - stats.get("last_update_time", 0) > 2:
+                    # Give feedback during sentence parsing to show progress
+                    print(f"[Processing example {examples_processed}/{total_examples if total_examples else '?'}, text size: {len(ex['text'])/1024:.1f} KB]", end="\r", flush=True)
+                    stats["last_update_time"] = time.time()
+                
+                # Sentence parsing with caching
+                try:
+                    cache_key = get_cache_key(ex["text"], "wikitext", examples_processed)
+                    new_sents = sentences_spacy(
+                        ex["text"], 
+                        use_cache=use_cache, 
+                        cache_key=cache_key,
+                        dataset_name="wikitext", 
+                        chunk_id=examples_processed,
+                        fast_mode=fast_mode
+                    )
+                    
+                    if len(new_sents) == 0 and len(ex["text"].strip()) > 0:
+                        # Fallback if spaCy failed
+                        print(f"[WARN] SpaCy failed to split text into sentences, falling back to crude split")
+                        new_sents = crude_split(ex["text"])
+                        # Cache the fallback result too
+                        if use_cache:
+                            save_to_cache(new_sents, cache_key)
+                            
+                    current.extend(new_sents)
+                except Exception as e:
+                    print(f"[ERROR] Failed to process example {examples_processed}: {e}")
+                    print("Attempting to continue with next example...")
+                    continue
+                
+                # Process sentences in batches
                 while len(current) >= batch_est:
                     slice_size = len(current)
                     while slice_size:
@@ -406,6 +590,7 @@ def run_stream(
                         
             # flush remainder
             if current:
+                print(f"Processing remaining {len(current)} sentences...")
                 for res in pool.apply(process_fn, (current,)):
                     stats["discocirc_naive"] += res["disc_naive"]
                     stats["discocirc_cp"] += res["disc_cp"]
@@ -432,6 +617,81 @@ def run_stream(
     return stats
 
 # ---------------------------------------------------------------------------
+# ---------------------------  ── PREPROCESSING  ──  -----------------------
+# ---------------------------------------------------------------------------
+
+def preprocess_dataset_chunk(chunk):
+    """Process a chunk of dataset examples using SpaCy."""
+    global NLPROC
+    if NLPROC is None:
+        NLPROC = spacy.load("en_core_web_sm", disable=["ner"])
+    
+    chunk_id, examples = chunk
+    all_sentences = []
+    
+    for idx, example in enumerate(examples):
+        text = example["text"]
+        cache_key = get_cache_key(text, "wikitext", chunk_id * 1000 + idx)
+        
+        # Try to get from cache first
+        cached = load_from_cache(cache_key)
+        if cached:
+            all_sentences.extend(cached)
+            continue
+            
+        # Process with SpaCy and cache
+        try:
+            sentences = sentences_spacy(text, use_cache=True, cache_key=cache_key, fast_mode=False)
+            all_sentences.extend(sentences)
+        except Exception as e:
+            print(f"[ERROR] Failed to process example in chunk {chunk_id}: {e}")
+            # Fallback to crude split
+            sentences = crude_split(text)
+            all_sentences.extend(sentences)
+            # Still cache the result
+            save_to_cache(sentences, cache_key)
+    
+    return all_sentences
+
+def preprocess_dataset(dataset, num_workers=None, chunk_size=10, fast_mode=False):
+    """Preprocess an entire dataset in parallel."""
+    if num_workers is None:
+        num_workers = max(1, mp.cpu_count() - 1)
+    
+    # Convert streaming dataset to list and chunk it
+    print(f"[PREPROCESS] Collecting dataset examples...")
+    all_examples = []
+    for i, example in enumerate(tqdm(dataset, desc="Collecting examples")):
+        all_examples.append(example)
+        # Limit collection for debugging/testing
+        if i >= 100000:  # Adjust as needed
+            break
+    
+    total_examples = len(all_examples)
+    print(f"[PREPROCESS] Processing {total_examples} examples with {num_workers} workers")
+    
+    # Split into chunks
+    chunks = []
+    for i in range(0, total_examples, chunk_size):
+        chunk_id = i // chunk_size
+        chunk_examples = all_examples[i:i+chunk_size]
+        chunks.append((chunk_id, chunk_examples))
+    
+    # Process chunks in parallel
+    all_sentences = []
+    with mp.Pool(num_workers) as pool:
+        results = list(tqdm(
+            pool.imap(preprocess_dataset_chunk, chunks),
+            total=len(chunks),
+            desc="Processing chunks"
+        ))
+        for sentences in results:
+            all_sentences.extend(sentences)
+    
+    print(f"[PREPROCESS] Extracted {len(all_sentences)} sentences")
+    return all_sentences
+
+# ---------------------------------------------------------------------------
 # ---------------------------  ── CLI  ──  ----------------------------------
 # ---------------------------------------------------------------------------
 
@@ -451,6 +711,12 @@ def cli():
     p.add_argument("--est-runtime", type=int, help="estimated runtime in minutes (for progress bar when total is unknown)")
     p.add_argument("--dataset", choices=["wikitext-2", "wikitext-103-v1"], default="wikitext-103-v1", 
                   help="HuggingFace dataset version to use")
+    p.add_argument("--fast", action="store_true", help="use faster text processing (less accurate but much quicker)")
+    p.add_argument("--sample", type=float, help="process only a percentage of dataset (0.0-1.0)")
+    p.add_argument("--preprocess", action="store_true", help="preprocess dataset in parallel before running analysis")
+    p.add_argument("--use-cache", action="store_true", help="use cached preprocessing results")
+    p.add_argument("--clear-cache", action="store_true", help="clear preprocessing cache before running")
+    p.add_argument("--workers", type=int, help="number of worker processes for preprocessing")
     return p.parse_args()
 
 
@@ -459,19 +725,36 @@ if __name__ == "__main__":
     do_bert = not args.disco
     do_disco = not args.bert
 
+    # Clear cache if requested
+    if args.clear_cache:
+        import shutil
+        print(f"Clearing preprocessing cache...")
+        if CACHE_DIR.exists():
+            shutil.rmtree(CACHE_DIR)
+        CACHE_DIR.mkdir(exist_ok=True)
+    
+    # Print cache stats if it exists and we're using it
+    if args.use_cache and CACHE_DIR.exists():
+        stats = get_cache_stats()
+        if stats["num_files"] > 0:
+            print(f"Cache stats: {stats['num_files']} files, {stats['total_size_mb']:.2f} MB")
+            last_modified = datetime.fromtimestamp(stats["last_modified"])
+            print(f"Last modified: {last_modified}")
+
     init_device(force_cpu=args.cpu, specific_gpu=args.gpu)
-    NLPROC = spacy.load("en_core_web_sm") if do_disco else None
+    NLPROC = spacy.load("en_core_web_sm", disable=["ner"] if args.fast else []) if do_disco else None
 
     batch_est = args.batch or guess_batch_size()
     print("Initial batch estimate:", batch_est)
     
     # Check for checkpoint to resume from
     resume_position = 0
+    checkpoint_stats = {}
     if args.resume:
         checkpoint = load_latest_checkpoint()
         if checkpoint:
             # Restore previous statistics
-            stats = {
+            checkpoint_stats = {
                 "num_sentences": checkpoint.get("num_sentences", 0),
                 "discocirc_naive": checkpoint.get("discocirc_naive", 0.0),
                 "discocirc_cp": checkpoint.get("discocirc_cp", 0.0),
@@ -479,9 +762,15 @@ if __name__ == "__main__":
                 "bert_flash": checkpoint.get("bert_flash", 0.0),
             }
             
-            # Get resume position
-            resume_position = checkpoint.get("checkpoint_info", {}).get("dataset_position", 0)
-            print(f"Restored stats: {stats['num_sentences']} sentences processed")
+            # IMPORTANT: Determine resume position correctly
+            # First check processed_examples (directly in the root)
+            if "processed_examples" in checkpoint:
+                resume_position = checkpoint["processed_examples"]
+            # Then check checkpoint_info.dataset_position
+            elif "checkpoint_info" in checkpoint and "dataset_position" in checkpoint["checkpoint_info"]:
+                resume_position = checkpoint["checkpoint_info"]["dataset_position"]
+            
+            print(f"Restored stats: {checkpoint_stats['num_sentences']} sentences processed")
             print(f"Will resume from position {resume_position}")
         else:
             print("No checkpoint found, starting from beginning")
@@ -493,31 +782,123 @@ if __name__ == "__main__":
             print("datasets not installed – install or use plain file mode"); sys.exit(1)
         
         print(f"Loading dataset: {args.dataset}")
-        ds = load_dataset("wikitext", args.dataset, split="train", streaming=True)
         
-        # Use the correct total based on the dataset version
+        # Set default total examples based on dataset version
         if args.dataset == "wikitext-103-v1":
             total_examples = args.total or WIKITEXT_STATS["articles"]
+        else:
+            # Default fallback if we don't have exact stats
+            total_examples = args.total or 36718
+        
+        # Handle streaming dataset and resuming position
+        if args.resume and resume_position > 0:
+            print(f"Will use non-streaming dataset for better resume handling")
+            ds = load_dataset("wikitext", args.dataset, split="train", streaming=False)
+            
+            # Apply sampling if requested
+            if args.sample and 0.0 < args.sample <= 1.0:
+                sample_size = int(len(ds) * args.sample)
+                print(f"Sampling {args.sample:.1%} of dataset ({sample_size:,} examples)")
+                
+                # Use deterministic sampling
+                import random
+                random.seed(42)  # For reproducibility
+                indices = random.sample(range(len(ds)), sample_size)
+                ds = ds.select(indices)
+                
+                # Update total if needed
+                if total_examples > sample_size:
+                    total_examples = sample_size
+            
+            # Convert to list for precise resuming
+            print("Converting dataset to list for precise resuming...")
+            ds = list(ds)
+            
+            # Resume from specific position
+            if resume_position < len(ds):
+                print(f"Will resume from example {resume_position} of {len(ds)}")
+                total_examples = len(ds)
+            else:
+                print(f"Warning: Resume position {resume_position} exceeds dataset length {len(ds)}")
+                resume_position = 0
+        else:
+            # Regular streaming approach
+            ds = load_dataset("wikitext", args.dataset, split="train", streaming=True)
+            
+            # Apply sampling if requested
+            if args.sample and 0.0 < args.sample <= 1.0:
+                sample_size = int(total_examples * args.sample)
+                print(f"Sampling {args.sample:.1%} of dataset ({sample_size:,} examples)")
+                total_examples = sample_size
+                
+                # Apply sampling to streaming dataset
+                import random
+                random.seed(42)  # For reproducibility
+                ds = ds.filter(lambda _, idx: random.random() < args.sample, with_indices=True)
+        
+        # Print dataset statistics
+        if args.dataset == "wikitext-103-v1":
             print(f"WikiText-103 statistics:")
             print(f"  - Articles: {WIKITEXT_STATS['articles']:,}")
             print(f"  - Sentences: {WIKITEXT_STATS['sentences']:,}")
             print(f"  - Tokens: {WIKITEXT_STATS['tokens']:,}")
-        else:
-            # Default fallback if we don't have exact stats
-            total_examples = args.total or 36718
+            print(f"Will process approximately {total_examples:,} examples")
+        
+        # Special case for fast mode
+        if args.fast:
+            print("[FAST MODE] Using simplified processing for speed")
+        
+        # Preprocessing mode - process whole dataset upfront
+        if args.preprocess:
+            print(f"[PREPROCESS] Preprocessing entire dataset...")
+            num_workers = args.workers or max(1, mp.cpu_count() - 1)
             
-        stats = run_stream(ds, batch_est, 768, 50, do_disco, do_bert, args.ckpt, 
-                          total_examples=total_examples, resume_position=resume_position,
-                          est_runtime_minutes=args.est_runtime)
+            # Preprocess and get all sentences
+            all_sentences = preprocess_dataset(
+                ds, 
+                num_workers=num_workers, 
+                chunk_size=10,
+                fast_mode=args.fast
+            )
+            
+            print(f"[PREPROCESS] Running analysis on {len(all_sentences)} preprocessed sentences")
+            
+            # Create a simple dataset from the preprocessed sentences
+            preprocessed_dataset = [{"text": " ".join(all_sentences)}]
+            
+            # Run on the preprocessed sentences
+            stats = run_stream(
+                preprocessed_dataset, 
+                batch_est, 768, 50, 
+                do_disco, do_bert, args.ckpt,
+                use_cache=args.use_cache,
+                fast_mode=args.fast,
+                checkpoint_stats=checkpoint_stats if args.resume else None
+            )
+        else:
+            # Regular streaming mode
+            stats = run_stream(
+                ds, batch_est, 768, 50, 
+                do_disco, do_bert, args.ckpt, 
+                total_examples=total_examples, 
+                resume_position=resume_position,
+                est_runtime_minutes=args.est_runtime,
+                use_cache=args.use_cache,
+                fast_mode=args.fast,
+                checkpoint_stats=checkpoint_stats if args.resume else None
+            )
     else:
         text = (
             Path(args.file).read_text(encoding="utf-8") if args.file else
             "Once upon a midnight dreary, while I pondered weak and weary."
         )
-        sents = sentences_spacy(text) if do_disco else crude_split(text)
+        sents = sentences_spacy(text, use_cache=args.use_cache, fast_mode=args.fast) if do_disco else crude_split(text)
         stats = run_stream(
             [{"text": " ".join(sents)}], batch_est, 768, 50, do_disco, do_bert, args.ckpt,
-            est_runtime_minutes=args.est_runtime
+            est_runtime_minutes=args.est_runtime,
+            use_cache=args.use_cache,
+            fast_mode=args.fast,
+            checkpoint_stats=checkpoint_stats if args.resume else None
         )
 
     print("\n=== Summary ===")
