@@ -16,6 +16,10 @@ import gc
 from datetime import datetime
 from pathlib import Path
 
+# enable CUDA_LAUNCH_BLOCKING
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+
 # Add datasets import at the top
 try:
     from datasets import load_dataset
