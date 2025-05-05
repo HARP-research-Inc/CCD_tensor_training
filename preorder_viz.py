@@ -20,174 +20,283 @@ def visualize_preorder(threads, eqs):
     for i in range(len(threads)):
         groups.setdefault(find(i), []).append(i)
 
-    # 2) Helpers to build each row-string for a single chain
-    def node_row(chain, stretch_to=None):
-        """Draw a row of nodes, with optional stretching to match another chain length"""
-        m = len(chain)
-        # If stretching is requested, use the target length
-        if stretch_to and stretch_to > m:
-            width = (stretch_to-1)*4 + 1
-        else:
-            width = (m-1)*4 + 1
-            
-        row = [' ']*width
-        for i, lbl in enumerate(chain):
-            row[i*4] = lbl
-        return ''.join(row)
-
-    def edge_row(chain, stretch_to=None):
-        """Draw edges between nodes, with optional stretching to match another chain length"""
-        # e.g. for 3 nodes: "|->-|->-|"
-        m = len(chain)
-        # If stretching is requested, use the target length
-        if stretch_to and stretch_to > m:
-            width = (stretch_to-1)*4 + 1
-            final_pipe_pos = width
-        else:
-            width = (m-1)*4 + 1
-            final_pipe_pos = (m-1)*4
-            
-        row = [' ']*width
-        for i in range(m-1):
-            seg = "|->-"
-            for j,ch in enumerate(seg):
-                row[i*4 + j] = ch
+    # 2) Find positions where nodes should be placed for alignment
+    def calc_positions(group, eqs_in_group):
+        """Calculate positions for each node in the threads."""
+        # Start with default positions (4 spaces between nodes)
+        positions = {}  # (thread_idx, node_idx) -> position
+        for t in group:
+            for i in range(len(threads[t])):
+                positions[(t, i)] = i * 4
         
-        # Add final pipe character
-        if final_pipe_pos < width:
-            row[final_pipe_pos] = '|'
+        # Process each equivalence relation
+        for t1, d1, t2, d2 in eqs_in_group:
+            pos1 = positions[(t1, d1)]
+            pos2 = positions[(t2, d2)]
             
+            # Find the maximum position
+            max_pos = max(pos1, pos2)
+            
+            # Determine how much stretching is needed for each thread
+            if pos1 < max_pos:
+                # Thread 1 needs stretching
+                stretch(t1, d1, max_pos, positions)
+            
+            if pos2 < max_pos:
+                # Thread 2 needs stretching
+                stretch(t2, d2, max_pos, positions)
+        
+        return positions
+
+    def stretch(thread_idx, node_idx, target_pos, positions):
+        """Stretch a thread so that the specified node is at the target position."""
+        current_pos = positions[(thread_idx, node_idx)]
+        
+        if current_pos == target_pos:
+            return  # Already at target position
+        
+        # Calculate the stretch factor for this thread
+        if node_idx > 0:
+            # Stretch nodes before the aligned node
+            original_width = current_pos
+            stretch_factor = target_pos / original_width
+            
+            for i in range(node_idx):
+                # Adjust all previous positions proportionally
+                original_i_pos = i * 4
+                new_i_pos = int(original_i_pos * stretch_factor)
+                positions[(thread_idx, i)] = new_i_pos
+        
+        # Set the aligned node to the target position
+        positions[(thread_idx, node_idx)] = target_pos
+        
+        # Adjust positions of all nodes after the aligned node
+        for i in range(node_idx + 1, len(threads[thread_idx])):
+            positions[(thread_idx, i)] = target_pos + (i - node_idx) * 4
+
+    # 3) Helpers to draw the nodes and edges
+    def node_row(thread_idx, positions):
+        """Draw a row of nodes using calculated positions."""
+        thread = threads[thread_idx]
+        if not thread:
+            return ""
+            
+        # Find maximum position
+        max_pos = max(positions.get((thread_idx, i), 0) for i in range(len(thread)))
+        width = max_pos + 1
+        
+        row = [' '] * width
+        for i, lbl in enumerate(thread):
+            pos = positions.get((thread_idx, i), i*4)
+            if pos < width:
+                row[pos] = lbl
+        
         return ''.join(row)
 
-    def eq_row(depth, width, align_pos=None):
-        # Create a row with a '|' at position depth*4
-        row = [' ']*width
-        row[depth*4] = '|'
+    def edge_row(thread_idx, positions):
+        """Draw edges between nodes using calculated positions."""
+        thread = threads[thread_idx]
+        if len(thread) <= 1:
+            return ""
+            
+        # Find maximum position
+        max_pos = max(positions.get((thread_idx, i), 0) for i in range(len(thread)))
+        width = max_pos + 1
+        
+        row = [' '] * width
+        
+        # For each consecutive pair of nodes
+        for i in range(len(thread)-1):
+            pos1 = positions.get((thread_idx, i), i*4)
+            pos2 = positions.get((thread_idx, i+1), (i+1)*4)
+            
+            # Place the vertical bars
+            if pos1 < width:
+                row[pos1] = '|'
+            if pos2 < width:
+                row[pos2] = '|'
+            
+            # Fill in the arrow and dashes between them
+            if pos2 - pos1 > 3:  # Enough space for proper arrow
+                middle = pos1 + (pos2 - pos1) // 2
+                
+                # Place arrow in middle
+                if middle > pos1 and middle < pos2:
+                    row[middle - 1:middle + 2] = ['-', '>', '-']
+                
+                # Fill with dashes (leaving space for arrow)
+                for j in range(pos1+1, middle-1):
+                    row[j] = '-'
+                for j in range(middle+2, pos2):
+                    row[j] = '-'
+            elif pos2 - pos1 == 3:  # Just enough for >
+                row[pos1+1:pos1+3] = ['-', '>']
+            elif pos2 - pos1 == 2:  # Just enough for >
+                row[pos1+1] = '>'
+            # If gap is 1, just have two |'s next to each other
+        
         return ''.join(row)
 
-    # 3) For each group, either draw as one tree (if eqs) or as standalone chains
+    def connection_row(t1, d1, t2, d2, positions):
+        """Draw a vertical connection between equivalent nodes."""
+        pos1 = positions.get((t1, d1))
+        max_pos = max(pos1, positions.get((t2, d2)))
+        width = max_pos + 1
+        
+        row = [' '] * width
+        if pos1 < width:
+            row[pos1] = '|'
+        
+        return ''.join(row)
+
+    # 4) Generate the visualization
     out_lines = []
     for group in groups.values():
-        # collect eqs restricted to this group
-        sub_eqs = [e for e in eqs if e[0] in group and e[2] in group]
-
-        if not sub_eqs:
-            # completely independent chains → blank line between them
+        # Collect equivalences for this group
+        eqs_in_group = [e for e in eqs if e[0] in group and e[2] in group]
+        
+        if not eqs_in_group:
+            # Independent chains - simple layout
             for t in group:
-                out_lines.append(node_row(threads[t]))
-                out_lines.append(edge_row(threads[t]))
-                out_lines.append("")    # gap
-            out_lines.pop()              # drop last extra blank
+                thread = threads[t]
+                out_lines.append("   ".join(thread))
+                out_lines.append("|" + "->-|".join([""] * len(thread)))
+                out_lines.append("")
+            
         else:
-            # build adjacency for eq-tree
+            # Connected threads - calculate positions for alignment
+            positions = calc_positions(group, eqs_in_group)
+            
+            # Build adjacency list for DFS traversal
             adj = {t: [] for t in group}
-            for t1,d1,t2,d2 in sub_eqs:
-                adj[t1].append((t2,d1,d2))
-                adj[t2].append((t1,d2,d1))
-
-            # Store thread depth info and positions for proper alignment
-            thread_info = {}
+            for t1, d1, t2, d2 in eqs_in_group:
+                adj[t1].append((t2, d1, d2))
+                adj[t2].append((t1, d2, d1))
+            
             visited = set()
             
-            def dfs(t, from_t=None, depth=0):
+            def dfs(t, from_t=None):
                 if t in visited:
                     return
                 visited.add(t)
                 
-                # Record this thread's position in output
-                start_line = len(out_lines)
-                thread_info[t] = {
-                    'start_line': start_line,
-                    'depth': depth,
-                    'width': (len(threads[t])-1)*4 + 1
-                }
-                
-                # Draw this chain
-                out_lines.append(node_row(threads[t]))
-                out_lines.append(edge_row(threads[t]))
+                # Draw this thread
+                out_lines.append(node_row(t, positions))
+                out_lines.append(edge_row(t, positions))
                 
                 # Follow equivalence edges
                 for (nbr, d_here, d_nbr) in adj[t]:
                     if nbr == from_t:
                         continue
                     
-                    # Draw vertical connection
-                    conn_width = max((len(threads[t])-1)*4 + 1, d_here*4 + 1)
-                    out_lines.append(eq_row(d_here, conn_width))
+                    # Draw connection
+                    out_lines.append(connection_row(t, d_here, nbr, d_nbr, positions))
                     
-                    # Continue DFS with neighbor
-                    dfs(nbr, t, depth+1)
-
-            # Start DFS at the first thread in group
+                    # Process neighbor
+                    dfs(nbr, t)
+            
+            # Start DFS from first thread in group
             dfs(group[0])
         
-        # Separate groups
+        # Add blank line between groups
         out_lines.append("")
-
-    # Drop trailing blank
-    if out_lines and out_lines[-1]=="":
+    
+    # Remove trailing blank line
+    if out_lines and out_lines[-1] == "":
         out_lines.pop()
-
-    print("\n".join(out_lines))
+    
+    result = "\n".join(out_lines)
+    print(result)
+    
+    # Also write to file for inspection
+    try:
+        with open("preorder_output.txt", "w", encoding="utf-8") as f:
+            f.write(result)
+    except Exception as e:
+        print(f"Note: Could not write to file: {e}")
 
 
 # ——— example usage:
 
-threads = [
-    ['A','B','C'],   # thread 0
-    ['D','E'],       # thread 1
+# Connection between endpoints of threads with different lengths
+print("Connecting endpoints of threads with different lengths:")
+
+# Example 1: Connect end of 2-node thread to end of 3-node thread
+threads1 = [
+    ['A', 'B'],           # thread 0 (length 2)
+    ['C', 'D', 'E'],      # thread 1 (length 3)
 ]
-# say A≡D  ⇒ (0,0) ≡ (1,0)
-equivalences = [
-    (0,0, 1,0)
+# B≡E (connect endpoint of thread 0 with endpoint of thread 1)
+eq1 = [
+    (0, 1, 1, 2)  # B≡E
 ]
+visualize_preorder(threads1, eq1)
 
-visualize_preorder(threads, equivalences)
-
-# More complex example
-threads_complex = [
-    ['A', 'B', 'C', 'D'],         # thread 0
-    ['E', 'F', 'G'],              # thread 1
-    ['H', 'I', 'J', 'K'],         # thread 2
-    ['L', 'M', 'N'],              # thread 3
+# Example 2: Connect end of 3-node thread to end of 5-node thread
+print("\nConnecting end of 3-node thread to end of 5-node thread:")
+threads2 = [
+    ['A', 'B', 'C'],                # thread 0 (length 3)
+    ['D', 'E', 'F', 'G', 'H'],      # thread 1 (length 5)
 ]
-
-# Structured equivalences that form a tree
-equivalences_complex = [
-    (0, 0, 1, 0),  # A≡E (connects thread 0 and 1)
-    (0, 2, 2, 0),  # C≡H (connects thread 0 and 2)
-    (2, 3, 3, 0),  # K≡L (connects thread 2 and 3)
+# C≡H (connect endpoint to endpoint)
+eq2 = [
+    (0, 2, 1, 4)  # C≡H
 ]
+visualize_preorder(threads2, eq2)
 
-print("\nMore complex example:")
-visualize_preorder(threads_complex, equivalences_complex)
-
-# After our complex example, add a simple test case with different length threads
-print("\nDifferent length threads with equivalent endpoints:")
-threads_endpoints = [
-    ['A', 'B'],         # thread 0 (shorter)
-    ['C', 'D', 'E'],    # thread 1 (longer)
+# Example 3: More complex case with three threads
+print("\nThree connected threads of different lengths:")
+threads3 = [
+    ['A', 'B', 'C'],            # thread 0 (length 3)
+    ['D', 'E', 'F', 'G'],       # thread 1 (length 4)
+    ['H', 'I'],                 # thread 2 (length 2)
 ]
-
-# Equivalent endpoints
-endpoints_eq = [
-    (0, 1, 1, 2),  # B≡E (the endpoints)
+# Connect endpoints: C≡G, B≡I
+eq3 = [
+    (0, 2, 1, 3),  # C≡G
+    (0, 1, 2, 1)   # B≡I
 ]
+visualize_preorder(threads3, eq3)
 
-visualize_preorder(threads_endpoints, endpoints_eq)
+# Example 3: A very specific test case to demonstrate proper stretching
+print("\nAlign test with stretching:")
 
-# Now let's add another complex example
-print("\nMultiple threads with different lengths:")
-threads_mixed = [
-    ['A', 'B', 'C'],          # thread 0
-    ['D', 'E', 'F', 'G', 'H'], # thread 1 (longer)
-    ['I', 'J'],               # thread 2 (shorter)
-]
-
-# Equivalences connecting threads of different lengths
-mixed_eq = [
-    (0, 2, 1, 4),  # C≡H (endpoint of 0 with endpoint of 1)
-    (1, 2, 2, 1),  # F≡J (middle of 1 with endpoint of 2)
+# Thread 0: length 2
+# Thread 1: length 3
+# Thread 2: length 2
+# Connect: (0,1) ≡ (1,2), (0,0) ≡ (2,1)
+threads_test = [
+    ['A', 'B'],      # Thread 0 
+    ['C', 'D', 'E'], # Thread 1
+    ['F', 'G'],      # Thread 2
 ]
 
-visualize_preorder(threads_mixed, mixed_eq)
+test_eq = [
+    (0, 1, 1, 2),  # B≡E
+    (0, 0, 2, 1),  # A≡G
+]
+
+# Manual implementation for this case
+def visualize_stretch_test():
+    # Manually align the threads with proper stretching
+    output = []
+    
+    # Thread 0 with B aligned to position 8
+    output.append("A       B")
+    output.append("|------>|")
+    output.append("|       |")
+    
+    # Thread 1 with E aligned to position 8
+    output.append("C   D   E")
+    output.append("|->-|->-|")
+    
+    # Thread 2 with G aligned to position 4
+    output.append("F   G")
+    output.append("|->-|")
+    
+    print("\n".join(output))
+
+# Try both the algorithm and the manual implementation
+visualize_preorder(threads_test, test_eq)
+print("\nManual implementation for comparison:")
+visualize_stretch_test()
