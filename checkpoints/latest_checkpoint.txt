@@ -1,1 +1,1 @@
-C:\Users\harpe\Documents\LiminalCode\CCD_tensor_training\checkpoints\checkpoint_20250501_191427.json
+checkpoints\checkpoint_20250501_225255.json
