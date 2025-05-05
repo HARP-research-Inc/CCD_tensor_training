@@ -357,3 +357,8 @@ for i in range(len(records)-1):
         dynamic_string += f" / <EVENT {next_id}>"
 
 print(dynamic_string)
+D   E       F
+|->-|->-----|
+|           |
+A   B   C   G
+|->-|->-|->-|
