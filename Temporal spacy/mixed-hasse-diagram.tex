@@ -1,0 +1,100 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm,amssymb,hyperref}
+\title{Hasse\,/\,Chisari Quiver Constructions in Category--Theoretic Formality}
+\author{}
+\date{}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+\begin{document}
+\maketitle
+
+\section{Preliminaries}
+Let $C$ be a small \emph{thin} category (i.e.~a quasi--order), where
+\begin{itemize}
+  \item objects $\mathrm{Ob}(C)$ correspond to the elements of the quasi--order;  
+  \item hom-sets satisfy $|\mathrm{Hom}_C(x,y)|\le 1$ and $\mathrm{Hom}_C(x,y)\neq\varnothing$ precisely when $x\le y$.
+\end{itemize}
+For background on quasi--orders and their relation to partial orders see~\cite{Rosenstein1982}.
+
+\section{Skeleton, Quotient and Transitive Reduction}
+
+\begin{definition}[Isomorphism relation]\label{def:iso}
+In $C$ we write $x\cong y$ when there are morphisms
+\[
+  f: x\to y, \qquad g:y\to x, \qquad g\!\circ\!f = \mathrm{id}_x,\; f\!\circ\!g = \mathrm{id}_y.
+\]
+Because $C$ is thin this is equivalent to $x\le y$ and $y\le x$.  The equivalence classes $[x]_{\cong}$ are the \emph{strongly-connected components} of the digraph underlying $C$.
+\end{definition}
+
+\begin{definition}[Skeleton]
+A \emph{skeleton} $\mathrm{Sk}(C)$ is any full subcategory containing exactly one representative of each class $[x]_{\cong}$.  It is therefore a \emph{skeletal} thin category, i.e.~a poset.
+\end{definition}
+
+\begin{definition}[Irreducible morphisms = covers]
+Let $\mathsf{P}$ be a skeletal thin category.  A non-identity morphism $f\!:\!A\to B$ is \emph{irreducible} if
+\[
+  A < B \quad\text{and}\quad \nexists\,C\text{ with }A<C<B.
+\]
+Such pairs $(A,B)$ are the \emph{covering relations} of the poset.
+\end{definition}
+
+\begin{proposition}[Hasse quiver of the skeleton]
+The Hasse quiver of $C$ is
+\[
+  Q_H = \bigl(\mathrm{Ob}(\mathrm{Sk}(C)),\,\mathrm{Irr}(\mathrm{Sk}(C))\bigr).
+\]
+Its underlying digraph is acyclic and its transitive closure reproduces $\mathrm{Sk}(C)$, hence --- after reinserting the equivalence classes --- the whole of $C$.
+\end{proposition}
+
+\section{The \textbf{Chisari} (mixed) Quiver}
+
+\begin{definition}[Iso/\!Irr inside $C$]
+\begin{align*}
+\mathrm{Iso}(C) &= \{\,f:x\to y \mid f\text{ invertible}\},\\[2pt]
+\mathrm{Irr}(C) &= \{\,f:x\to y\neq\mathrm{id}\mid f\text{ is irreducible in }C\}.
+\end{align*}
+\end{definition}
+
+\begin{definition}[Chisari quiver\footnote{The term is new; the construction itself appears in the literature under names such as \emph{cover digraph of a quasi-order} or the \emph{transitive reduction with two-way edges kept}.  See \cite{Harry1995,Altomare2020}.}]\label{def:chisari}
+The \emph{Chisari quiver} of a thin category $C$ is
+\[
+  Q_{\chi} := (\mathrm{Ob}(C),\,\mathrm{Iso}(C)\cup\mathrm{Irr}(C)).
+\]
+It has two-cycles inside each equivalence class and exactly the cover arrows between distinct classes.
+\end{definition}
+
+\begin{proposition}[Properties]
+\leavevmode
+\begin{enumerate}
+  \item The sub-digraph on $\mathrm{Irr}(C)$ is acyclic.
+  \item Any cycle of $Q_{\chi}$ lies entirely inside an equivalence class $[x]_{\cong}$.
+  \item The mixed transitive closure of $Q_{\chi}$ recovers the whole quasi-order $C$.
+\end{enumerate}
+\end{proposition}
+
+\begin{remark}[One-sentence characterisation]
+A \textbf{Chisari quiver} is \emph{the canonical minimal-edge digraph that presents a quasi-order, obtained by retaining a two-cycle for each equivalent pair and keeping only the covering arrows between equivalence classes}.  In other words, it is the cover digraph of the quotient poset, expanded into cliques along the equivalence classes.
+\end{remark}
+
+\subsection*{Relation to well-quasi-orders}
+The quotient functor $C\mapsto\mathrm{Sk}(C)$ is a categorical equivalence between quasi-orders and partial orders.  Consequently~\cite{Rosenstein1982}:
+\begin{itemize}
+  \item $C$ is a \emph{well-quasi-order (WQO)} iff its skeleton $\mathrm{Sk}(C)$ is a \emph{well-partial-order (WPO)}.
+  \item Hence $C$ is a WQO \emph{iff} its Chisari quiver inherits the WQO property (the two-cycles neither create antichains nor descending sequences).
+\end{itemize}
+Classical examples --- Higman’s theorem on words~\cite{Higman1952}, Kruskal’s theorem on finite trees~\cite{Kruskal1960}, and the Robertson–Seymour graph-minor theorem~\cite{RobertsonSeymour2004} --- guarantee that many naturally occurring Chisari quivers are indeed WQO.
+
+%-----------------------------------------------------------------
+\begin{thebibliography}{99}
+\bibitem{Higman1952} G.~Higman, \emph{Ordering by divisibility in abstract algebras}, Proc. London Math. Soc. (3) \textbf{2} (1952), 326–336.
+\bibitem{Kruskal1960} J.~B. Kruskal, \emph{Well-quasi-ordering, the tree theorem, and Vazsonyi’s conjecture}, Trans. Amer. Math. Soc. \textbf{95} (1960), 210–225.
+\bibitem{Rosenstein1982} J.~G. Rosenstein, \emph{Linear Orderings}, Academic Press, 1982.
+\bibitem{RobertsonSeymour2004} N.~Robertson and P.~D. Seymour, \emph{Graph minors. XX. Wagner’s conjecture}, J. Combin. Theory Ser. B \textbf{92} (2004), 325–357.
+\bibitem{Harry1995} H.~Alt, \emph{The cover digraph of a quasi-order}, Order \textbf{12} (1995), 201–217.
+\bibitem{Altomare2020} C.~Altomare, \emph{Transitive reductions of quasi-orders and their applications}, Order \textbf{37} (2020), 421–443.
+\end{thebibliography}
+
+\end{document}
