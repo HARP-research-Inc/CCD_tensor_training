@@ -40,3 +40,12 @@ tests/data
 data
 data_raw
 src/discocirc/dummy_weights
+checkpoints/checkpoint_20250501_192122.json
+checkpoints/checkpoint_20250501_191513.json
+checkpoints/checkpoint_20250501_191555.json
+checkpoints/checkpoint_20250501_191637.json
+checkpoints/checkpoint_20250501_191638.json
+/checkpoints
+/theoretical_evaluation/checkpoints
+checkpoints/latest_checkpoint.txt
+preorder_output.txt
