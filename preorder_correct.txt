@@ -1,0 +1,16 @@
+A   B   C
+|-->|-->|
+|       |
+D   E   |
+|-->|   |
+        |
+K   L   M
+|-->|-->|
+|       
+F   G   H   I   J
+|-->|-->|-->|-->|
+
+Connections:
+1. A≡D: Top-left connection between threads 0 and 1
+2. F≡K: Bottom-left connection between threads 2 and 3
+3. C≡M: Right-side connection between threads 0 and 2 (through thread 1's space) 
