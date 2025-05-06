@@ -79,7 +79,7 @@ class Box(Category):
         self.dimension = dimension
         self.composing_function = dummy_compose
         
-        self.grammar = None
+        self.grammar = "s"
 
         #these store labels, not the wires themselves.
         self.in_wires: tuple[ Wire ] = None
@@ -168,6 +168,9 @@ class Wire(Category):
         return self.label
 
 class Actor(Wire):
+    """
+    Actor wire. Works by "infecting" forward wires.
+    """
     def __init__(self, label: str, child: Box, actor_label: str, grammar = "n", dimension=384, ):
         super().__init__(label, child, grammar, dimension)
         self.name = actor_label
@@ -218,7 +221,7 @@ class Circuit(Category):
         
         self.add_node(parentBox) 
         self.add_node(childBox)
-        wire = Wire(f"{childBox.get_label()} -> {parentBox.get_label()},", childBox)
+        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
 
         parentBox.add_out_wire(wire)
         childBox.add_in_wire(wire)
@@ -237,7 +240,12 @@ def __prototype_parse(circuit: Circuit, string, spacy_model: spacy.load):
     box_refs: dict[str, Box] = {}
 
     for term in doc:
+        print(term.text, term.pos_)
+        if term.pos_ == "PUNCT":
+            continue
         for child in term.children:
+            if child.pos_ == "PUNCT":
+                continue
             
             #print(term.text, child.text)
 
@@ -252,12 +260,44 @@ def __prototype_parse(circuit: Circuit, string, spacy_model: spacy.load):
             child_reference = box_refs[child.text]
 
             circuit.add_wire(box_reference, child_reference)
-            
+
+
+
+def __parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token):
+    
+
+    child_box = Box(token.text)
+
+    #traversal is in the opposite direction of the tree.
+    circuit.add_wire(parent,child_box)
+
+    if(token.children == []):
+        #base case
+        leaves.append(child_box)
+    
+    for child in token.children:
+        print(token.text, child.text)
+        __parse_driver(circuit, child_box, leaves, child)
+
+def __tree_parse(circuit: Circuit, string, spacy_model: spacy.load):
+    doc = spacy_model(string)
+    root = [token for token in doc if token.head == token][0]
+
+    print(root.text, root.pos_)
+    root_box = Box(root.text)
+    leaves = list()
+    circuit.add_node(root_box)
+
+    __parse_driver(circuit, root_box, leaves, root)
+
+    return leaves
+
+
 
 
 
 if __name__ == "__main__":
-    sentence = "Cool tall Alice hates short lame Bob"
+    sentence = "the quick brown fox jumps over the lazy dog"
     spacy_model = "en_core_web_trf"
     nlp = spacy.load(spacy_model)
     print()
@@ -267,7 +307,7 @@ if __name__ == "__main__":
     print("\n")
     test = Circuit("discourse1")
 
-    __prototype_parse(test, sentence, nlp)
+    __tree_parse(test, sentence, nlp)
 
     print(test)
 
