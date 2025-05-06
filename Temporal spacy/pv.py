@@ -1,5 +1,3 @@
-# take in an underlying set
-us = underlying_set = {"a", "b", "c", "d", "e"}
 
 class named_set(set):
     """A set with a name attribute for better representation."""
@@ -61,8 +59,6 @@ class set_function:
             else:
                 return "f("+self.dname+")"
 
-
-
 class quiver:
     def __init__(self, Q0, Q1, src, tgt, name = None):
         # check types of inputs
@@ -81,13 +77,13 @@ class quiver:
         if not Q1.issubset(src.domain):
             raise ValueError("The set of arrows is not completely in the domain of the source function")
         
-        if Q0.isdisjoint(src.codomain):
+        if not src.codomain.issubset(Q0):
             raise ValueError("The vertices aren't defined in the codomain of the source function")
         
         if not Q1.issubset(tgt.domain):
             raise ValueError("The set of arrows is not completely in the domain of the target function")
         
-        if Q0.isdisjoint(tgt.codomain):
+        if not tgt.codomain.issubset(Q1):
             raise ValueError("The vertices aren't defined in the codomain of the target function")
         
         self.Q0 = Q0
@@ -136,25 +132,6 @@ class quiver:
                         return False
         return True
 
-
-
-
-# Example usage of named_set, set_function, and quiver
-vertices = set({"a", "b", "c"}, name="Vertices")
-arrows = set({"f", "g", "h"}, name="Arrows")
-
-# Define source and target functions
-src_mapping = {"f": "a", "g": "b", "h": "c"}
-tgt_mapping = {"f": "b", "g": "c", "h": "a"}
-
-# Create source and target functions
-src_func = set_function(arrows, vertices, src_mapping, name="src")
-tgt_func = set_function(arrows, vertices, tgt_mapping, name="tgt")
-
-# Create a quiver
-my_quiver = quiver(vertices, arrows, src_func, tgt_func, name="Quiver 1")
-print(my_quiver)
-
 class Preorder(quiver):
     def __init__(self, Q0, Q1, src, tgt, name="Preorder"):
         super().__init__(Q0, Q1, src, tgt, name=name)
@@ -179,39 +156,114 @@ class Preorder(quiver):
     def __str__(self):
         return f"{self.name} with {len(self.Q0)} elements and {len(self.Q1)} arrows"
 
+    def hasse_mixed_quiver(self):
+        V, Q1, src, tgt = self.Q0, self.Q1, self.src, self.tgt
 
-# Example usage of Preorder
-# Create a set of elements
-elements = set({"x", "y", "z"}, name="Elements")
+        eq_arrows    = set()  # will collect all (x,y) with x~y
+        cover_arrows = set()  # will collect all covering (x,y), x<y w/o midpoints
 
-# Define the arrows for a preorder
-# Need reflexive arrows (loops) for each element
-# and arrows representing the order relation
-preorder_arrows = set({
-    "x_x", "y_y", "z_z",  # Reflexive arrows (loops)
-    "x_y", "y_z", "x_z"   # Order relations (x ≤ y, y ≤ z, x ≤ z for transitivity)
-}, name="Relations")
+        for x in V:
+            for y in V:
+                if x == y:
+                    continue
 
-# Create source and target functions for the arrows
-# Each arrow "a_b" means a ≤ b
-source_map = {
-    "x_x": "x", "y_y": "y", "z_z": "z",
-    "x_y": "x", "y_z": "y", "x_z": "x"
-}
-target_map = {
-    "x_x": "x", "y_y": "y", "z_z": "z",
-    "x_y": "y", "y_z": "z", "x_z": "z"
-}
+                # is there arrow x→y?
+                has_xy = any(a for a in Q1 if src(a)==x and tgt(a)==y)
+                if not has_xy:
+                    continue
 
-# Create the source and target functions
-source_func = set_function(preorder_arrows, elements, source_map, name="source")
-target_func = set_function(preorder_arrows, elements, target_map, name="target")
+                # is there arrow y→x? if so, mark as equivalence
+                has_yx = any(a for a in Q1 if src(a)==y and tgt(a)==x)
+                if has_yx:
+                    eq_arrows.add((x,y))
+                    continue
 
-# Create the preorder
-my_preorder = Preorder(elements, preorder_arrows, source_func, target_func, name="≤ on {x,y,z}")
-print(my_preorder)
+                # otherwise x<y strictly — check for an intermediate z
+                mid = False
+                for z in V - {x,y}:
+                    if (any(a for a in Q1 if src(a)==x and tgt(a)==z)
+                    and any(a for a in Q1 if src(a)==z and tgt(a)==y)):
+                        mid = True
+                        break
+                if not mid:
+                    cover_arrows.add((x,y))
 
-# Test the helper methods
-print(f"Arrows from 'y': {my_preorder.arrows_from('y')}")
-print(f"Arrows to 'z': {my_preorder.arrows_to('z')}")
-print(f"Elements: {my_preorder.vertices()}")
+        # combine them
+        new_arrows = eq_arrows | cover_arrows
+
+        # build fresh source/target maps
+        src_map = { (x,y): x for (x,y) in new_arrows }
+        tgt_map = { (x,y): y for (x,y) in new_arrows }
+
+        src_fn = set_function(new_arrows, V, src_map, name=self.src.name+"_Hsrc")
+        tgt_fn = set_function(new_arrows, V, tgt_map, name=self.tgt.name+"_Htgt")
+
+        return quiver(V, new_arrows, src_fn, tgt_fn,
+                      name=f"HasseMixed({self.name})")
+
+class Poset(Preorder):
+    """
+    A partially ordered set (poset) is a preorder that is also antisymmetric:
+    if x ≤ y and y ≤ x then x must equal y.
+    """
+    def __init__(self, Q0, Q1, src, tgt, name="Poset"):
+        # First verify reflexivity + transitivity via the Preorder constructor
+        super().__init__(Q0, Q1, src, tgt, name=name)
+
+        # Antisymmetry check
+        for x in self.Q0:
+            for y in self.Q0:
+                if x == y:
+                    continue                     # loops are fine
+                # Does an arrow x → y exist?
+                x_le_y = any(a for a in self.Q1
+                             if self.src(a) == x and self.tgt(a) == y)
+                # Does an arrow y → x exist?
+                y_le_x = any(a for a in self.Q1
+                             if self.src(a) == y and self.tgt(a) == x)
+                if x_le_y and y_le_x:
+                    raise ValueError(
+                        f"Antisymmetry violated: both {x} ≤ {y} and {y} ≤ {x} "
+                        "present, so the relation is not a poset."
+                    )
+
+        # Thinness check
+        if sum(1 for a in self.Q1 if self.src(a)==x and self.tgt(a)==y) > 1:
+            raise ValueError("Non‑thin: multiple arrows from {x} to {y}")
+
+    def __str__(self):
+        return f"{self.name} with {len(self.Q0)} elements and {len(self.Q1)} arrows"
+    
+    def hasse_quiver(self):
+        """
+        Return a new quiver whose arrows are exactly the covering relations
+        of this poset (i.e. the Hasse diagram).
+        """
+        # 1) find all covering pairs (x,y):
+        covers = set()
+        for x in self.Q0:
+            for y in self.Q0:
+                if x == y:
+                    continue
+
+                # check x ≤ y (i.e. some arrow x→y exists in the transitive closure)
+                if any(a for a in self.Q1 if self.src(a) == x and self.tgt(a) == y):
+                    # now ensure there's no z with x < z < y
+                    is_cover = True
+                    for z in self.Q0:
+                        if z == x or z == y:
+                            continue
+                        if (any(a1 for a1 in self.Q1 if self.src(a1) == x and self.tgt(a1) == z)
+                         and any(a2 for a2 in self.Q1 if self.src(a2) == z and self.tgt(a2) == y)):
+                            is_cover = False
+                            break
+                    if is_cover:
+                        covers.add((x, y))
+
+        # 2) build a fresh quiver on the same vertices but only these arrows
+        arrows   = covers
+        src_map  = { (x,y): x for (x,y) in covers }
+        tgt_map  = { (x,y): y for (x,y) in covers }
+        src_fn   = set_function(arrows, self.Q0, src_map, name="hasse_src")
+        tgt_fn   = set_function(arrows, self.Q0, tgt_map, name="hasse_tgt")
+        return quiver(self.Q0, arrows, src_fn, tgt_fn, name=f"Hasse({self.name})")
