@@ -1,5 +1,6 @@
 text = "She walks to school, but he had stayed home because it was raining."
 text2 = "On the other hand, he rather liked the rain."
+text = "I wanted to give him the tree"
 # Add import for spacy if not already present
 import spacy
 print("Loading spaCy model...")
