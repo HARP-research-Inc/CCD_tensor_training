@@ -3,6 +3,11 @@ from sentence_transformers import SentenceTransformer
 import stanza
 import spacy
 
+import sys
+import os
+sys.path.insert(0, os.path.abspath("../../Temporal spacy"))
+
+
 
 def atomic_compose(word, model: SentenceTransformer):
     """
