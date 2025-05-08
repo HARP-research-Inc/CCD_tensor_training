@@ -1,47 +1,4 @@
-text = "She walks to school, but he had stayed home because it was raining."
-text2 = "On the other hand, he rather liked the rain."
-# Add import for spacy if not already present
-import spacy
-print("Loading spaCy model...")
-nlp = spacy.load("en_core_web_sm")
-print("Model loaded successfully.")
-doc = nlp(text)
-
-# Subordinating conjunctions dictionary
-SUBORDINATING_CONJUNCTIONS = {
-    "temporal": {
-        "after", "as", "as soon as", "before", "by the time", "once",
-        "since", "till", "until", "when", "whenever", "while", "now that"
-    },
-    "causal": {
-        "as", "because", "since", "insofar as", "seeing that", "for", "now that"
-    },
-    "conditional": {
-        "if", "even if", "in case", "provided that", "unless", "only if",
-        "assuming that", "on condition that", "as long as"
-    },
-    "concessive": {
-        "although", "even though", "though", "whereas", "while"
-    },
-    "purpose": {
-        "so that", "in order that", "lest", "for the purpose that"
-    },
-    "result/consequence": {
-        "so that", "so", "such that", "in such a way that"
-    },
-    "comparison": {
-        "than", "as...as", "as if", "as though"
-    },
-    "manner": {
-        "as", "as if", "as though", "the way", "just as"
-    },
-    "relative (nominal)": {
-        "that", "which", "who", "whom", "whose", "what", "whatever", "whichever", "whoever"
-    },
-    "exception": {
-        "except that", "save that"
-    }
-}
+#WIP
 
 # Function to identify the type of a subordinating conjunction
 def identify_conjunction_type(conjunction):
@@ -50,19 +7,6 @@ def identify_conjunction_type(conjunction):
         if conjunction in conj_set:
             return conj_type
     return "unknown"
-
-# For debugging: print the dependency structure
-print("DEPENDENCY STRUCTURE:")
-for token in doc:
-    print(f"{token.i:<3} {token.text:<10} {token.dep_:<10} {token.head.text:<10} {[child.text for child in token.children]}")
-
-# Labels for clause types
-SUB_DEPS = {"advcl", "ccomp", "acl", "relcl", "xcomp"}  # subordinate
-CC_DEP   = "cc"                                         # coordinating conj
-MARK_DEP = "mark"                                       # subordinating conj marker
-# Remove incorrect CMP_DEP definition (ccomp is already in SUB_DEPS)
-# Add proper comparative conjunctions
-CMP_DEPS = {"prep", "pcomp", "pobj"}  # comparative elements
 
 def get_detailed_tense(tok):
     """Extract detailed tense, aspect, and modality information from a verb."""
@@ -118,23 +62,6 @@ def get_detailed_tense(tok):
     
     # If nothing else matches
     return tense if tense else "Unknown"
-
-# Collect independent-clause verbs and subordinate-clause verbs
-indep = [t for t in doc if t.pos_ == "VERB" and t.dep_ in {"ROOT","conj"} and t.head.dep_ not in SUB_DEPS]
-subord = []
-for root in indep:
-    for child in root.children:
-        if child.pos_ == "VERB" and child.dep_ in SUB_DEPS:
-            subord.append(child)
-
-# Print debug for verbs
-print("\nVERBS:")
-print("Independent verbs:", [t.text for t in indep])
-print("Subordinate verbs:", [t.text for t in subord])
-
-# Assign IDs
-events = indep + subord
-event_id = {tok: i+1 for i, tok in enumerate(events)}
 
 def contains_verb(subtree):
     """Check if a subtree contains any verb"""
@@ -225,28 +152,6 @@ def build_span(root, kind):
     print(f"Final span: {span.text}")
     return span
 
-# Build event records
-records = []
-for tok in events:
-    kind = "indep" if tok in indep else "sub"
-    span = build_span(tok, kind)
-    records.append({
-        "tok": tok,
-        "span": span,
-        "kind": kind,
-        "tense": get_detailed_tense(tok),
-        "id": event_id[tok]
-    })
-
-# Sort by occurrence
-records.sort(key=lambda r: r["span"].start_char)
-
-# Store record info for easy lookup by ID
-record_by_id = {rec["id"]: rec for rec in records}
-
-# Build subordinate lookup for replacements
-sub_lookup = {r["span"]: r["id"] for r in records if r["kind"] == "sub"}
-
 def annotate_indep(span):
     text = span.text
     base = span.start_char
@@ -262,98 +167,201 @@ def annotate_indep(span):
         text = text[:s] + f"<EVENT {sid}>" + text[e:]
     return text.strip()
 
-# Find all conjunction markers
-conjunction_markers = {}
-for token in doc:
-    if token.dep_ == MARK_DEP:
-        # Find the verb this mark is associated with
-        head_verb = token.head
-        while head_verb.pos_ != "VERB" and head_verb.i < len(doc) - 1:
-            # If head isn't a verb, try to find the actual verb
-            for child in head_verb.children:
-                if child.pos_ == "VERB":
-                    head_verb = child
+if __name__ == "__main__":
+
+    text = "She walks to school, but he had stayed home because it was raining."
+    text2 = "On the other hand, he rather liked the rain."
+    # Add import for spacy if not already present
+    import spacy
+    print("Loading spaCy model...")
+    nlp = spacy.load("en_core_web_sm")
+    print("Model loaded successfully.")
+    doc = nlp(text)
+
+    # Subordinating conjunctions dictionary
+    SUBORDINATING_CONJUNCTIONS = {
+        "temporal": {
+            "after", "as", "as soon as", "before", "by the time", "once",
+            "since", "till", "until", "when", "whenever", "while", "now that"
+        },
+        "causal": {
+            "as", "because", "since", "insofar as", "seeing that", "for", "now that"
+        },
+        "conditional": {
+            "if", "even if", "in case", "provided that", "unless", "only if",
+            "assuming that", "on condition that", "as long as"
+        },
+        "concessive": {
+            "although", "even though", "though", "whereas", "while"
+        },
+        "purpose": {
+            "so that", "in order that", "lest", "for the purpose that"
+        },
+        "result/consequence": {
+            "so that", "so", "such that", "in such a way that"
+        },
+        "comparison": {
+            "than", "as...as", "as if", "as though"
+        },
+        "manner": {
+            "as", "as if", "as though", "the way", "just as"
+        },
+        "relative (nominal)": {
+            "that", "which", "who", "whom", "whose", "what", "whatever", "whichever", "whoever"
+        },
+        "exception": {
+            "except that", "save that"
+        }
+    }
+
+
+
+    # For debugging: print the dependency structure
+    print("DEPENDENCY STRUCTURE:")
+    for token in doc:
+        print(f"{token.i:<3} {token.text:<10} {token.dep_:<10} {token.head.text:<10} {[child.text for child in token.children]}")
+
+    # Labels for clause types
+    SUB_DEPS = {"advcl", "ccomp", "acl", "relcl", "xcomp"}  # subordinate
+    CC_DEP   = "cc"                                         # coordinating conj
+    MARK_DEP = "mark"                                       # subordinating conj marker
+    # Remove incorrect CMP_DEP definition (ccomp is already in SUB_DEPS)
+    # Add proper comparative conjunctions
+    CMP_DEPS = {"prep", "pcomp", "pobj"}  # comparative elements
+
+
+
+    # Collect independent-clause verbs and subordinate-clause verbs
+    indep = [t for t in doc if t.pos_ == "VERB" and t.dep_ in {"ROOT","conj"} and t.head.dep_ not in SUB_DEPS]
+    subord = []
+    for root in indep:
+        for child in root.children:
+            if child.pos_ == "VERB" and child.dep_ in SUB_DEPS:
+                subord.append(child)
+
+    # Print debug for verbs
+    print("\nVERBS:")
+    print("Independent verbs:", [t.text for t in indep])
+    print("Subordinate verbs:", [t.text for t in subord])
+
+    # Assign IDs
+    events = indep + subord
+    event_id = {tok: i+1 for i, tok in enumerate(events)}
+
+    # Build event records
+    records = []
+    for tok in events:
+        kind = "indep" if tok in indep else "sub"
+        span = build_span(tok, kind)
+        records.append({
+            "tok": tok,
+            "span": span,
+            "kind": kind,
+            "tense": get_detailed_tense(tok),
+            "id": event_id[tok]
+        })
+
+    # Sort by occurrence
+    records.sort(key=lambda r: r["span"].start_char)
+
+    # Store record info for easy lookup by ID
+    record_by_id = {rec["id"]: rec for rec in records}
+
+    # Build subordinate lookup for replacements
+    sub_lookup = {r["span"]: r["id"] for r in records if r["kind"] == "sub"}
+
+    # Find all conjunction markers
+    conjunction_markers = {}
+    for token in doc:
+        if token.dep_ == MARK_DEP:
+            # Find the verb this mark is associated with
+            head_verb = token.head
+            while head_verb.pos_ != "VERB" and head_verb.i < len(doc) - 1:
+                # If head isn't a verb, try to find the actual verb
+                for child in head_verb.children:
+                    if child.pos_ == "VERB":
+                        head_verb = child
+                        break
+                else:
+                    # No verb found among children, move up
+                    if head_verb.head != head_verb:  # Avoid infinite loop at root
+                        head_verb = head_verb.head
+                    else:
+                        break
+            
+            # Find which event this verb belongs to
+            for i, rec in enumerate(records):
+                if rec["tok"] == head_verb:
+                    conj_type = identify_conjunction_type(token.text)
+                    conjunction_markers[i] = {"text": token.text, "type": conj_type}
+                    break
+
+    # Output the final results with conjunction information
+    print("\nFINAL RESULTS:")
+    print(f"{'ID':<3} {'Event Phrase':<45} {'Tense':<12} {'Conjunction':<10} {'Type':<15}")
+    print("-"*90)
+    for i, rec in enumerate(records):
+        phrase = annotate_indep(rec["span"]) if rec["kind"] == "indep" else rec["span"].text
+        
+        # Get conjunction information if available
+        conj_text = ""
+        conj_type = ""
+        if i in conjunction_markers:
+            conj_text = conjunction_markers[i]["text"]
+            conj_type = conjunction_markers[i]["type"]
+        
+        print(f"{rec['id']:<3} {phrase:<45} {rec['tense']:<12} {conj_text:<10} {conj_type:<15}")
+
+    # Find linking conjunctions between events
+    conjunctions = {}
+    for token in doc:
+        if token.dep_ == CC_DEP:
+            # Find which events this conjunction connects
+            head_id = None
+            for rec in records:
+                if token.head == rec["tok"]:
+                    head_id = rec["id"]
+                    break
+            
+            # Find the target event (the one after the conjunction)
+            target_id = None
+            for rec in records:
+                if rec["tok"].dep_ == "conj" and rec["tok"].head == token.head and rec["tok"].i > token.i:
+                    target_id = rec["id"]
+                    break
+            
+            if head_id and target_id:
+                conjunctions[(head_id, target_id)] = token.text
+
+    # Generate the dynamic output string with conjunction types
+    print("\nDYNAMIC EVENT STRING WITH CONJUNCTION TYPES:")
+    # Start with the first event
+    dynamic_string = f"<EVENT {records[0]['id']}>"
+
+    # Find connections between events
+    for i in range(len(records)-1):
+        current_id = records[i]["id"]
+        next_id = records[i+1]["id"]
+        
+        # Check if there's a direct conjunction between these events
+        if (current_id, next_id) in conjunctions:
+            conj = conjunctions[(current_id, next_id)]
+            conj_type = "coordinating"  # All CC_DEP are coordinating conjunctions
+            dynamic_string += f" {conj}[{conj_type}] <EVENT {next_id}>"
+        # Check for embedding/subordination
+        elif next_id in sub_lookup.values():
+            # Find which event contains this one and get the conjunction
+            for j, rec in enumerate(records):
+                if rec["id"] == next_id and j in conjunction_markers:
+                    conj = conjunction_markers[j]["text"]
+                    conj_type = conjunction_markers[j]["type"]
+                    dynamic_string += f"({conj}[{conj_type}] <EVENT {next_id}>)"
                     break
             else:
-                # No verb found among children, move up
-                if head_verb.head != head_verb:  # Avoid infinite loop at root
-                    head_verb = head_verb.head
-                else:
-                    break
-        
-        # Find which event this verb belongs to
-        for i, rec in enumerate(records):
-            if rec["tok"] == head_verb:
-                conj_type = identify_conjunction_type(token.text)
-                conjunction_markers[i] = {"text": token.text, "type": conj_type}
-                break
-
-# Output the final results with conjunction information
-print("\nFINAL RESULTS:")
-print(f"{'ID':<3} {'Event Phrase':<45} {'Tense':<12} {'Conjunction':<10} {'Type':<15}")
-print("-"*90)
-for i, rec in enumerate(records):
-    phrase = annotate_indep(rec["span"]) if rec["kind"] == "indep" else rec["span"].text
-    
-    # Get conjunction information if available
-    conj_text = ""
-    conj_type = ""
-    if i in conjunction_markers:
-        conj_text = conjunction_markers[i]["text"]
-        conj_type = conjunction_markers[i]["type"]
-    
-    print(f"{rec['id']:<3} {phrase:<45} {rec['tense']:<12} {conj_text:<10} {conj_type:<15}")
-
-# Find linking conjunctions between events
-conjunctions = {}
-for token in doc:
-    if token.dep_ == CC_DEP:
-        # Find which events this conjunction connects
-        head_id = None
-        for rec in records:
-            if token.head == rec["tok"]:
-                head_id = rec["id"]
-                break
-        
-        # Find the target event (the one after the conjunction)
-        target_id = None
-        for rec in records:
-            if rec["tok"].dep_ == "conj" and rec["tok"].head == token.head and rec["tok"].i > token.i:
-                target_id = rec["id"]
-                break
-        
-        if head_id and target_id:
-            conjunctions[(head_id, target_id)] = token.text
-
-# Generate the dynamic output string with conjunction types
-print("\nDYNAMIC EVENT STRING WITH CONJUNCTION TYPES:")
-# Start with the first event
-dynamic_string = f"<EVENT {records[0]['id']}>"
-
-# Find connections between events
-for i in range(len(records)-1):
-    current_id = records[i]["id"]
-    next_id = records[i+1]["id"]
-    
-    # Check if there's a direct conjunction between these events
-    if (current_id, next_id) in conjunctions:
-        conj = conjunctions[(current_id, next_id)]
-        conj_type = "coordinating"  # All CC_DEP are coordinating conjunctions
-        dynamic_string += f" {conj}[{conj_type}] <EVENT {next_id}>"
-    # Check for embedding/subordination
-    elif next_id in sub_lookup.values():
-        # Find which event contains this one and get the conjunction
-        for j, rec in enumerate(records):
-            if rec["id"] == next_id and j in conjunction_markers:
-                conj = conjunction_markers[j]["text"]
-                conj_type = conjunction_markers[j]["type"]
-                dynamic_string += f"({conj}[{conj_type}] <EVENT {next_id}>)"
-                break
+                # If no conjunction found
+                dynamic_string += f"(<EVENT {next_id}>)"
         else:
-            # If no conjunction found
-            dynamic_string += f"(<EVENT {next_id}>)"
-    else:
-        # Default connection
-        dynamic_string += f" / <EVENT {next_id}>"
+            # Default connection
+            dynamic_string += f" / <EVENT {next_id}>"
 
-print(dynamic_string)
+    print(dynamic_string)
