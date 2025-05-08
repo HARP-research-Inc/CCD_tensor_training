@@ -1,5 +1,12 @@
 import torch
 from sentence_transformers import SentenceTransformer
+import stanza
+import spacy
+
+import sys
+import os
+sys.path.insert(0, os.path.abspath("../../Temporal spacy"))
+
 
 
 def atomic_compose(word, model: SentenceTransformer):
@@ -67,12 +74,17 @@ class Category(object):
         return hash(self.label)
 
 class Box(Category):
+    """
+    HO-DisCoCat-eque Box. Defined as a category with a label and a composition
+    function. The composition function is a function that takes in
+    a set of objects and returns a set of objects. 
+    """
     def __init__(self, label, dimension=384):
         super().__init__(label)
         self.dimension = dimension
         self.composing_function = dummy_compose
         
-        self.grammar = None
+        self.grammar = "s"
 
         #these store labels, not the wires themselves.
         self.in_wires: tuple[ Wire ] = None
@@ -119,6 +131,12 @@ class Box(Category):
         self.out_wires.append(wire)
         return self
 
+    def check_rep():
+        """
+        Checks representation of box. Ensures there are no cycles identifies
+        sources.
+        """
+        pass
     def forward(self):
         
         pass
@@ -155,10 +173,12 @@ class Wire(Category):
         return self.label
 
 class Actor(Wire):
-    def __init__():
-        pass
-    def forward():
-        pass
+    """
+    Actor wire. Works by "infecting" forward wires.
+    """
+    def __init__(self, label: str, child: Box, actor_label: str, grammar = "n", dimension=384, ):
+        super().__init__(label, child, grammar, dimension)
+        self.name = actor_label
 
 class Circuit(Category):
     """
@@ -167,6 +187,9 @@ class Circuit(Category):
     Abstraction function: Circuit -> adjacency_list -> C = (B, W)
     where B is a list of boxes containing compositional functions and 
     W is a list of wires.
+
+    Representation invariant:
+    Circuit maps onto a DAG, edge order preserved by pregroup structure.
 
     """
     def __init__(self, label, dimension=384):
@@ -185,17 +208,6 @@ class Circuit(Category):
         return_string += "\n"
         return return_string
     
-    # def add_node(self, node: Box, wires: list[ Wire ]):
-    #     """
-    #     adds either spider or box.
-    #     """
-    #     if isinstance(node, Spider):
-    #         self.adjacency_list[node] = wires
-    #     elif isinstance(node, Box):
-    #         self.adjacency_list[node] = wires
-    #     else:
-    #         raise TypeError("Node must be a Spider or Box.")
-
     def add_node(self, node:Box):
         """
         adds either spider or box.
@@ -214,31 +226,111 @@ class Circuit(Category):
         
         self.add_node(parentBox) 
         self.add_node(childBox)
-        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()}", childBox)
+        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
 
-
+        parentBox.add_out_wire(wire)
+        childBox.add_in_wire(wire)
 
         self.adjacency_list[parentBox].append(wire)
+
+def __prototype_parse(circuit: Circuit, string, spacy_model: spacy.load):
+    """
+    only works with adjectives and verbs for now. No coreference resolution.
+    """
+    meta_representation = ""
+    doc = spacy_model(string)
+
+    #give_children = doc[1].children
+
+    box_refs: dict[str, Box] = {}
+
+    for term in doc:
+        print(term.text, term.pos_)
+        if term.pos_ == "PUNCT":
+            continue
+        for child in term.children:
+            if child.pos_ == "PUNCT":
+                continue
+            
+            #print(term.text, child.text)
+
+            if term.text not in box_refs.keys():
+                #assigning a box to the term
+                box_refs[term.text] = Box(term.text)
+            if child.text not in box_refs.keys():
+                #assigning a box to the child
+                box_refs[child.text] = Box(child.text)
+            
+            box_reference = box_refs[term.text]
+            child_reference = box_refs[child.text]
+
+            circuit.add_wire(box_reference, child_reference)
+
+
+
+def __parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token):
+    
+
+    child_box = Box(token.text)
+
+    #traversal is in the opposite direction of the tree.
+    circuit.add_wire(parent,child_box)
+
+    if(token.children == []):
+        #base case
+        leaves.append(child_box)
+    
+    for child in token.children:
+        print(token.text, child.text)
+        __parse_driver(circuit, child_box, leaves, child)
+
+def __tree_parse(circuit: Circuit, string, spacy_model: spacy.load):
+    doc = spacy_model(string)
+    root = [token for token in doc if token.head == token][0]
+
+    print(root.text, root.pos_)
+    root_box = Box(root.text)
+    leaves = list()
+    circuit.add_node(root_box)
+
+    __parse_driver(circuit, root_box, leaves, root)
+
+    return leaves
+
+
 
 
 
 if __name__ == "__main__":
-    "Tall Alice hates short Bob"
+    sentence = "the quick brown fox jumps over the lazy dog"
+    spacy_model = "en_core_web_trf"
+    nlp = spacy.load(spacy_model)
+    print()
 
+    print("spacy model: ", spacy_model)
+    print("sentence: ", sentence)
+    print("\n")
+    test = Circuit("discourse1")
 
-    test = Circuit("circuit1")\
-    
-    boxref1 = Box("box1")
-    boxref2 = Box("box2")
-
-    boxref3 = Box("box3")
-
-    test.add_node(boxref1)
-    test.add_node(boxref2)
-
-    test.add_wire(boxref1, boxref2)
-    test.add_wire(boxref1, boxref3)
+    __tree_parse(test, sentence, nlp)
 
     print(test)
+
+    # test = Circuit("circuit1")
     
+    # boxref1 = Box("box1")
+    # boxref2 = Spider("spider1")
+
+    # boxref3 = Box("box3")
+
+    # test.add_node(boxref1)
+    # test.add_node(boxref2)
+
+    # test.add_wire(boxref1, boxref2)
+    # test.add_wire(boxref1, boxref3)
+
+    # print(test)
+    
+    # [print(wire) for wire in boxref1.out_wires]
+
     
