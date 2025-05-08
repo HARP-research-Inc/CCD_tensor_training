@@ -146,3 +146,6 @@ The script will automatically:
 4. Display final complexity comparison between DisCoCirc and BERT
 
 
+```bash
+python -m theoretical_evaluation.streamline-o3 --wikitext --use-cache --debug debug --resume
+```
