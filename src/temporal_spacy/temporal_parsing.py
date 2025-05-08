@@ -1,5 +1,49 @@
 #WIP
 
+# Labels for clause types
+SUB_DEPS = {"advcl", "ccomp", "acl", "relcl", "xcomp"}  # subordinate
+CC_DEP   = "cc"                                         # coordinating conj
+MARK_DEP = "mark"                                       # subordinating conj marker
+# Remove incorrect CMP_DEP definition (ccomp is already in SUB_DEPS)
+# Add proper comparative conjunctions
+CMP_DEPS = {"prep", "pcomp", "pobj"}  # comparative elements
+
+# Subordinating conjunctions dictionary
+SUBORDINATING_CONJUNCTIONS = {
+    "temporal": {
+        "after", "as", "as soon as", "before", "by the time", "once",
+        "since", "till", "until", "when", "whenever", "while", "now that"
+    },
+    "causal": {
+        "as", "because", "since", "insofar as", "seeing that", "for", "now that"
+    },
+    "conditional": {
+        "if", "even if", "in case", "provided that", "unless", "only if",
+        "assuming that", "on condition that", "as long as"
+    },
+    "concessive": {
+        "although", "even though", "though", "whereas", "while"
+    },
+    "purpose": {
+        "so that", "in order that", "lest", "for the purpose that"
+    },
+    "result/consequence": {
+        "so that", "so", "such that", "in such a way that"
+    },
+    "comparison": {
+        "than", "as...as", "as if", "as though"
+    },
+    "manner": {
+        "as", "as if", "as though", "the way", "just as"
+    },
+    "relative (nominal)": {
+        "that", "which", "who", "whom", "whose", "what", "whatever", "whichever", "whoever"
+    },
+    "exception": {
+        "except that", "save that"
+    }
+}
+
 # Function to identify the type of a subordinating conjunction
 def identify_conjunction_type(conjunction):
     conjunction = conjunction.lower()
@@ -178,58 +222,10 @@ if __name__ == "__main__":
     print("Model loaded successfully.")
     doc = nlp(text)
 
-    # Subordinating conjunctions dictionary
-    SUBORDINATING_CONJUNCTIONS = {
-        "temporal": {
-            "after", "as", "as soon as", "before", "by the time", "once",
-            "since", "till", "until", "when", "whenever", "while", "now that"
-        },
-        "causal": {
-            "as", "because", "since", "insofar as", "seeing that", "for", "now that"
-        },
-        "conditional": {
-            "if", "even if", "in case", "provided that", "unless", "only if",
-            "assuming that", "on condition that", "as long as"
-        },
-        "concessive": {
-            "although", "even though", "though", "whereas", "while"
-        },
-        "purpose": {
-            "so that", "in order that", "lest", "for the purpose that"
-        },
-        "result/consequence": {
-            "so that", "so", "such that", "in such a way that"
-        },
-        "comparison": {
-            "than", "as...as", "as if", "as though"
-        },
-        "manner": {
-            "as", "as if", "as though", "the way", "just as"
-        },
-        "relative (nominal)": {
-            "that", "which", "who", "whom", "whose", "what", "whatever", "whichever", "whoever"
-        },
-        "exception": {
-            "except that", "save that"
-        }
-    }
-
-
-
     # For debugging: print the dependency structure
     print("DEPENDENCY STRUCTURE:")
     for token in doc:
         print(f"{token.i:<3} {token.text:<10} {token.dep_:<10} {token.head.text:<10} {[child.text for child in token.children]}")
-
-    # Labels for clause types
-    SUB_DEPS = {"advcl", "ccomp", "acl", "relcl", "xcomp"}  # subordinate
-    CC_DEP   = "cc"                                         # coordinating conj
-    MARK_DEP = "mark"                                       # subordinating conj marker
-    # Remove incorrect CMP_DEP definition (ccomp is already in SUB_DEPS)
-    # Add proper comparative conjunctions
-    CMP_DEPS = {"prep", "pcomp", "pobj"}  # comparative elements
-
-
 
     # Collect independent-clause verbs and subordinate-clause verbs
     indep = [t for t in doc if t.pos_ == "VERB" and t.dep_ in {"ROOT","conj"} and t.head.dep_ not in SUB_DEPS]
