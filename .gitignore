@@ -40,6 +40,7 @@ tests/data
 data
 data_raw
 src/discocirc/dummy_weights
+src/semantic_poset/GoogleNews-vectors-negative300.bin
 checkpoints/checkpoint_20250501_192122.json
 checkpoints/checkpoint_20250501_191513.json
 checkpoints/checkpoint_20250501_191555.json
@@ -49,3 +50,4 @@ checkpoints/checkpoint_20250501_191638.json
 /theoretical_evaluation/checkpoints
 checkpoints/latest_checkpoint.txt
 preorder_output.txt
+
