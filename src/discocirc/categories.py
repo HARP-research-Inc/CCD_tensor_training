@@ -5,8 +5,8 @@ import spacy
 
 import sys
 import os
-sys.path.insert(0, os.path.abspath("../../Temporal spacy"))
-
+sys.path.insert(0, os.path.abspath("../temporal_spacy"))
+from temporal_parsing import build_span
 
 
 def atomic_compose(word, model: SentenceTransformer):
@@ -312,7 +312,9 @@ if __name__ == "__main__":
     print("\n")
     test = Circuit("discourse1")
 
-    __tree_parse(test, sentence, nlp)
+    #__tree_parse(test, sentence, nlp)
+
+    
 
     print(test)
 
