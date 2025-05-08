@@ -3,11 +3,7 @@ from sentence_transformers import SentenceTransformer
 import stanza
 import spacy
 
-import sys
-import os
-sys.path.insert(0, os.path.abspath("../temporal_spacy"))
-from temporal_parsing import build_span
-
+from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
 def atomic_compose(word, model: SentenceTransformer):
     """
@@ -195,6 +191,8 @@ class Circuit(Category):
     def __init__(self, label, dimension=384):
         super().__init__(label)
         self.adjacency_list: dict[Box, list[Wire]] = {}
+        self.root = None #root token
+
     def __str__(self):
         """
         string representation of the circuit.
@@ -224,80 +222,52 @@ class Circuit(Category):
         
     def add_wire(self, parentBox: Box, childBox: Box):
         
-        self.add_node(parentBox) 
-        self.add_node(childBox)
-        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
+        #really dumb way to do this, but it works.
+        #if add_node returns false in either case, then the wire is not added.
 
-        parentBox.add_out_wire(wire)
-        childBox.add_in_wire(wire)
+        added_parent = self.add_node(parentBox)
+        added_child = self.add_node(childBox)
 
-        self.adjacency_list[parentBox].append(wire)
+        if added_parent and added_child:
+            wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
 
-def __prototype_parse(circuit: Circuit, string, spacy_model: spacy.load):
-    """
-    only works with adjectives and verbs for now. No coreference resolution.
-    """
-    meta_representation = ""
-    doc = spacy_model(string)
+            parentBox.add_out_wire(wire)
+            childBox.add_in_wire(wire)
 
-    #give_children = doc[1].children
+            self.adjacency_list[parentBox].append(wire)
+            return True
+        return False
 
-    box_refs: dict[str, Box] = {}
-
-    for term in doc:
-        print(term.text, term.pos_)
-        if term.pos_ == "PUNCT":
-            continue
-        for child in term.children:
-            if child.pos_ == "PUNCT":
-                continue
-            
-            #print(term.text, child.text)
-
-            if term.text not in box_refs.keys():
-                #assigning a box to the term
-                box_refs[term.text] = Box(term.text)
-            if child.text not in box_refs.keys():
-                #assigning a box to the child
-                box_refs[child.text] = Box(child.text)
-            
-            box_reference = box_refs[term.text]
-            child_reference = box_refs[child.text]
-
-            circuit.add_wire(box_reference, child_reference)
-
-
+###############################
+###### PARSING FUNCTIONS ######
+###############################
 
 def __parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token):
     
-
     child_box = Box(token.text)
 
     #traversal is in the opposite direction of the tree.
     circuit.add_wire(parent,child_box)
 
-    if(token.children == []):
+    if(token.n_lefts == 0 and token.n_rights == 0):
         #base case
         leaves.append(child_box)
     
     for child in token.children:
-        print(token.text, child.text)
+        #print(token.text, child.text)
         __parse_driver(circuit, child_box, leaves, child)
 
 def __tree_parse(circuit: Circuit, string, spacy_model: spacy.load):
     doc = spacy_model(string)
     root = [token for token in doc if token.head == token][0]
 
-    print(root.text, root.pos_)
-    root_box = Box(root.text)
+    #print(root.text, root.pos_)
     leaves = list()
-    circuit.add_node(root_box)
+    #circuit.add_node(root_box)
 
-    __parse_driver(circuit, root_box, leaves, root)
+    __parse_driver(circuit, None, leaves, root)
 
     return leaves
-
-
 
 
 
@@ -312,11 +282,16 @@ if __name__ == "__main__":
     print("\n")
     test = Circuit("discourse1")
 
-    #__tree_parse(test, sentence, nlp)
+    Leaves = __tree_parse(test, sentence, nlp)
+
+    print(test)
+
+
+    print("leaves: ")
+    [print(box.get_label()) for box in Leaves]
 
     
 
-    print(test)
 
     # test = Circuit("circuit1")
     
