@@ -2,12 +2,9 @@ import torch
 from sentence_transformers import SentenceTransformer
 import stanza
 import spacy
+import re
 
-import sys
-import os
-sys.path.insert(0, os.path.abspath("../temporal_spacy"))
-from temporal_parsing import build_span
-
+from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
 def atomic_compose(word, model: SentenceTransformer):
     """
@@ -36,7 +33,6 @@ class Category(object):
     Abstract category class.
 
     """
-
     # static variables
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
@@ -45,14 +41,12 @@ class Category(object):
     
     def inward(self):
         """
-        abstract inward method. In the context of the circuit,
-        the abstract category is a ghost that is there but also not.
+        abstract inward method.
         """
         return self
     def forward(self):
         """
-        abstract forward method. In the context of the circuit,
-        the abstract category is a ghost that is there but also not.
+        abstract forward method.
         """
         return self
     def __str__(self):
@@ -63,14 +57,14 @@ class Category(object):
     
     def __eq__(self, other):
         """
-
+        equality operator.
         """
-        # if isinstance(other, self.__class__):
-        #     return self.label == other.label
-        # return False
         return id(self) == id(other)
     
     def __hash__(self):
+        """
+        hash operator.
+        """
         return hash(self.label)
 
 class Box(Category):
@@ -195,6 +189,8 @@ class Circuit(Category):
     def __init__(self, label, dimension=384):
         super().__init__(label)
         self.adjacency_list: dict[Box, list[Wire]] = {}
+        self.root = None #root token
+
     def __str__(self):
         """
         string representation of the circuit.
@@ -224,115 +220,127 @@ class Circuit(Category):
         
     def add_wire(self, parentBox: Box, childBox: Box):
         
-        self.add_node(parentBox) 
-        self.add_node(childBox)
-        wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
+        #really dumb way to do this, but it works.
+        #if add_node returns false in either case, then the wire is not added.
 
-        parentBox.add_out_wire(wire)
-        childBox.add_in_wire(wire)
+        added_parent = self.add_node(parentBox)
+        added_child = self.add_node(childBox)
 
-        self.adjacency_list[parentBox].append(wire)
+        if added_parent and added_child:
+            wire = Wire(f"{parentBox.get_label()} -> {childBox.get_label()},", childBox)
 
-def __prototype_parse(circuit: Circuit, string, spacy_model: spacy.load):
-    """
-    only works with adjectives and verbs for now. No coreference resolution.
-    """
-    meta_representation = ""
-    doc = spacy_model(string)
+            parentBox.add_out_wire(wire)
+            childBox.add_in_wire(wire)
 
-    #give_children = doc[1].children
+            self.adjacency_list[parentBox].append(wire)
+            return True
+        return False
 
-    box_refs: dict[str, Box] = {}
-
-    for term in doc:
-        print(term.text, term.pos_)
-        if term.pos_ == "PUNCT":
-            continue
-        for child in term.children:
-            if child.pos_ == "PUNCT":
-                continue
-            
-            #print(term.text, child.text)
-
-            if term.text not in box_refs.keys():
-                #assigning a box to the term
-                box_refs[term.text] = Box(term.text)
-            if child.text not in box_refs.keys():
-                #assigning a box to the child
-                box_refs[child.text] = Box(child.text)
-            
-            box_reference = box_refs[term.text]
-            child_reference = box_refs[child.text]
-
-            circuit.add_wire(box_reference, child_reference)
-
-
+###############################
+###### PARSING FUNCTIONS ######
+###############################
 
 def __parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token):
     
-
     child_box = Box(token.text)
 
     #traversal is in the opposite direction of the tree.
     circuit.add_wire(parent,child_box)
 
-    if(token.children == []):
+    if(token.n_lefts == 0 and token.n_rights == 0):
         #base case
         leaves.append(child_box)
     
     for child in token.children:
-        print(token.text, child.text)
+        #print(token.text, child.text)
         __parse_driver(circuit, child_box, leaves, child)
 
 def __tree_parse(circuit: Circuit, string, spacy_model: spacy.load):
     doc = spacy_model(string)
     root = [token for token in doc if token.head == token][0]
 
-    print(root.text, root.pos_)
-    root_box = Box(root.text)
+    #print(root.text, root.pos_)
     leaves = list()
-    circuit.add_node(root_box)
+    #circuit.add_node(root_box)
 
-    __parse_driver(circuit, root_box, leaves, root)
+    __parse_driver(circuit, None, leaves, root)
 
     return leaves
 
+CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
+    SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
+    SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
+    SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
+    SUBORDINATING_CONJUNCTIONS["relative (nominal)"] | SUBORDINATING_CONJUNCTIONS["exception"] |\
+    {"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", ",", ".", "and/or"}
+
+def generate_split_regex(delimiters):
+    regex_parts = []
+    for d in sorted(delimiters, key=len, reverse=True):
+        escaped = re.escape(d)
+        if re.fullmatch(r'[A-Za-z ]+', d):
+            wordified = r'\b' + re.sub(r'\s+', r'\\s+', escaped) + r'\b'
+            regex_parts.append(wordified)
+        else:
+            regex_parts.append(escaped)
+
+    pattern = '|'.join(regex_parts)
+    return re.compile(pattern)
+
+
+def __clause_driver(clause_chunked: list):
+    index = 0
+    for conj in CONJUNCTION_LIST:
+        pass
 
 
 
+def __clause_parser(clause_chunked: list, conjunctions: list, string, spacy_model: spacy.load):
+    doc = spacy_model(string)
+    root = [token for token in doc if token.head == token][0]
+    splitter = generate_split_regex(CONJUNCTION_LIST)
+    clause_chunked = splitter.split(string)
+    print(clause_chunked)
+
+
+
+# def __smart_clause_parser(clause_chunked: list, conjunctions: list, string: str, spacy_model: spacy.load):
+#     parallel = string.split(" ")
+
+#     for i in range(4):
+#         j = 0
+#         while j < len(parallel):
+
+            
+
+
+    
 
 if __name__ == "__main__":
-    sentence = "the quick brown fox jumps over the lazy dog"
+    sentence = "hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad."
     spacy_model = "en_core_web_trf"
     nlp = spacy.load(spacy_model)
-    print()
+    # print()
 
-    print("spacy model: ", spacy_model)
-    print("sentence: ", sentence)
-    print("\n")
-    test = Circuit("discourse1")
+    # print("spacy model: ", spacy_model)
+    # print("sentence: ", sentence)
+    # print("\n")
+    # test = Circuit("DISCOURSE 1")
 
-    #__tree_parse(test, sentence, nlp)
-
-    
-
-    print(test)
-
-    # test = Circuit("circuit1")
-    
-    # boxref1 = Box("box1")
-    # boxref2 = Spider("spider1")
-
-    # boxref3 = Box("box3")
-
-    # test.add_node(boxref1)
-    # test.add_node(boxref2)
-
-    # test.add_wire(boxref1, boxref2)
-    # test.add_wire(boxref1, boxref3)
+    # Leaves = __tree_parse(test, sentence, nlp)
 
     # print(test)
+
+
+    # print("leaves: ")
+    # [print(box.get_label()) for box in Leaves]
+
+    string = "Thomas was here, in addition he is a genius"
+    print("in addition" in string)
+
+    clauses = list()
+
+    __clause_parser(clauses, None, sentence, nlp)
     
-    # [print(wire) for wire in boxref1.out_wires]
 
     
