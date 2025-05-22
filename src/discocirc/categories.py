@@ -146,6 +146,14 @@ class Spider(Box):
     def __init__(self, label):
         super().__init__(label)
 
+class Custodian(Box):
+
+    #static
+
+
+    def __init__(self,label):
+        super.__init__(label)
+
 class Wire(Category):
     def __init__(self, label: str, child: Box, grammar = "n", dimension=384):
         super().__init__(label)
@@ -190,6 +198,7 @@ class Circuit(Category):
         super().__init__(label)
         self.adjacency_list: dict[Box, list[Wire]] = {}
         self.root = None #root token
+        self.leaves = list()
 
     def __str__(self):
         """
@@ -235,6 +244,15 @@ class Circuit(Category):
             self.adjacency_list[parentBox].append(wire)
             return True
         return False
+    
+    def get_adjacency_list(self):
+        """
+        returns the adjacency list of the circuit.
+        """
+        return self.adjacency_list
+
+    def concactenate(self, other, conjunction = None):
+        self.adjacency_list.update(other.get_adjacency_list())
 
 ###############################
 ###### PARSING FUNCTIONS ######
@@ -263,6 +281,8 @@ def __tree_parse(circuit: Circuit, string, spacy_model: spacy.load):
     leaves = list()
     #circuit.add_node(root_box)
 
+    
+
     __parse_driver(circuit, None, leaves, root)
 
     return leaves
@@ -272,75 +292,75 @@ CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUN
     SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
     SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
     SUBORDINATING_CONJUNCTIONS["relative (nominal)"] | SUBORDINATING_CONJUNCTIONS["exception"] |\
-    {"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", ",", ".", "and/or"}
+    {"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
 
-def generate_split_regex(delimiters):
-    regex_parts = []
-    for d in sorted(delimiters, key=len, reverse=True):
-        escaped = re.escape(d)
-        if re.fullmatch(r'[A-Za-z ]+', d):
-            wordified = r'\b' + re.sub(r'\s+', r'\\s+', escaped) + r'\b'
-            regex_parts.append(wordified)
-        else:
-            regex_parts.append(escaped)
-
-    pattern = '|'.join(regex_parts)
-    return re.compile(pattern)
+PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
 
 
-def __clause_driver(clause_chunked: list):
-    index = 0
-    for conj in CONJUNCTION_LIST:
-        pass
-
-
-
-def __clause_parser(clause_chunked: list, conjunctions: list, string, spacy_model: spacy.load):
-    doc = spacy_model(string)
-    root = [token for token in doc if token.head == token][0]
-    splitter = generate_split_regex(CONJUNCTION_LIST)
-    clause_chunked = splitter.split(string)
-    print(clause_chunked)
-
-
-
-# def __smart_clause_parser(clause_chunked: list, conjunctions: list, string: str, spacy_model: spacy.load):
-#     parallel = string.split(" ")
-
-#     for i in range(4):
-#         j = 0
-#         while j < len(parallel):
-
-            
-
-
+def split_clauses_with_markers(sentence, nlp: spacy.load):
+    # Build regex for conjunctions (prioritize multi-word)
+    sorted_conjs = sorted(CONJUNCTION_LIST, key=lambda x: -len(x))
+    escaped_conjs = [r'\b' + re.escape(conj) + r'\b' for conj in sorted_conjs]
+    conj_pattern = '|'.join(escaped_conjs)
     
+    # Build regex for punctuation
+    punct_pattern = '|'.join(re.escape(p) for p in PUNCTUATION_DELIMS)
+
+    # Combined pattern: capture all splitters
+    pattern = r'\s*(%s|%s)\s*' % (conj_pattern, punct_pattern)
+
+    # Split and keep delimiters
+    parts = re.split(pattern, sentence)
+
+    # Group into clauses and splitters
+    clauses = parts[::2]
+    markers = parts[1::2]
+
+    # Clean up
+    clauses = [c.strip() for c in clauses if c.strip()]
+    markers = [m.strip() for m in markers if m.strip()]
+
+    return clauses, markers
+
+def driver(discourse: str, nlp: spacy.load):
+    """
+    returns: circuit object containing circuit reprsenentation of the discourse.
+    """
+    clauses, conjunctions = split_clauses_with_markers(discourse, nlp)
+
+    circuit = Circuit("Discourse:"+ discourse)
+
+    for i, clause in enumerate(clauses):
+        new_circuit = Circuit(f"Clause {i+1}")
+        __tree_parse(new_circuit, clause, nlp)
+        circuit.concactenate(new_circuit)
+    return circuit
 
 if __name__ == "__main__":
-    sentence = "hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad."
+    sentence1 = "hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad."
+    sentence2 = "Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     spacy_model = "en_core_web_trf"
+
+    Sentence3 = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     nlp = spacy.load(spacy_model)
-    # print()
 
-    # print("spacy model: ", spacy_model)
-    # print("sentence: ", sentence)
-    # print("\n")
-    # test = Circuit("DISCOURSE 1")
-
-    # Leaves = __tree_parse(test, sentence, nlp)
-
-    # print(test)
+    print(driver(Sentence3, nlp))
 
 
-    # print("leaves: ")
-    # [print(box.get_label()) for box in Leaves]
+    # circuit1 = Circuit("DISCOURSE 1")
+    # circuit2 = Circuit("DISCOURSE 2")
 
-    string = "Thomas was here, in addition he is a genius"
-    print("in addition" in string)
+    # circuit3 = Circuit("DISCOURSE 3")
 
-    clauses = list()
+    # __tree_parse(circuit1, sentence1, nlp)
+    # __tree_parse(circuit2, sentence2, nlp)
 
-    __clause_parser(clauses, None, sentence, nlp)
+    # circuit3.concactenate(circuit1)
+    # circuit3.concactenate(circuit2)
+
+    # print(circuit3)
+
+    #print(split_clauses_with_markers(sentence))
     
 
     
