@@ -1,5 +1,5 @@
-from pos import *
-from categories import *
+from .pos import *
+from .categories import *
 from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
 ###############################
@@ -21,17 +21,13 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
         #print(token.text, child.text)
         parse_driver(circuit, child_box, leaves, child)
 
-def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, source: Box):
+def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, source: Box = None):
     doc = spacy_model(string)
     root = [token for token in doc if token.head == token][0]
 
-    #print(root.text, root.pos_)
     leaves = list()
-    #circuit.add_node(root_box)
 
-    
-
-    parse_driver(circuit, None, leaves, root)
+    parse_driver(circuit, source, leaves, root)
 
     return leaves
 
@@ -73,17 +69,28 @@ def split_clauses_with_markers(sentence, nlp: spacy.load):
 def driver(discourse: str, nlp: spacy.load):
     """
     returns: circuit object containing circuit reprsenentation of the discourse.
+
     """
     clauses, conjunctions = split_clauses_with_markers(discourse, nlp)
 
-    circuit = Circuit("Discourse:"+ discourse)
+    circuit = Circuit("*****DISCOURSE*****")
 
     # Create a root box for the circuit
-    root_box = Bureacrat("reference")
+    root_box = Bureacrat("REFERENCE")
+
+    # Composer box to combine clauses
+    composer = Spider("SPIDER COMPOSE")
+
+    # this will be the main output wire of the circuit
+
+    print(circuit.add_wire(composer, root_box))
 
     for i, clause in enumerate(clauses):
+        print("CLAUSE", i+1, ":", clause)
         new_circuit = Circuit(f"Clause {i+1}")
-        tree_parse(new_circuit, clause, nlp)
+        new_circuit.add_wire(composer, root_box)
+        tree_parse(new_circuit, clause, nlp, composer)
+        print(new_circuit)
         circuit.concactenate(new_circuit)
 
     return root_box, circuit
@@ -96,7 +103,9 @@ if __name__ == "__main__":
     Sentence3 = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     nlp = spacy.load(spacy_model)
 
-    print(driver(Sentence3, nlp))
+    ref, discourse = driver(Sentence3, nlp)
+
+    print(discourse)
 
 
     # circuit1 = Circuit("DISCOURSE 1")

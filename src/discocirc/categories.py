@@ -72,7 +72,7 @@ class Box(Category):
     function. The composition function is a function that takes in
     a set of objects and returns a set of objects. 
     """
-    def __init__(self, label, dimension=384):
+    def __init__(self, label: str, dimension=384):
         super().__init__(label)
         self.dimension = dimension
         self.composing_function = dummy_compose
@@ -183,8 +183,8 @@ class Bureacrat(Box):
     references: dict[Wire, list[Box]] = dict()
 
 
-    def __init__(self,label, ):
-        super.__init__(label)
+    def __init__(self,label: str):
+        super().__init__(label)
         self.embedding = None
     
     def inward(self, input: Wire):
