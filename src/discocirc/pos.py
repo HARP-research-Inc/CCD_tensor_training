@@ -1,5 +1,5 @@
 import torch
-from categories import Box, Wire
+from .categories import Box, Wire
 
 
 class Noun(Wire):
