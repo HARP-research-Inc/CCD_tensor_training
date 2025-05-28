@@ -97,4 +97,52 @@ The framework implements two main approaches for embedding generation, each with
 
 The project includes a comprehensive test suite in the `tests/` directory to validate the functionality of various components.
 
+## Setup
+
+### Virtual Environment
+
+1. Create a virtual environment:
+```bash
+python3.12 -m venv DisCoBERT
+```
+
+2. Activate the virtual environment:
+```bash
+source DisCoBERT/bin/activate
+```
+
+3. Install required packages:
+```bash
+pip install spacy transformers torch tqdm datasets
+python -m spacy download en_core_web_sm
+```
+
+### Running the Complexity Estimation
+
+To run the complexity estimation on the full WikiText-103 corpus:
+
+```bash
+python theoretical_evaluation/optimized_complexity_estimate.py --wikitext --workers=8
+```
+
+Additional options:
+- `--benchmark`: Run benchmarks to determine optimal settings
+- `--bert`: Run in BERT-only mode
+- `--disco`: Run in DisCoCirc-only mode
+- `--cpu`: Force CPU usage for all operations
+- `--cpu-bert`: Force CPU usage for BERT operations only
+- `--fork`: Use fork instead of spawn for multiprocessing
+- `--workers=N`: Specify number of worker processes
+- `--batch-size=N`: Specify batch size for processing
+- `--checkpoint-interval=N`: Save checkpoint every N sentences
+- `--checkpoint-dir=DIR`: Specify checkpoint directory
+- `--no-resume`: Start fresh without resuming
+- `--force-resume`: Force resume even if previous run was complete
+
+The script will automatically:
+1. Save checkpoints periodically
+2. Allow resuming from the last checkpoint if interrupted
+3. Show processing rate and progress
+4. Display final complexity comparison between DisCoCirc and BERT
+
 
