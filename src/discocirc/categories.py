@@ -80,8 +80,8 @@ class Box(Category):
         self.grammar = "s"
 
         #these store labels, not the wires themselves.
-        self.in_wires: tuple[ Wire ] = None
-        self.out_wires: tuple[ Wire ] = None
+        self.in_wires: list[ Wire ] = None
+        self.out_wires: list[ Wire ] = None
     
     def get_label(self):
         return self.label
@@ -173,7 +173,7 @@ class Wire(Category):
         return self.label
 
 
-class Bureacrat(Box):
+class Bureaucrat(Box):
     """
     Bureacratic box. Closes open wires in order to maintain DAG definition. Also 
     reads wire output.
@@ -217,8 +217,8 @@ class Circuit(Category):
     def __init__(self, label, dimension=384):
         super().__init__(label)
         self.adjacency_list: dict[Box, list[Wire]] = {}
-        self.root = None #root token
-        self.leaves = list()
+        self.root = None #root node
+        self.sources = list()
 
     def __str__(self):
         """
@@ -240,11 +240,14 @@ class Circuit(Category):
         if node is None:
             return False
         
-        if(node in self.adjacency_list):
+        if node in self.adjacency_list:
             return True
         
         self.adjacency_list[node] = list()
         return True
+    
+    def set_root(self, root: Box):
+        self.root = root
         
         
     def add_wire(self, parentBox: Box, childBox: Box):
@@ -271,5 +274,33 @@ class Circuit(Category):
         """
         return self.adjacency_list
 
-    def concactenate(self, other, conjunction = None):
-        self.adjacency_list.update(other.get_adjacency_list())    
+    def set_sources(self, sources: list[Box]):
+        """
+        sets the sources of the circuit.
+        """
+        self.sources = sources
+
+    def concatenate_sources(self, sources: list[Box]):
+        """
+        concatenates the sources of the circuit with the given sources.
+        """
+        self.sources.extend(sources)
+    
+    def get_sources(self):
+        """
+        returns the sources of the circuit.
+        """
+        return self.sources
+
+    def concactenate(self, other, conjunction: Box = None):
+        #checklist: move all boxes and wires, move all source references, update root
+        
+        if conjunction is not None: #if no conjunction is passed, then the circuit will have two discrete parts. 
+            pass
+
+        
+        self.adjacency_list.update(other.get_adjacency_list())  
+
+        self.sources.extend(other.get_sources())
+
+        
