@@ -82,6 +82,6 @@ if __name__ == "__main__":
 
     print(data[0], data[1])
 
-    model = TwoWordTensorRegression(300, 300)
+    model = TwoWordTensorRegression(384, 384)
     model = load_model_in(cache, "transitive_verb_model", data[0])
     print(model(get_embedding_in_parallel("ball"),get_embedding_in_parallel("bat")))

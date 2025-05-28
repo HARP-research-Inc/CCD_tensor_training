@@ -1,0 +1,8 @@
+torch
+numpy
+tensorly
+requests
+sentence_transformers
+spacy
+gensim
+contractions

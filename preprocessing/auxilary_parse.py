@@ -19,8 +19,8 @@ def worker(index, data):
         doc = nlp(str(sentence))
 
         for token in doc:
-            if token.pos_ == "NOUN":
-                adjectives = {child.text for child in token.children if child.pos_ == "ADJ"}
+            if token.pos_ == "VERB":
+                adjectives = {child.text for child in token.children if child.pos_ == "AUX"}
                 if(len(adjectives) > 0):
                     for adj in adjectives:
                         if adj not in raw_dict:

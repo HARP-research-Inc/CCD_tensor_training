@@ -4,7 +4,14 @@ from tqdm import tqdm  # for progress bars
 import sys
 import os
 import concurrent.futures
-import multiprocessing
+import torch.multiprocessing as multiprocessing
+from torch.multiprocessing import set_start_method
+
+try:
+    set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
+
 import math
 import torch
 from typing import Optional, Tuple
