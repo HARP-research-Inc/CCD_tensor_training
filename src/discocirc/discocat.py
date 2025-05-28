@@ -2,6 +2,9 @@ from .pos import *
 from .categories import *
 from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
+import torch
+from src.regression import TwoWordTensorRegression
+
 ###############################
 ###### PARSING FUNCTIONS ######
 ###############################
@@ -17,7 +20,7 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     child_box = Box(token.text)
 
     #traversal is in the opposite direction of the tree.
-    circuit.add_wire(child_box, parent)
+    circuit.add_wire(child_box, parent) # order swapped from tree traversal order
 
     if(token.n_lefts == 0 and token.n_rights == 0):
         #base case
@@ -114,6 +117,11 @@ def driver(discourse: str, nlp: spacy.load):
     return root_box, circuit
 
 if __name__ == "__main__":
+
+    #version 0.1.0 - bag of clauses approach
+
+    path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
+
     spacy_model = "en_core_web_trf"
 
     many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
