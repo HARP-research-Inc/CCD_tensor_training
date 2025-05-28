@@ -6,12 +6,18 @@ from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 ###### PARSING FUNCTIONS ######
 ###############################
 
-def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token):
+def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token, is_one_deep: bool):
+    """
+    Parameter field names indicate the parent/child relationship in reference
+    to the tree structure, NOT the circuit structure. 
+    """
+    if is_one_deep:
+        circuit.set_root(parent)
     
     child_box = Box(token.text)
 
     #traversal is in the opposite direction of the tree.
-    circuit.add_wire(parent,child_box)
+    circuit.add_wire(child_box, parent)
 
     if(token.n_lefts == 0 and token.n_rights == 0):
         #base case
@@ -19,15 +25,23 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     
     for child in token.children:
         #print(token.text, child.text)
-        parse_driver(circuit, child_box, leaves, child)
+        parse_driver(circuit, child_box, leaves, child, False)
 
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, source: Box = None):
+    """
+    Parsing traversal order should be in the opposite direction of the circuit.
+    Parameter field names indicate the parent/child relationship in reference
+    to the tree structure, NOT the circuit structure. 
+
+    args:
+        source: source box for the whole tree (in the prototype, it is a composer spider)
+    """
     doc = spacy_model(string)
     root = [token for token in doc if token.head == token][0]
 
     leaves = list()
 
-    parse_driver(circuit, source, leaves, root)
+    parse_driver(circuit, source, leaves, root, True)
 
     return leaves
 
@@ -76,49 +90,40 @@ def driver(discourse: str, nlp: spacy.load):
     circuit = Circuit("*****DISCOURSE*****")
 
     # Create a root box for the circuit
-    root_box = Bureacrat("REFERENCE")
+    root_box = Bureaucrat("REFERENCE")
 
     # Composer box to combine clauses
     composer = Spider("SPIDER COMPOSE")
 
-    # this will be the main output wire of the circuit
-
-    print(circuit.add_wire(composer, root_box))
 
     for i, clause in enumerate(clauses):
         print("CLAUSE", i+1, ":", clause)
         new_circuit = Circuit(f"Clause {i+1}")
-        new_circuit.add_wire(composer, root_box)
-        tree_parse(new_circuit, clause, nlp, composer)
-        print(new_circuit)
+        sources = tree_parse(new_circuit, clause, nlp, composer)
+
+        new_circuit.set_sources(sources)
+
+        print("Sources:", [source.get_label() for source in sources])
+
+        #print(new_circuit.root)
+
         circuit.concactenate(new_circuit)
+        
+    circuit.add_wire(composer, root_box)
 
     return root_box, circuit
 
 if __name__ == "__main__":
-    sentence1 = "hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad."
-    sentence2 = "Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     spacy_model = "en_core_web_trf"
 
-    Sentence3 = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
+    many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
+
+    sample_sentence = "Quick brown fox jumps lazy dog. Little John ate leafy greens."
+
     nlp = spacy.load(spacy_model)
 
-    ref, discourse = driver(Sentence3, nlp)
+    ref, discourse = driver(many_clauses, nlp)
 
     print(discourse)
 
-
-    # circuit1 = Circuit("DISCOURSE 1")
-    # circuit2 = Circuit("DISCOURSE 2")
-
-    # circuit3 = Circuit("DISCOURSE 3")
-
-    # __tree_parse(circuit1, sentence1, nlp)
-    # __tree_parse(circuit2, sentence2, nlp)
-
-    # circuit3.concactenate(circuit1)
-    # circuit3.concactenate(circuit2)
-
-    # print(circuit3)
-
-    #print(split_clauses_with_markers(sentence))
+    [print(source) for source in discourse.sources]
