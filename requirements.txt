@@ -1,8 +1,11 @@
-torch
 numpy
 tensorly
 requests
 sentence_transformers
-spacy
 gensim
 contractions
+spacy>=3.7.2
+transformers>=4.37.2
+torch>=2.1.0
+tqdm>=4.66.1
+datasets>=2.16.1 

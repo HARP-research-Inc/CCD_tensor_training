@@ -1,0 +1,20 @@
+{
+  "num_sentences": 0,
+  "discocirc_naive": 0.0,
+  "discocirc_cp": 0.0,
+  "bert_vanilla": 0.0,
+  "bert_flash": 0.0,
+  "dataset_stats": {
+    "total_articles": 1801350,
+    "total_sentences": 4548336,
+    "total_tokens": 97989460,
+    "is_complete": true,
+    "timestamp": "20250501_184919"
+  },
+  "articles_processed": 400,
+  "checkpoint_info": {
+    "timestamp": "20250501_185126",
+    "is_final": false,
+    "status": "in_progress"
+  }
+}
