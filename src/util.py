@@ -3,6 +3,8 @@ import torch
 from tensorly.decomposition import parafac
 import requests
 import torch.nn.functional as F
+from sentence_transformers import SentenceTransformer
+from sklearn.decomposition import PCA
 
 import sys
 from pathlib import Path
@@ -10,17 +12,26 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.append(str(BASE_DIR))
 
-def get_embedding_in_parallel(word):
-    """
-    Queries word embeddings from local server with fastText preloaded. 
+from transformers import BertTokenizer, BertModel
 
-    """
-    response = requests.get("http://127.0.0.1:8000/embedding/"+word)
+def get_embedding_in_parallel(word, model, pca=None):
+    """"""
+
+    word_embedding = model.encode(word, convert_to_tensor=True)
+    word_embedding = word_embedding.cpu().numpy().reshape(1, -1)
+
+    if pca:
+        word_embedding = pca.transform(word_embedding)
+
+    return torch.from_numpy(word_embedding)
+
+    """response = requests.get("http://127.0.0.1:8000/embedding/"+word)
     if response.status_code == 200:
         return torch.tensor(response.json()["embedding"][0]).unsqueeze(0)
     else:
         print(f"Error: {response.status_code}, {response.json()}")
-        return None
+        return None"""
+        
 
 def generate_embedding(line, pca, model, ft_model, tensor_function):
     """

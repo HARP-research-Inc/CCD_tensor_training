@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ccd-tensor-training:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5050:5050"
+    container_name: ccd-tensor-training
+    tty: true
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./preprocessing:/app/preprocessing
+      - ./data_raw:/app/data_raw
+      - ./documents:/app/documents
+      - ./tests:/app/tests
+      - ./theoretical_evaluation:/app/theoretical_evaluation
+    environment:
+      - PYTHONFAULTHANDLER=1
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,27 +1,23 @@
 import spacy
 import json
-
-nlp = spacy.load("en_core_web_sm")
+import time
+from multiprocessing import Pool, cpu_count
+import numpy as np
 
 NOUN_NUM = 50
 
-if __name__ == "__main__":
-    file_in = open("../data_raw/IMDB_Textblock.txt", 'r')
-    file_out = open("../data/top_transitive.json", 'w')
+def worker(index, data):
+    t = time.time()
 
-    text = file_in.read().split(".")
-
-    # Use sets to prevent duplicates
-    verb_dict: dict[str, list[set[str], set[str]]] = {}
+    nlp = spacy.load("en_core_web_sm", disable=['ner'])
     raw_dict = dict() #meant to cache number of occurences of each noun
 
-    #building raw dictionary
-    for sentence in text:
+    for i, sentence in enumerate(data):
         if len(sentence.strip()) == 0:
             continue
 
-        doc = nlp(sentence)
-
+        doc = nlp(str(sentence))
+        
         for token in doc:
             if token.pos_ == "VERB":
                 lemma = token.lemma_  # Get lemma of the verb
@@ -36,8 +32,34 @@ if __name__ == "__main__":
                         raw_dict[lemma]["subjects"][s] = raw_dict[lemma]["subjects"].get(s, 0) + 1
                     for o in obj:
                         raw_dict[lemma]["objects"][o] = raw_dict[lemma]["objects"].get(o, 0) + 1
-                  
-    #print(raw_dict)
+        
+        if i % 1000 == 0:
+            print(f'Thread {index}, {i}/{len(data)}', "sentences parsed,", int(time.time() - t), "seconds elapsed")
+    
+    print(f'Thread {index} completed')
+
+    return raw_dict
+
+if __name__ == "__main__":
+    file_in = open("../data_raw/IMDB_Textblock.txt", 'r')
+    file_out = open("../data/top_transitive.json", 'w')
+
+    text = file_in.read().split(".")
+    nlp = spacy.load("en_core_web_sm", disable=['ner'])
+
+    # Use sets to prevent duplicates
+    verb_dict: dict[str, list[set[str], set[str]]] = {}
+    raw_dict = dict() #meant to cache number of occurences of each noun
+
+    with Pool(processes=cpu_count()) as p:
+        for rd in p.starmap(worker, enumerate(np.array_split(text, cpu_count()))):
+            for lemma, posDict in rd.items():
+                if lemma not in raw_dict:
+                    raw_dict[lemma] = posDict
+                else:
+                    for pos in posDict:
+                        for tokenText in posDict[pos]:
+                            raw_dict[lemma][pos][tokenText] = raw_dict[lemma][pos].get(tokenText, 0) + posDict[pos][tokenText]
 
     for verb in raw_dict:
         
