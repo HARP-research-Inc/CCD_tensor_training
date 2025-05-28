@@ -1,3 +1,9 @@
+numpy
+tensorly
+requests
+sentence_transformers
+gensim
+contractions
 spacy>=3.7.2
 transformers>=4.37.2
 torch>=2.1.0

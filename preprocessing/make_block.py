@@ -13,8 +13,7 @@ if __name__ == "__main__":
             continue
 
         text = line.rsplit(',', 1)[0]
-        text = text.strip("\"")
-        text = text.strip("\n")
+        text = text.strip("\"\n")
         #text = text.strip()
         text = text.replace("<br /><br />", "")
 
