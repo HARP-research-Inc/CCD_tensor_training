@@ -1,31 +1,5 @@
 import torch
 from sentence_transformers import SentenceTransformer
-import stanza
-import spacy
-import re
-
-
-def atomic_compose(word, model: SentenceTransformer):
-    """
-    For nouns. Returns atomic type 
-    I -> 
-    """
-    pass
-
-def two_compose(obj1, obj2, model):
-    """
-    composes two objects with a function
-    """
-    pass
-
-def three_compose(obj1, obj2, obj3, model):
-    """
-    composes three objects with a function
-    """
-    pass
-
-def dummy_compose():
-    pass
 
 class Category(object):
     """
@@ -72,14 +46,15 @@ class Box(Category):
     function. The composition function is a function that takes in
     a set of objects and returns a set of objects. 
     """
-    def __init__(self, label: str, dimension=384):
+    def __init__(self, label: str, model_path: str = None):
         super().__init__(label)
-        self.dimension = dimension
-        self.composing_function = dummy_compose
         
         self.grammar = "s"
 
         #these store labels, not the wires themselves.
+
+        self.model_path = model_path
+
         self.in_wires: list[ Wire ] = None
         self.out_wires: list[ Wire ] = None
     
@@ -133,17 +108,6 @@ class Box(Category):
     def forward(self):
         
         pass
-
-class Spider(Box):
-    """
-    DisCoCat Spider. Defined as a Box utilzing a composition
-    function equivalent to the adposition "and", and equivalent in the 
-    graphical calculus to a logical "and".
-
-    Categorial abstraction:     
-    """
-    def __init__(self, label):
-        super().__init__(label)
 
 
 class Wire(Category):
