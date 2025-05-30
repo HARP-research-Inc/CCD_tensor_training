@@ -81,11 +81,7 @@ class Box_Factory(object):
             return Transitive_Verb(label, self.model_path)
         else:
             return Box(label, self.model_path)
-
-    # def create_box(self, label: str, model_path: str = None) -> Box:
-    #     pass
-
-        
+ 
 if __name__ == "__main__":
     def get_embedding_in_parallel(word, model):
         word_embedding = model.encode(word, convert_to_tensor=True)
