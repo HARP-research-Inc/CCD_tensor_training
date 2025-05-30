@@ -152,6 +152,7 @@ class Wire(Category):
         self.grammar = grammar
         self.dimension = dimension
         self.embedding = torch.nn.Embedding(1, dimension)
+        self.packet = None
         self.sink = child
     
     def get_label(self):
