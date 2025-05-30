@@ -1,14 +1,36 @@
 import torch
 from sentence_transformers import SentenceTransformer
 
+def interpret_requirement(actual: int, expected: str) -> bool:
+    """
+    'inf' -> infinite
+    b1:b2 -> b1 to b2 inclusive
+    """
+
+    if ":" in expected:
+        b1, b2 = expected.split(":")
+    
+    if b1.isnumeric():
+        b1 = int(b1)
+    elif b1 == "inf":
+        b1 = 0
+    else:
+        raise ValueError(f"Invalid lower bound: {b1}")
+    
+    if b2.isnumeric():
+        b2 = int(b2)
+    elif b2 == "inf":
+        b2 = float('inf')
+    else:
+        raise ValueError(f"Invalid upper bound: {b2}")
+    
+    return b1 <= actual <= b2
+
 class Category(object):
     """
     Abstract category class.
 
     """
-    # static variables
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
     def __init__(self, label):
         self.label = label
     
@@ -17,9 +39,11 @@ class Category(object):
         abstract inward method.
         """
         return self
-    def forward(self):
+    def forward(self) -> list:
         """
         abstract forward method.
+
+        packet format: (POS: str, data, data, ...)
         """
         return self
     def __str__(self):
@@ -57,9 +81,16 @@ class Box(Category):
 
         self.in_wires: list[ Wire ] = None
         self.out_wires: list[ Wire ] = None
+
+        self.packets = list[list]
+
+        self.grammar_data_cache = dict[str, int]
+
+        self.inward_requirements: dict = {} 
     
     def get_label(self):
         return self.label
+
     
     def is_state_or_effect(self):
         """
@@ -99,12 +130,27 @@ class Box(Category):
         self.out_wires.append(wire)
         return self
 
-    def check_rep():
+    def check_packet_status(self):
         """
-        Checks representation of box. Ensures there are no cycles identifies
-        sources.
+        checks if box has right number of packets of each type.
         """
-        pass
+        for pair in self.inward_requirements:
+            if pair[0] not in self.grammar_data_cache:
+                return False
+            
+            if not interpret_requirement(self.grammar_data_cache[pair[0]], pair[1]):
+                return False
+        return True 
+
+    def inward(self, input: list):
+        """
+        """
+        if input[0] not in self.grammar_data_cache:
+            self.grammar_data_cache[input[0]] = 0
+        self.grammar_data_cache[input[0]] += 1
+
+        self.packets.append(input)
+
     def forward(self):
         
         pass
@@ -134,6 +180,9 @@ class Wire(Category):
         """
         return self.embedding(torch.tensor([0]))
     
+    def inward(self):
+        return super().inward()
+
     def __str__(self):
         return self.label
 
@@ -183,7 +232,7 @@ class Circuit(Category):
         super().__init__(label)
         self.adjacency_list: dict[Box, list[Wire]] = {}
         self.root = None #root node
-        self.sources = list()
+        self.sources: list[Box] = list()
 
     def __str__(self):
         """
@@ -267,5 +316,25 @@ class Circuit(Category):
         self.adjacency_list.update(other.get_adjacency_list())  
 
         self.sources.extend(other.get_sources())
+    
+    def forward(self):
+        """
+        modified BFS traversal.
+        """
+        #source_ref = 
+        queue: list[Box] = self.sources.copy()
+
+        print(len(queue))
+
+        while len(queue) > 0:
+            v = queue.pop(0)
+            print(v.get_label())
+            if v.check_packet_status():
+                print(v.get_label())
+                for wire in v.out_wires:
+                    queue.append(wire.get_sink())
+            else:
+                queue.append(v)
+        
 
         
