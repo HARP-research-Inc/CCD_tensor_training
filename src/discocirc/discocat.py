@@ -101,12 +101,9 @@ def driver(discourse: str, nlp: spacy.load):
     circuit = Circuit("*****DISCOURSE*****")
 
     # Create a root box for the circuit
-    #root_box = Bureaucrat("REFERENCE")
     root_box = factory.create_box("REFERENCE", "bureaucrat")
 
     # Composer box to combine clauses
-    #composer = Spider("SPIDER COMPOSE")
-
     composer = factory.create_box("SPIDER COMPOSE", "spider")
 
     for i, clause in enumerate(clauses):
@@ -135,11 +132,15 @@ if __name__ == "__main__":
 
     many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     sample_sentence = "Quick brown fox jumps lazy dog. Little John ate leafy greens."
+    one_clause = "Tom ate leafy greens"
 
     nlp = spacy.load(spacy_model)
 
-    ref, discourse = driver(sample_sentence, nlp)
+    ref, discourse = driver(one_clause, nlp)
+
+    # print(discourse)
+
+    # [print(source) for source in discourse.sources]
 
     print(discourse)
-
-    [print(source) for source in discourse.sources]
+    discourse.forward()
