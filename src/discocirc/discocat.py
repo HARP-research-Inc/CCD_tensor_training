@@ -4,12 +4,23 @@ from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
 import torch
 from src.regression import TwoWordTensorRegression
+import re
 
 ###############################
 ###### PARSING FUNCTIONS ######
 ###############################
 
-def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token, is_one_deep: bool):
+MODEL_PATH = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/"
+CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
+    SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
+    SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
+    SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
+    SUBORDINATING_CONJUNCTIONS["relative (nominal)"] | SUBORDINATING_CONJUNCTIONS["exception"] |\
+    {"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
+
+PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
+
+def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token, factory: Box_Factory, is_one_deep: bool):
     """
     Parameter field names indicate the parent/child relationship in reference
     to the tree structure, NOT the circuit structure. 
@@ -17,7 +28,11 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     if is_one_deep:
         circuit.set_root(parent)
     
-    child_box = Box(token.text)
+    pos = token.pos_
+    
+    child_box = factory.create_box(token.text, pos)
+
+    print(pos, type(child_box))
 
     #traversal is in the opposite direction of the tree.
     circuit.add_wire(child_box, parent) # order swapped from tree traversal order
@@ -28,9 +43,9 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     
     for child in token.children:
         #print(token.text, child.text)
-        parse_driver(circuit, child_box, leaves, child, False)
+        parse_driver(circuit, child_box, leaves, child, factory, False)
 
-def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, source: Box = None):
+def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, source: Box = None):
     """
     Parsing traversal order should be in the opposite direction of the circuit.
     Parameter field names indicate the parent/child relationship in reference
@@ -44,18 +59,9 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, source: Box = 
 
     leaves = list()
 
-    parse_driver(circuit, source, leaves, root, True)
+    parse_driver(circuit, source, leaves, root, factory, True)
 
     return leaves
-
-CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
-    SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
-    SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
-    SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
-    SUBORDINATING_CONJUNCTIONS["relative (nominal)"] | SUBORDINATING_CONJUNCTIONS["exception"] |\
-    {"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
-
-PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
 
 
 def split_clauses_with_markers(sentence, nlp: spacy.load):
@@ -90,19 +96,23 @@ def driver(discourse: str, nlp: spacy.load):
     """
     clauses, conjunctions = split_clauses_with_markers(discourse, nlp)
 
+    factory = Box_Factory(nlp, MODEL_PATH)
+
     circuit = Circuit("*****DISCOURSE*****")
 
     # Create a root box for the circuit
-    root_box = Bureaucrat("REFERENCE")
+    #root_box = Bureaucrat("REFERENCE")
+    root_box = factory.create_box("REFERENCE", "bureaucrat")
 
     # Composer box to combine clauses
-    composer = Spider("SPIDER COMPOSE")
+    #composer = Spider("SPIDER COMPOSE")
 
+    composer = factory.create_box("SPIDER COMPOSE", "spider")
 
     for i, clause in enumerate(clauses):
         print("CLAUSE", i+1, ":", clause)
         new_circuit = Circuit(f"Clause {i+1}")
-        sources = tree_parse(new_circuit, clause, nlp, composer)
+        sources = tree_parse(new_circuit, clause, nlp, factory, composer)
 
         new_circuit.set_sources(sources)
 
@@ -121,16 +131,14 @@ if __name__ == "__main__":
     #version 0.1.0 - bag of clauses approach
 
     path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
-
     spacy_model = "en_core_web_trf"
 
     many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
-
     sample_sentence = "Quick brown fox jumps lazy dog. Little John ate leafy greens."
 
     nlp = spacy.load(spacy_model)
 
-    ref, discourse = driver(many_clauses, nlp)
+    ref, discourse = driver(sample_sentence, nlp)
 
     print(discourse)
 
