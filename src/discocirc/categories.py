@@ -5,10 +5,18 @@ def interpret_requirement(actual: int, expected: str) -> bool:
     """
     'inf' -> infinite
     b1:b2 -> b1 to b2 inclusive
+
+    0 <= b1,b2 <= inf
     """
 
     if ":" in expected:
         b1, b2 = expected.split(":")
+    elif( expected == "inf"):
+        b1 = "0"
+        b2 = "inf"
+    else:
+        b1 = expected
+        b2 = expected
     
     if b1.isnumeric():
         b1 = int(b1)
@@ -79,14 +87,16 @@ class Box(Category):
 
         self.model_path = model_path
 
-        self.in_wires: list[ Wire ] = None
-        self.out_wires: list[ Wire ] = None
+        self.in_wires: list[ Wire ] = []
+        self.out_wires: list[ Wire ] = []
 
-        self.packets = list[list]
+        self.packets: list[list] = []
 
-        self.grammar_data_cache = dict[str, int]
+        self.grammar_data_cache: dict[str, int] = {}
 
-        self.inward_requirements: dict = {} 
+        self.inward_requirements: dict = {(None, "0:inf")}  # default requirement, can be overridden
+
+        self.type = None
     
     def get_label(self):
         return self.label
@@ -97,7 +107,7 @@ class Box(Category):
         returns: pair of booleans. Returns true at index 0 if the box
         is a state, and true at index 1 if the box is an effect.
         """
-        return self.in_wires is None, self.out_wires is None
+        return len(self.in_wires) == 0, len(self.out_wires) == 0
     
     def set_in_wires(self, wires):
         """
@@ -134,13 +144,13 @@ class Box(Category):
         """
         checks if box has right number of packets of each type.
         """
+        status = True
         for pair in self.inward_requirements:
             if pair[0] not in self.grammar_data_cache:
-                return False
-            
-            if not interpret_requirement(self.grammar_data_cache[pair[0]], pair[1]):
-                return False
-        return True 
+                status = interpret_requirement(0, pair[1])
+                if status == False:
+                    return status
+        return status 
 
     def inward(self, input: list):
         """
@@ -152,9 +162,16 @@ class Box(Category):
         self.packets.append(input)
 
     def forward(self):
-        
-        pass
+        packet = list()
+        packet.append(self.type)
 
+        for wire in self.out_wires:
+            
+            #model query logic will be here 
+            
+            wire.inward(packet)
+            wire.forward()
+        
 
 class Wire(Category):
     def __init__(self, label: str, child: Box, grammar = "n", dimension=384):
@@ -162,7 +179,7 @@ class Wire(Category):
         self.grammar = grammar
         self.dimension = dimension
         self.embedding = torch.nn.Embedding(1, dimension)
-        self.packet = None
+        self.packet = []
         self.sink = child
     
     def get_label(self):
@@ -180,8 +197,11 @@ class Wire(Category):
         """
         return self.embedding(torch.tensor([0]))
     
-    def inward(self):
-        return super().inward()
+    def inward(self, packet):
+        self.packet = packet
+    
+    def forward(self):
+        self.sink.inward(self.packet)
 
     def __str__(self):
         return self.label
@@ -200,13 +220,6 @@ class Bureaucrat(Box):
     def __init__(self,label: str):
         super().__init__(label)
         self.embedding = None
-    
-    def inward(self, input: Wire):
-        input.embedding = input.get_embedding()
-
-    def forward(self):
-        return self.embedding
-
 
 class Actor(Wire):
     """
@@ -321,20 +334,35 @@ class Circuit(Category):
         """
         modified BFS traversal.
         """
-        #source_ref = 
+
+
         queue: list[Box] = self.sources.copy()
 
-        print(len(queue))
+        explored = set()
 
         while len(queue) > 0:
             v = queue.pop(0)
-            print(v.get_label())
+            print("Current node:", v.get_label())
+            print("Breadth-first traversal queue:", [q.get_label() for q in queue])
             if v.check_packet_status():
-                print(v.get_label())
+                #print(v.get_label())
+                v.forward()
+                #print(v.out_wires)
                 for wire in v.out_wires:
-                    queue.append(wire.get_sink())
+                    if wire.get_sink() not in explored:
+                        explored.add(wire.get_sink())
+                        queue.append(wire.get_sink())
             else:
                 queue.append(v)
+    
+    def query_wire(self, parent: str, child: str):
+        pass
         
-
-        
+if __name__ == "__main__":
+    # interpret requrements test
+    print(interpret_requirement(2, "0:inf"))  # True
+    print(interpret_requirement(2, "2:2"))    # True
+    print(interpret_requirement(2, "1:3"))    # True
+    print(interpret_requirement(2, "3:inf"))  # False
+    print(interpret_requirement(2, "inf"))    # True
+    print(interpret_requirement(2, "0:1"))    # False
