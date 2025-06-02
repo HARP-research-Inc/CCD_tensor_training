@@ -39,15 +39,10 @@ class Noun(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.type = "NOUN"
         self.grammar = ['ADJ','SELF']
 
         self.inward_requirements: dict = {("ADJ", "0:inf")}
-
-            
-    def forward(self):
-        for i in range(len(self.packets)):
-            pass
-        pass
 
 class Adjective(Box):
     """
@@ -56,10 +51,9 @@ class Adjective(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['SELF', 'NOUN']
+        self.type = "ADJ"
         self.inward_requirements: dict = {("ADV", "0:inf")} 
-    
-    def forward(self):
-        pass
+
 
 class Transitive_Verb(Box):
     """
@@ -68,6 +62,7 @@ class Transitive_Verb(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
+        self.type = "VERB"
 
         self.inward_requirements: dict = {("ADV", "0:inf"), 
                                          ("NOUN", "2:2")} 
@@ -78,9 +73,10 @@ class Box_Factory(object):
     """
     Factory for creating boxes.
     """
-    def __init__(self, NLP: spacy.load, model_path):
+    def __init__(self, NLP: spacy.load, model_path, lenient = False):
         self.NLP = NLP
         self.model_path = model_path
+        self.lenient = lenient
 
     def create_box(self, label: str, feature: str):
         if feature == "spider":
@@ -94,7 +90,19 @@ class Box_Factory(object):
         elif feature == "VERB":
             return Transitive_Verb(label, self.model_path)
         else:
-            raise ValueError(f"Unknown feature: {feature}")
+            if self.lenient:
+                return Box(label, self.model_path)
+            else:
+                raise ValueError(f"Unknown feature: {feature}")
+    
+    def set_lenient(self, value: bool):
+        """
+        Sets the lenient mode of the factory.
+        If lenient is True, unknown features will return a generic Box.
+        If False, an error will be raised for unknown features.
+        """
+        self.lenient = value
+        return self
  
 if __name__ == "__main__":
     # def get_embedding_in_parallel(word, model):
