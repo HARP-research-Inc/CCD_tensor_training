@@ -161,13 +161,16 @@ class Box(Category):
 
         self.packets.append(input)
 
+    def forward_helper(self):
+        return None
+
     def forward(self):
         packet = list()
         packet.append(self.type)
 
         for wire in self.out_wires:
             
-            #model query logic will be here 
+            packet.append(self.forward_helper())
             
             wire.inward(packet)
             wire.forward()

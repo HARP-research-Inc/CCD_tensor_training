@@ -1,5 +1,6 @@
 from .categories import *
 from src.regression import CPTensorRegression, TwoWordTensorRegression
+from .ann import ann
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -44,6 +45,12 @@ class Noun(Box):
 
         self.inward_requirements: dict = {("ADJ", "0:inf")}
 
+    def forward_helper(self):
+        for packet in self.packets:
+            if packet[0] == "ADJ":
+                pass
+
+
 class Adjective(Box):
     """
 
@@ -53,6 +60,9 @@ class Adjective(Box):
         self.grammar = ['SELF', 'NOUN']
         self.type = "ADJ"
         self.inward_requirements: dict = {("ADV", "0:inf")} 
+
+    def forward_helper(self):
+        pass
 
 
 class Transitive_Verb(Box):

@@ -5,6 +5,8 @@ from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 import torch
 from src.regression import TwoWordTensorRegression
 import re
+from src.regression import CPTensorRegression, TwoWordTensorRegression
+
 
 ###############################
 ###### PARSING FUNCTIONS ######
