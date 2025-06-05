@@ -1,6 +1,6 @@
 from .categories import *
 from src.regression import CPTensorRegression, TwoWordTensorRegression
-from .ann import ann
+#from .ann import ann
 
 import torch
 from sentence_transformers import SentenceTransformer
