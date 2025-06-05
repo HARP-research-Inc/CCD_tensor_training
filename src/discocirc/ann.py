@@ -3,49 +3,80 @@ import torch.nn.functional as F
 
 from sentence_transformers import SentenceTransformer
 
-BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-def ann(target: str, candidates: list, context = ""):
-    max_score = float('-inf')
-    best_candidate = None
-    target_embedding = BERT_model.encode(context + target, convert_to_tensor=True)
+class ModelBank(object):
+    def __init__(self):
+        self.reference_caches: dict[str, list] = dict()
+        self.model_caches: dict[tuple[str, str], torch.nn.Module] = dict()
+        self.BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    for candidate in candidates:
-        candidate_embedding = BERT_model.encode(context + candidate, convert_to_tensor=True)
-        score = F.cosine_similarity(target_embedding, candidate_embedding, dim=0).item()
+    def load_reference(self, lang_type: str, file_path: str):
+        with open(file_path, "r") as f:
+            self.reference_caches[lang_type] = f.read().splitlines()
         
-        print(f"Comparing '{target}' with '{candidate}': score = {score}")
+        return self.reference_caches[lang_type]
+
+    def ann(self, target: str, lang_type: str, file_path: str = None, context = ""):
         
-        if score > max_score:
-            max_score = score
-            best_candidate = candidate
-    return best_candidate, max_score if best_candidate else "No suitable candidate found"
+        candidates: list[str] = []
 
-def load_model(directory: str, model_name):
-    """
-    load regression model from the given path.
-    """
-    model_path = f"{directory}/{model_name}"
-    model = torch.load(model_path, weights_only=True)
-    model.eval()
-    return model
+        if lang_type in self.reference_caches:
+            candidates = self.reference_caches[lang_type]
+        else:
+            if file_path:
+                self.load_reference(lang_type, file_path)
+            else:
+                raise ValueError(f"Reference list for {lang_type} not found. Please load it first.")
+        
+        #evaluation:
+        max_score = float('-inf')
+        best_candidate = None
+        target_embedding = self.BERT_model.encode(context + target, convert_to_tensor=True)
 
-def load_ann(directory: str, candidates: str, target: str):
-    """
-    load ANN model from the given path.
-    """
-    model_name = ann(target, candidates)[0]
+        for candidate in candidates:
+            candidate_embedding = self.BERT_model.encode(context + candidate, convert_to_tensor=True)
+            score = F.cosine_similarity(target_embedding, candidate_embedding, dim=0).item()
+            
+            print(f"Comparing '{target}' with '{candidate}': score = {score}")
+            
+            if score > max_score:
+                max_score = score
+                best_candidate = candidate
+                if score > 0.99:
+                    break
 
-    model_path = f"{directory}/{model_name}"
-    model = torch.load(model_path, weights_only=True)
-    model.eval()
-    return model
+        return best_candidate, max_score if best_candidate else "No suitable candidate found"
+
+    def load_model(self, directory: str, model_name: tuple[str, str]) -> torch.nn.Module:
+        """
+        load regression model from the given path.
+        """
+        model_path = f"{directory}/{model_name[0]}"
+        model = torch.load(model_path, weights_only=True)
+        model.eval()
+
+        return model
+
+    def load_ann(self, directory: str, candidates: str, target: str):
+        """
+        load ANN model from the given path.
+        """
+        model_name = self.ann(target, candidates)[0]
+
+        model_path = f"{directory}/{model_name}"
+        model = torch.load(model_path, weights_only=True)
+        model.eval()
+        return model
 
 
 if __name__ == "__main__":
-    with open("ref/adv_adj.txt", "r") as f:
-        adv_adj = f.read().splitlines()
+    cache = ModelBank()
+    # with open("src/discocirc/ref/tverb.txt", "r") as f:
+    #     adv_adj = f.read().splitlines()
     
-    target = "&"
+    # target = "big"
 
-    print(ann(target, adv_adj))
+    cache.load_reference("adj", "src/discocirc/ref/adv_adj.txt")
+    print(cache.ann("big", "adj"))
+
+    #print(cache.reference_caches)
