@@ -10,21 +10,22 @@ class ModelBank(object):
         self.model_caches: dict[tuple[str, str], torch.nn.Module] = dict()
         self.BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
+        self.model_locations = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
+
     def load_reference(self, lang_type: str, file_path: str):
         with open(file_path, "r") as f:
             self.reference_caches[lang_type] = f.read().splitlines()
-        
         return self.reference_caches[lang_type]
 
     def ann(self, target: str, lang_type: str, file_path: str = None, context = ""):
         
         candidates: list[str] = []
-
+        print(lang_type in self.reference_caches)
         if lang_type in self.reference_caches:
             candidates = self.reference_caches[lang_type]
         else:
             if file_path:
-                self.load_reference(lang_type, file_path)
+                candidates = self.load_reference(lang_type, file_path)
             else:
                 raise ValueError(f"Reference list for {lang_type} not found. Please load it first.")
         
@@ -47,25 +48,27 @@ class ModelBank(object):
 
         return best_candidate, max_score if best_candidate else "No suitable candidate found"
 
-    def load_model(self, directory: str, model_name: tuple[str, str]) -> torch.nn.Module:
+    def __load_model(self, directory: str, model_name: tuple[str, str]) -> torch.nn.Module:
         """
         load regression model from the given path.
         """
-        model_path = f"{directory}/{model_name[0]}"
+        model_path = f"{self.model_locations}/{directory}/{model_name[0]}"
         model = torch.load(model_path, weights_only=True)
         model.eval()
 
         return model
 
-    def load_ann(self, directory: str, candidates: str, target: str):
+    def load_ann(self, ID: tuple[str, str], file_path: str = None):
         """
         load ANN model from the given path.
         """
-        model_name = self.ann(target, candidates)[0]
+        if ID in self.model_caches:
+            model = self.model_caches[ID]
+        else:
+            nearest_name = self.ann(ID[0], ID[1], file_path)
+            model = self.__load_model(ID[1], nearest_name)
+            self.model_caches[ID] = model
 
-        model_path = f"{directory}/{model_name}"
-        model = torch.load(model_path, weights_only=True)
-        model.eval()
         return model
 
 
@@ -76,7 +79,9 @@ if __name__ == "__main__":
     
     # target = "big"
 
-    cache.load_reference("adj", "src/discocirc/ref/adv_adj.txt")
-    print(cache.ann("big", "adj"))
+    #cache.load_reference("adj", "src/discocirc/ref/adv_adj.txt")
+    #print(cache.ann("poor", "ADJ", file_path="src/discocirc/ref/adv_adj.txt"))
+
+    print(cache.load_ann(("poor", "ADV"), file_path="src/discocirc/ref/adv_adj.txt"))
 
     #print(cache.reference_caches)
