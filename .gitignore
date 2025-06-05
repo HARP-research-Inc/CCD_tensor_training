@@ -39,7 +39,7 @@ src/embedding_caches
 tests/data
 data
 data_raw
-src/discocirc/dummy_weights
+src/DisCoBERT/dummy_weights
 *_model
 =======
 checkpoints/checkpoint_20250501_192122.json
