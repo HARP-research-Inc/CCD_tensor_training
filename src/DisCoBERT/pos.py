@@ -39,9 +39,10 @@ class Noun(Box):
     """
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
-        self.BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         self.type = "NOUN"
         self.grammar = ['ADJ','SELF']
+
+        self.embedding_state = Box.model_cache.retrieve_BERT(label)
 
         self.inward_requirements: dict = {("ADJ", "0:inf")}
 
@@ -59,7 +60,8 @@ class Adjective(Box):
         super().__init__(label, model_path)
         self.grammar = ['SELF', 'NOUN']
         self.type = "ADJ"
-        self.inward_requirements: dict = {("ADV", "0:inf")} 
+        self.model = Box.model_cache.load_ann(label, "src/DisCoBERT/ref/adj_model.txt", 1)
+        self.inward_requirements: dict = {("ADV", "0:inf")}
 
     def forward_helper(self):
         pass
@@ -76,6 +78,8 @@ class Transitive_Verb(Box):
 
         self.inward_requirements: dict = {("ADV", "0:inf"), 
                                          ("NOUN", "2:2")} 
+        
+        self.ncomposed = 2
         
         
 
@@ -115,46 +119,18 @@ class Box_Factory(object):
         return self
  
 if __name__ == "__main__":
-    # def get_embedding_in_parallel(word, model):
-    #     word_embedding = model.encode(word, convert_to_tensor=True)
-    #     word_embedding = word_embedding.cpu().numpy().reshape(1, -1)
-
-    #     return torch.from_numpy(word_embedding)
-
-    # path_to_model = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
-
-    # model = TwoWordTensorRegression(384, 384)
-    # model.load_state_dict(torch.load(f"{path_to_model}/transitive_verb_model/abandon", weights_only=True))
-    # model.eval()
-
-    # bert = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-    # a = get_embedding_in_parallel("I", bert)
-    # b = get_embedding_in_parallel("you", bert)
-
-    # model_output = model(a, b)
-    # print("Model output for 'I' and 'you':", model_output.shape)
-
     factory = Box_Factory(spacy.load("en_core_web_trf"), "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/")
 
-    tiny_discourse = Circuit("Tiny Discourse")
+    # tiny_discourse = Circuit("Tiny Discourse")
 
-    # tom = factory.create_box("Tom", "NOUN")
-    # ate = factory.create_box("ate", "VERB")
-    # leafy = factory.create_box("leafy", "ADJ")
-    # greens = factory.create_box("greens", "NOUN")
+    for i in range(1000):
+        test = factory.create_box(("Abbasid", "adj_model"), "ADJ")
 
-    # observer = factory.create_box("OBSERVER", "bureaucrat")
-
-    # tiny_discourse.add_wire(ate, observer)
-    # tiny_discourse.add_wire(tom, ate)
-    # tiny_discourse.add_wire(leafy, greens)
-    # tiny_discourse.add_wire(greens, ate)
-
+        print(i, type(test.model))
     
 
-    tiny_discourse.forward()
+    # tiny_discourse.forward()
 
-    print(tiny_discourse)
+    # print(tiny_discourse)
 
 

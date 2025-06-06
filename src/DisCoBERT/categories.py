@@ -1,5 +1,6 @@
 import torch
 from sentence_transformers import SentenceTransformer
+from .ann import ModelBank
 
 def interpret_requirement(actual: int, expected: str) -> bool:
     """
@@ -39,6 +40,9 @@ class Category(object):
     Abstract category class.
 
     """
+
+    model_cache: ModelBank = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training")
+
     def __init__(self, label):
         self.label = label
     
