@@ -134,17 +134,19 @@ if __name__ == "__main__":
 
     many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
     sample_sentence = "Quick brown fox jumps lazy dog. Little John ate leafy greens."
-    one_clause = "Big Tom ate leafy greens"
+    one_clause = "Big Tom ate greens"
     NVA_many_clauses = "Big Tom ate leafy greens and Little John watched him. They watched him."
+    
+    
     #annoying = "she should have been being watched carefully"
 
     nlp = spacy.load(spacy_model)
 
-    ref, discourse = driver(NVA_many_clauses, nlp)
+    ref, discourse = driver(one_clause, nlp)
 
     # print(discourse)
 
     # [print(source) for source in discourse.sources]
 
     print(discourse)
-    discourse.forward()
+    print(discourse.forward())

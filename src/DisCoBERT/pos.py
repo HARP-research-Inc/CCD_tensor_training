@@ -31,7 +31,26 @@ class Spider(Box):
     """
     def __init__(self, label, model_path):
         super().__init__(label, model_path)
-        self.model_path = self.model_path + "cconj_adj_model/and"
+        self.model_path = "cconj_adj_model"
+        self.type = "spider"
+        self.model = Box.model_cache.load_model(self.model_path, "and", n=2)
+        self.embedding_state = None
+    
+    def forward_helper(self):
+
+        for packet in self.packets:
+            if type(packet[1]) is not torch.Tensor:
+                raise ValueError(f"Expected a torch.Tensor for packet, got {type(packet[1])}")
+            if self.embedding_state is None:
+                self.embedding_state = packet[1]
+            else:
+                self.embedding_state = self.model(self.embedding_state, packet[1])
+        
+        if self.embedding_state is None:
+            raise ValueError("No packets were processed, embedding state is None.") 
+        return self.embedding_state
+
+            
 
 class Noun(Box):
     """
@@ -49,7 +68,13 @@ class Noun(Box):
     def forward_helper(self):
         for packet in self.packets:
             if packet[0] == "ADJ":
-                pass
+                adjective_model : torch.nn.Module = packet[1]
+                if not isinstance(adjective_model, torch.nn.Module):
+                    raise ValueError(f"Expected a torch.nn.Module for adjective model, got {type(adjective_model)}")
+                
+                self.embedding_state = adjective_model(self.embedding_state)
+        
+        return self.embedding_state
 
 
 class Adjective(Box):
@@ -60,11 +85,17 @@ class Adjective(Box):
         super().__init__(label, model_path)
         self.grammar = ['SELF', 'NOUN']
         self.type = "ADJ"
-        self.model = Box.model_cache.load_ann(label, "src/DisCoBERT/ref/adj_model.txt", 1)
+        self.model = Box.model_cache.load_ann((label, "adj_model"), n=1, file_path="src/DisCoBERT/ref/adj_model.txt")
         self.inward_requirements: dict = {("ADV", "0:inf")}
 
     def forward_helper(self):
-        pass
+        """
+        returns the model
+        """
+
+        #adv handling will be implemented when adv class is implemented
+
+        return self.model
 
 
 class Transitive_Verb(Box):
@@ -79,8 +110,37 @@ class Transitive_Verb(Box):
         self.inward_requirements: dict = {("ADV", "0:inf"), 
                                          ("NOUN", "2:2")} 
         
-        self.ncomposed = 2
+        self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2, file_path = "src/DisCoBERT/ref/transitive_verb_model.txt")
+
+    def forward_helper(self):
+        """
+        returns an embedding state after processing the NOUN packets.
+        """
+        noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+
+        if len(noun_packets) != 2:
+            raise ValueError(f"Transitive verb {self.label} requires exactly two NOUN packets, got {len(noun_packets)}.")  
         
+        #noun packets at index 1 should be pytorch tensors
+        output = self.model(noun_packets[0], noun_packets[1])
+
+        ####adverb stuff will be here###
+        #for packet in self.packets:
+        #    if packet[0] == "ADV":
+        #        output = blah blah blah
+
+        return output
+
+            
+    """
+    "PART OF SPEECH" DEFINITION PROBLEM...
+
+    NEW PARTS OF SPEEC WILL BE DEFINED HERE
+
+
+
+    VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
+    """
         
 
 class Box_Factory(object):
