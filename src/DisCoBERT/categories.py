@@ -233,11 +233,19 @@ class Bureaucrat(Box):
 
     def __init__(self,label: str):
         super().__init__(label)
+        self.type = "REFERENCE"
         self.embedding = None
     
     def forward_helper(self):
-        packet = ["output", self.embedding]
-        return packet
+        print("inwire length", len(self.in_wires))
+        print("inwire label", self.in_wires[0].label)
+
+        if len(self.in_wires) != 1:
+            raise TypeError(f"Expected input of 1 vector, {len(self.in_wires)}.")
+        
+        self.embedding = self.in_wires[0].packet[1]
+
+        return self.embedding
 
 # class Actor(Wire):
 #     """
@@ -357,13 +365,13 @@ class Circuit(Category):
         queue: list[Box] = self.sources.copy()
 
         explored = set()
+        last_output = None
 
         while len(queue) > 0:
             v = queue.pop(0)
             print("Current node:", v.get_label())
             print("Breadth-first traversal queue:", [q.get_label() for q in queue])
 
-            last_output = None
             if v.check_packet_status():
                 #print(v.get_label())
                 last_output = v.forward()

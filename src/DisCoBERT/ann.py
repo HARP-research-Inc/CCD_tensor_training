@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from src.regression import TwoWordTensorRegression, CPTensorRegression
-
+import spacy
 from sentence_transformers import SentenceTransformer
 import os
 
@@ -80,16 +80,29 @@ class ModelBank(object):
 
         return model
 
-    def load_ann(self, ID: tuple[str, str], n: int, file_path: str = None) -> torch.nn.Module:
+    def load_ann(self, ID: tuple[str, str], n: int, nlp: spacy.load = None, file_path: str = None) -> torch.nn.Module:
         """
         load ANN model from the given path.
         """
         if ID in self.model_caches:
             model = self.model_caches[ID]
         else:
-            nearest_name, _ = self.ann(ID[0], ID[1], file_path)
-            model = self.load_model(ID[1], nearest_name, n = n)
-            self.model_caches[ID] = model
+            try:
+                model = self.load_model(ID[1], ID[0], nearest_name)
+            except FileNotFoundError:
+                print(f"File {file_path}/{ID[0]} not found, finding nearest neightbor...")
+                
+                word = ID[0]
+                
+                if nlp:
+                    doc = nlp(word)
+                    for token in doc:
+                        word = token.lemma_
+
+                nearest_name, _ = self.ann(ID[0], ID[1], file_path)
+            
+                model = self.load_model(ID[1], nearest_name, n = n)
+                self.model_caches[ID] = model
 
         return model
     
