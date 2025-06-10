@@ -94,7 +94,6 @@ class Adjective(Box):
         """
 
         #adv handling will be implemented when adv class is implemented
-
         return self.model
 
 

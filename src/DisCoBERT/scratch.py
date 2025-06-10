@@ -1,7 +1,9 @@
 
 
 if __name__ == "__main__":
-    test: dict = {}
+    test: dict = {("test", 1), ("experiment", 4), ("trial", 55)}
 
-    for thing in test:
-        print(type(thing))
+    set_thing = {"a", "b", "c"}
+
+    for thing in set_thing:
+        print(thing)
