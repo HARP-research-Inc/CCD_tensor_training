@@ -169,15 +169,22 @@ class Box(Category):
         return None
 
     def forward(self):
+
         packet = list()
         packet.append(self.type)
 
+        packet.append(self.forward_helper())
+        print(packet)
+        #print([item[1] for item in self.packets if type(item) is torch.Tensor])
+
+        # 
+
         for wire in self.out_wires:
-            
-            packet.append(self.forward_helper())
             
             wire.inward(packet)
             wire.forward()
+        
+        return packet
         
 
 class Wire(Category):
@@ -221,20 +228,24 @@ class Bureaucrat(Box):
     """
 
     #static
-    references: dict[Wire, list[Box]] = dict()
+    #references: dict[Wire, list[Box]] = dict()
 
 
     def __init__(self,label: str):
         super().__init__(label)
         self.embedding = None
+    
+    def forward_helper(self):
+        packet = ["output", self.embedding]
+        return packet
 
-class Actor(Wire):
-    """
-    Actor wire. Works by "infecting" forward wires.
-    """
-    def __init__(self, label: str, child: Box, actor_label: str, grammar = "n", dimension=384, ):
-        super().__init__(label, child, grammar, dimension)
-        self.name = actor_label
+# class Actor(Wire):
+#     """
+#     Actor wire. Works by "infecting" forward wires.
+#     """
+#     def __init__(self, label: str, child: Box, actor_label: str, grammar = "n", dimension=384, ):
+#         super().__init__(label, child, grammar, dimension)
+#         self.name = actor_label
 
 class Circuit(Category):
     """
@@ -340,9 +351,9 @@ class Circuit(Category):
     def forward(self):
         """
         modified BFS traversal.
+
+        TRAVERSAL, "FORWARD COMPOSITION" PROBLEM
         """
-
-
         queue: list[Box] = self.sources.copy()
 
         explored = set()
@@ -351,9 +362,11 @@ class Circuit(Category):
             v = queue.pop(0)
             print("Current node:", v.get_label())
             print("Breadth-first traversal queue:", [q.get_label() for q in queue])
+
+            last_output = None
             if v.check_packet_status():
                 #print(v.get_label())
-                v.forward()
+                last_output = v.forward()
                 #print(v.out_wires)
                 for wire in v.out_wires:
                     if wire.get_sink() not in explored:
@@ -361,6 +374,8 @@ class Circuit(Category):
                         queue.append(wire.get_sink())
             else:
                 queue.append(v)
+        
+        return last_output
     
     def query_wire(self, parent: str, child: str):
         pass
