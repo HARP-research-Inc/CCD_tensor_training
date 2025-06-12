@@ -1,6 +1,7 @@
 import torch
 from sentence_transformers import SentenceTransformer
 from .ann import ModelBank
+import spacy
 
 def interpret_requirement(actual: int, expected: str) -> bool:
     """
@@ -75,6 +76,9 @@ class Category(object):
         hash operator.
         """
         return hash(self.label)
+    def set_nlp(self, nlp: spacy.load):
+        Category.model_cache.set_nlp(nlp)
+
 
 class Box(Category):
     """
@@ -174,7 +178,7 @@ class Box(Category):
         packet.append(self.type)
 
         packet.append(self.forward_helper())
-        print(packet)
+        #print(packet)
         #print([item[1] for item in self.packets if type(item) is torch.Tensor])
 
         # 
@@ -237,8 +241,8 @@ class Bureaucrat(Box):
         self.embedding = None
     
     def forward_helper(self):
-        print("inwire length", len(self.in_wires))
-        print("inwire label", self.in_wires[0].label)
+        #print("inwire length", len(self.in_wires))
+        #print("inwire label", self.in_wires[0].label)
 
         if len(self.in_wires) != 1:
             raise TypeError(f"Expected input of 1 vector, {len(self.in_wires)}.")
@@ -369,8 +373,8 @@ class Circuit(Category):
 
         while len(queue) > 0:
             v = queue.pop(0)
-            print("Current node:", v.get_label())
-            print("Breadth-first traversal queue:", [q.get_label() for q in queue])
+            #print("Current node:", v.get_label())
+            #print("Breadth-first traversal queue:", [q.get_label() for q in queue])
 
             if v.check_packet_status():
                 #print(v.get_label())

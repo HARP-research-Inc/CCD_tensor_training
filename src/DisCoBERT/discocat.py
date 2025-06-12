@@ -134,33 +134,31 @@ if __name__ == "__main__":
     path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
     spacy_model = "en_core_web_trf"
 
-    many_clauses = "Hey, the quick brown fox jumps over the lazy dog and I watched it happen, it was cool but I was sad. Good morning, I hope you are doing well. I am looking forward to our meeting tomorrow."
-    sample_sentence = "Quick brown fox jumps lazy dog. Little John ate leafy greens."
-    
-    NVA_many_clauses = "Big Tom ate leafy greens and Little John watched him. They watched him."
-    
-    one_clause = "big man eats small dog"
+    one_clause = "the big fat deformed french man eats a small helpless newborn baby"
     one_clause2 = "small dog eats big man"
-    #annoying = "she should have been being watched carefully"
+    annoying = "she should have been being watched carefully"
 
     nlp = spacy.load(spacy_model)
 
-    #ref, discourse = driver(one_clause, nlp)
+    dummy = Category("dumbass")
 
+    dummy.set_nlp(nlp)
+
+    ref, discourse = driver(one_clause, nlp)
+    ref, comparison = driver("the french freak eats an infant", nlp)
+
+    
     # print(discourse)
 
     # [print(source) for source in discourse.sources]
 
     #print(discourse)
-    #final_embedding = discourse.forward()
-    ground_truth1 = Box.model_cache.retrieve_BERT(one_clause)
-    ground_truth2 = Box.model_cache.retrieve_BERT(one_clause2)
+    final_embedding = discourse.forward()
+    comparison_embedding = comparison.forward()
+    ground_truth = Box.model_cache.retrieve_BERT(one_clause)
 
-    #_, discourse2 = driver(one_clause2, nlp)
 
-    #final_embedding2 = discourse2.forward()
 
-    #print(F.cosine_similarity(final_embedding[1], final_embedding2[1], dim=1))
-    print(F.cosine_similarity(ground_truth1, ground_truth2, dim=1))
+    print(F.cosine_similarity(final_embedding[1], comparison_embedding[1], dim=1))
     
 

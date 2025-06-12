@@ -50,7 +50,24 @@ class Spider(Box):
             raise ValueError("No packets were processed, embedding state is None.") 
         return self.embedding_state
 
-            
+class Determiner(Box):
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.grammar = ['SELF', 'NOUN']
+        self.type = "DET"
+        self.model = Box.model_cache.load_ann((label, "det_model"), n=1, file_path="src/DisCoBERT/ref/adj_model.txt")
+
+    def forward_helper(self):
+        """
+        returns the model
+        """
+        return self.model
+
+class Adverb(Box):
+    pass
+
+class Interjection(Box):
+    pass
 
 class Noun(Box):
     """
@@ -140,7 +157,6 @@ class Transitive_Verb(Box):
 
     VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
     """
-        
 
 class Box_Factory(object):
     """
@@ -162,6 +178,8 @@ class Box_Factory(object):
             return Adjective(label, self.model_path)
         elif feature == "VERB":
             return Transitive_Verb(label, self.model_path)
+        elif feature == "DET":
+            return Determiner(label, self.model_path)
         else:
             if self.lenient:
                 return Box(label, self.model_path)
