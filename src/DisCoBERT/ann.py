@@ -11,6 +11,8 @@ class ModelBank(object):
         self.model_caches: dict[tuple[str, str], torch.nn.Module] = dict()
         self.BERT_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
+        self.nlp: spacy.load = None
+
         self.model_locations = model_locations
 
     def load_reference(self, lang_type: str, file_path: str):
@@ -35,7 +37,6 @@ class ModelBank(object):
     def ann(self, target: str, lang_type: str, file_path: str = None, context = ""):
         
         candidates: list[str] = []
-        print(lang_type in self.reference_caches)
         if lang_type in self.reference_caches:
             candidates = self.reference_caches[lang_type]
         else:
@@ -80,7 +81,7 @@ class ModelBank(object):
 
         return model
 
-    def load_ann(self, ID: tuple[str, str], n: int, nlp: spacy.load = None, file_path: str = None) -> torch.nn.Module:
+    def load_ann(self, ID: tuple[str, str], n: int, file_path: str = None) -> torch.nn.Module:
         """
         load ANN model from the given path.
         """
@@ -88,23 +89,35 @@ class ModelBank(object):
             model = self.model_caches[ID]
         else:
             try:
-                model = self.load_model(ID[1], ID[0], nearest_name)
-            except FileNotFoundError:
-                print(f"File {file_path}/{ID[0]} not found, finding nearest neightbor...")
-                
-                word = ID[0]
-                
-                if nlp:
-                    doc = nlp(word)
-                    for token in doc:
-                        word = token.lemma_
-
-                nearest_name, _ = self.ann(ID[0], ID[1], file_path)
+                model = self.load_model(ID[1], ID[0], n=n)
+            except:
+                try:
+                    print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
+                    word = ID[0]
+                    if self.nlp is None:
+                        print("spaCy model uninitialized.")
+                        raise ValueError("spaCy model uninitialized.")
+                    else:
+                        doc = self.nlp(word)
+                        
+                        for token in doc:
+                            word = token.lemma_
+                            print(f"lemma: {word}")
+                    
+                        model = self.load_model(ID[1], word, n=n)
+                except:
+                    print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
             
-                model = self.load_model(ID[1], nearest_name, n = n)
-                self.model_caches[ID] = model
+                    word = ID[0]
+                    nearest_name, _ = self.ann(ID[0], ID[1], file_path)
+                    model = self.load_model(ID[1], nearest_name, n = n)
+            
+            self.model_caches[ID] = model
 
         return model
+    
+    def set_nlp(self, nlp: spacy.load):
+        self.nlp = nlp
     
 
 
@@ -124,12 +137,11 @@ if __name__ == "__main__":
 
     # print("cosine similarity:", F.cosine_similarity(model(word), comparison, dim=1).item())
 
-    model = cache.load_ann(("strike", "transitive_model"), n=2, file_path="src/DisCoBERT/ref/transitive_verb_model.txt")
+    nlp = spacy.load("en_core_web_trf")
+    cache.set_nlp(nlp)
+    model = cache.load_ann(("eats", "transitive_model"), n=2, file_path="src/DisCoBERT/ref/transitive_verb_model.txt")
 
-    subject = cache.retrieve_BERT("bat")
-    object = cache.retrieve_BERT("ball")
-
-    print(model(subject, object))
+    print(type(model))
 
 
     #print(model(word))

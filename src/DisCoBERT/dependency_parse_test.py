@@ -1,9 +1,8 @@
 import spacy
 
-nlp = spacy.load("en_core_web_lg")
+nlp = spacy.load("en_core_web_trf")
 
-with open("simple.txt", 'r') as file:
-    text = file.read()
+text = "the dog did something"
 
 doc = nlp(text)
 
@@ -14,5 +13,5 @@ give_children = doc[1].children
 
 for token in doc:
     print("---------------------")
-    print(token.text + ":")
+    print(token.text + f"({token.pos_})" + ":")
     [print(child.text, child.pos_) for child in token.children]    
