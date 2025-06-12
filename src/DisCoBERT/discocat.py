@@ -36,7 +36,7 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     
     child_box = factory.create_box(token.text, pos)
 
-    print(pos, type(child_box))
+    #print(pos, type(child_box))
 
     #traversal is in the opposite direction of the tree.
     circuit.add_wire(child_box, parent) # order swapped from tree traversal order
@@ -144,8 +144,8 @@ if __name__ == "__main__":
 
     dummy.set_nlp(nlp)
 
-    ref, discourse = driver(one_clause, nlp)
-    ref, comparison = driver("the french freak eats an infant", nlp)
+    ref, discourse1 = driver("the french silently chews an infant", nlp)
+    ref, discourse2 = driver("the french freak quickly eats an infant", nlp)
 
     
     # print(discourse)
@@ -153,9 +153,9 @@ if __name__ == "__main__":
     # [print(source) for source in discourse.sources]
 
     #print(discourse)
-    final_embedding = discourse.forward()
-    comparison_embedding = comparison.forward()
-    ground_truth = Box.model_cache.retrieve_BERT(one_clause)
+    final_embedding = discourse1.forward()
+    comparison_embedding = discourse2.forward()
+    #ground_truth = Box.model_cache.retrieve_BERT(one_clause)
 
 
 

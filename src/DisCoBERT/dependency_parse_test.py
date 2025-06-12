@@ -2,7 +2,7 @@ import spacy
 
 nlp = spacy.load("en_core_web_trf")
 
-text = "the dog did something"
+text = "the french freak quickly eats an infant"
 
 doc = nlp(text)
 

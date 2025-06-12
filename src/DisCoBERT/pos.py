@@ -64,7 +64,19 @@ class Determiner(Box):
         return self.model
 
 class Adverb(Box):
-    pass
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.type = "ADV"
+        self.grammar = ['SELF', 'VERB', '|', "SELF", "ADJ"]
+        self.model = Box.model_cache.load_ann((label, "adv_model"), n=1, file_path="src/DisCoBERT/ref/adv_model.txt")
+    
+    def forward_helper(self):
+        """
+        returns the model
+        """
+        return self.model
+
+
 
 class Interjection(Box):
     pass
@@ -134,16 +146,19 @@ class Transitive_Verb(Box):
         """
         noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
 
+        print("packet length", len(self.packets))
         if len(noun_packets) != 2:
             raise ValueError(f"Transitive verb {self.label} requires exactly two NOUN packets, got {len(noun_packets)}.")  
         
         #noun packets at index 1 should be pytorch tensors
         output = self.model(noun_packets[0], noun_packets[1])
 
-        ####adverb stuff will be here###
-        #for packet in self.packets:
-        #    if packet[0] == "ADV":
-        #        output = blah blah blah
+        ####adverb stuff####
+        for packet in self.packets:
+            if packet[0] == "ADV":
+                print("test")
+                model:torch.nn.Module = packet[1]
+                output = model(output) 
 
         return output
 
@@ -180,6 +195,8 @@ class Box_Factory(object):
             return Transitive_Verb(label, self.model_path)
         elif feature == "DET":
             return Determiner(label, self.model_path)
+        elif feature == "ADV":
+            return Adverb(label, self.model_path)
         else:
             if self.lenient:
                 return Box(label, self.model_path)
@@ -203,7 +220,7 @@ if __name__ == "__main__":
     for i in range(1000):
         test = factory.create_box(("Abbasid", "adj_model"), "ADJ")
 
-        print(i, type(test.model))
+        #print(i, type(test.model))
     
 
     # tiny_discourse.forward()

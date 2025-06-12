@@ -154,10 +154,15 @@ class Box(Category):
         """
         status = True
         for pair in self.inward_requirements:
-            if pair[0] not in self.grammar_data_cache:
-                status = interpret_requirement(0, pair[1])
-                if status == False:
-                    return status
+            # if pair[0] not in self.grammar_data_cache:
+            #     status = status and interpret_requirement(0, pair[1])
+            # else:
+            #     status = status and interpret_requirement(self.grammar_data_cache[pair[0]], pair[1])
+
+            status = status and interpret_requirement(0 if pair[0] not in self.grammar_data_cache else self.grammar_data_cache[pair[0]], pair[1])
+            
+            if status == False:
+                return status
         return status 
 
     def inward(self, input: list):
@@ -373,8 +378,8 @@ class Circuit(Category):
 
         while len(queue) > 0:
             v = queue.pop(0)
-            #print("Current node:", v.get_label())
-            #print("Breadth-first traversal queue:", [q.get_label() for q in queue])
+            #print("\n\n********Current node:********:", v.get_label())
+            #print("Breadth-first traversal queue:\n\n", [q.get_label() for q in queue])
 
             if v.check_packet_status():
                 #print(v.get_label())
@@ -400,3 +405,6 @@ if __name__ == "__main__":
     print(interpret_requirement(2, "3:inf"))  # False
     print(interpret_requirement(2, "inf"))    # True
     print(interpret_requirement(2, "0:1"))    # False
+
+    #1 adverb 1 noun
+    print(interpret_requirement(1, "0:inf") or interpret_requirement(2, "2:2"))
