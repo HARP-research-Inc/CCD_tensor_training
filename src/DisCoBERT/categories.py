@@ -358,7 +358,7 @@ class Circuit(Category):
         #checklist: move all boxes and wires, move all source references, update root
         
         if conjunction is not None: #if no conjunction is passed, then the circuit will have two discrete parts. 
-            pass
+            return
 
         
         self.adjacency_list.update(other.get_adjacency_list())  

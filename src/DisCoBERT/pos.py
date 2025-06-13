@@ -8,18 +8,18 @@ import spacy
 
 """
 Models trained: 
-- adv
-- aux
-- cconj adj
+- adv *
+- aux 
+- cconj adj 
 - cconj noun
 - cconj verb
-- determinants
+- determiners *
 - interjection
 - prep aux
 - prep verb
 - pronoun
 - sconj
-- transitive verb
+- transitive verb *
 
 """
 
@@ -55,7 +55,7 @@ class Determiner(Box):
         super().__init__(label, model_path)
         self.grammar = ['SELF', 'NOUN']
         self.type = "DET"
-        self.model = Box.model_cache.load_ann((label, "det_model"), n=1, file_path="src/DisCoBERT/ref/adj_model.txt")
+        self.model = Box.model_cache.load_ann((label, "det_model"), n=1)
 
     def forward_helper(self):
         """
@@ -68,7 +68,7 @@ class Adverb(Box):
         super().__init__(label, model_path)
         self.type = "ADV"
         self.grammar = ['SELF', 'VERB', '|', "SELF", "ADJ"]
-        self.model = Box.model_cache.load_ann((label, "adv_model"), n=1, file_path="src/DisCoBERT/ref/adv_model.txt")
+        self.model = Box.model_cache.load_ann((label, "adv_model"), n=1)
     
     def forward_helper(self):
         """
@@ -76,10 +76,31 @@ class Adverb(Box):
         """
         return self.model
 
-
+class Auxilliary(Box):
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.type = "AUX"
+        self.grammar = ['SELF', 'VERB']
+        self.model = Box.model_cache.load_ann((label, "aux_model"), n=1)
+    
+    def forward_helper(self):
+        """
+        returns the model
+        """
+        return self.model
 
 class Interjection(Box):
-    pass
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.type = "INTJ"
+        self.grammar = ['SELF', 'SENTENCE']
+        self.model = Box.model_cache.load_ann((label, "intj_model"), n=1)
+    
+    def forward_helper(self):
+        """
+        returns the model
+        """
+        return self.model
 
 class Noun(Box):
     """
@@ -114,7 +135,7 @@ class Adjective(Box):
         super().__init__(label, model_path)
         self.grammar = ['SELF', 'NOUN']
         self.type = "ADJ"
-        self.model = Box.model_cache.load_ann((label, "adj_model"), n=1, file_path="src/DisCoBERT/ref/adj_model.txt")
+        self.model = Box.model_cache.load_ann((label, "adj_model"), n=1)
         self.inward_requirements: dict = {("ADV", "0:inf")}
 
     def forward_helper(self):
@@ -135,10 +156,11 @@ class Transitive_Verb(Box):
         self.grammar = ['NOUN', 'SELF', 'NOUN']
         self.type = "VERB"
 
-        self.inward_requirements: dict = {("ADV", "0:inf"), 
+        self.inward_requirements: dict = {("ADV", "0:inf"),
+                                          ("INTJ", "0:inf"), 
                                          ("NOUN", "2:2")} 
         
-        self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2, file_path = "src/DisCoBERT/ref/transitive_verb_model.txt")
+        self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2)
 
     def forward_helper(self):
         """
@@ -155,10 +177,10 @@ class Transitive_Verb(Box):
 
         ####adverb stuff####
         for packet in self.packets:
-            if packet[0] == "ADV":
+            if packet[0] == "ADV" or packet[0] == "INTJ":
                 print("test")
                 model:torch.nn.Module = packet[1]
-                output = model(output) 
+                output = model(output)
 
         return output
 
@@ -197,6 +219,8 @@ class Box_Factory(object):
             return Determiner(label, self.model_path)
         elif feature == "ADV":
             return Adverb(label, self.model_path)
+        elif feature == "INTJ":
+            return Interjection(label, self.model_path)
         else:
             if self.lenient:
                 return Box(label, self.model_path)
