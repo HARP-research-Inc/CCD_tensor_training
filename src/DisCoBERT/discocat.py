@@ -4,6 +4,7 @@ from ..temporal_spacy.temporal_parsing import SUBORDINATING_CONJUNCTIONS
 
 import torch
 import torch.nn.functional as F
+import time
 
 from src.regression import TwoWordTensorRegression
 import re
@@ -111,13 +112,13 @@ def driver(discourse: str, nlp: spacy.load):
     composer = factory.create_box("SPIDER COMPOSE", "spider")
 
     for i, clause in enumerate(clauses):
-        print("CLAUSE", i+1, ":", clause)
+        #print("CLAUSE", i+1, ":", clause)
         new_circuit = Circuit(f"Clause {i+1}")
         sources = tree_parse(new_circuit, clause, nlp, factory, composer)
 
         new_circuit.set_sources(sources)
 
-        print("Sources:", [source.get_label() for source in sources])
+        #print("Sources:", [source.get_label() for source in sources])
 
         #print(new_circuit.root)
 
@@ -140,12 +141,18 @@ if __name__ == "__main__":
 
     nlp = spacy.load(spacy_model)
 
-    dummy = Category("dumbass")
+    dummy = Category("blank")
 
     dummy.set_nlp(nlp)
 
-    ref, discourse1 = driver("the french silently chews an infant", nlp)
-    ref, discourse2 = driver("the french freak quickly eats an infant", nlp)
+
+    ref, discourse = driver("hey the french freak quickly ate the baby", nlp)
+    ref, discourse2 = driver("the french freak quickly ate the baby", nlp)
+
+    embedding = discourse.forward()
+    embedding2 = discourse2.forward()
+
+    print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
 
     
     # print(discourse)
@@ -153,12 +160,31 @@ if __name__ == "__main__":
     # [print(source) for source in discourse.sources]
 
     #print(discourse)
-    final_embedding = discourse1.forward()
-    comparison_embedding = discourse2.forward()
+    # final_embedding = discourse1.forward()
+    # comparison_embedding = discourse2.forward()
     #ground_truth = Box.model_cache.retrieve_BERT(one_clause)
 
+    # start_time = time.time()
+    # for i in range(1000):
+    #     print("DisCoBERT iteration:", i)
+    #     _, _ = driver("I eat food", nlp)
+    # end_time = time.time()
+
+    # DCBERT_time = end_time - start_time
+
+    # start_time = time.time()
+    # for i in range(1000):
+    #     print("SBERT iteration:", i)
+    #     Box.model_cache.retrieve_BERT("I eat food")
+    # end_time = time.time()
+
+    # SBERT_time = end_time - start_time
+
+    # print("DisCoBERT time:", DCBERT_time)
+    # print("SBERT time:", SBERT_time)
 
 
-    print(F.cosine_similarity(final_embedding[1], comparison_embedding[1], dim=1))
+
+    #print(F.cosine_similarity(final_embedding[1], comparison_embedding[1], dim=1))
     
 

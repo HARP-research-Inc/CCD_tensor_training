@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from src.regression import TwoWordTensorRegression, CPTensorRegression
+from src.regression import TwoWordTensorRegression, OneWordTensorRegression, CPTensorRegression
 import spacy
 from sentence_transformers import SentenceTransformer
 import os
@@ -34,24 +34,25 @@ class ModelBank(object):
 
         return torch.from_numpy(word_embedding)
 
-    def ann(self, target: str, lang_type: str, file_path: str = None, context = ""):
+    def ann(self, target: str, lang_type: str):
         
         candidates: list[str] = []
         if lang_type in self.reference_caches:
             candidates = self.reference_caches[lang_type]
         else:
-            if file_path:
-                candidates = self.load_reference(lang_type, file_path)
+            file_directory = f"{self.model_locations}/{lang_type}"
+            if not os.path.exists(file_directory):
+                raise FileNotFoundError(f"Directory for {lang_type} not found at {file_directory}")
             else:
-                raise ValueError(f"Reference list for {lang_type} not found. Please load it first.")
+                candidates = os.listdir(file_directory)
         
         #evaluation:
         max_score = float('-inf')
         best_candidate = None
-        target_embedding = self.retrieve_BERT(context + target)
+        target_embedding = self.retrieve_BERT(target)
 
         for candidate in candidates:
-            candidate_embedding = self.retrieve_BERT(context + candidate)
+            candidate_embedding = self.retrieve_BERT(candidate)
 
             score = F.cosine_similarity(target_embedding, candidate_embedding, dim=1).item()
             
@@ -74,14 +75,15 @@ class ModelBank(object):
         model_path = f"{self.model_locations}/{directory}/{model_name}"
         
         model = CPTensorRegression([384 for _ in range(n)], 384, 100)
+        #model = OneWordTensorRegression(384, 384)
 
-
+        print("MODEL TYPE ", type(torch.load(model_path, weights_only=True)))
         model.load_state_dict(torch.load(model_path, weights_only=True))
         model.eval()
 
         return model
 
-    def load_ann(self, ID: tuple[str, str], n: int, file_path: str = None) -> torch.nn.Module:
+    def load_ann(self, ID: tuple[str, str], n: int) -> torch.nn.Module:
         """
         load ANN model from the given path.
         """
@@ -109,7 +111,7 @@ class ModelBank(object):
                     print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
             
                     word = ID[0]
-                    nearest_name, _ = self.ann(ID[0], ID[1], file_path)
+                    nearest_name, _ = self.ann(ID[0], ID[1])
                     model = self.load_model(ID[1], nearest_name, n = n)
             
             self.model_caches[ID] = model
@@ -122,30 +124,13 @@ class ModelBank(object):
 
 
 if __name__ == "__main__":
+    """
+    EXAMPLE USAGE:
+    """
     cache = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training")
-    # with open("src/DisCoBERT/ref/tverb.txt", "r") as f:
-    #     adv_adj = f.read().splitlines()
-    
-    # target = "big"
-
-
-    # model = cache.load_ann(("Leafy", "adj_model"), n=1, file_path="src/DisCoBERT/ref/adj_model.txt")
-
-    # word = cache.retrieve_BERT("greens")
-
-    # comparison = cache.retrieve_BERT("leafy greens")
-
-    # print("cosine similarity:", F.cosine_similarity(model(word), comparison, dim=1).item())
 
     nlp = spacy.load("en_core_web_trf")
     cache.set_nlp(nlp)
-    model = cache.load_ann(("eats", "transitive_model"), n=2, file_path="src/DisCoBERT/ref/transitive_verb_model.txt")
+    model = cache.load_ann(("did", "aux_model"), n=1)
 
     print(type(model))
-
-
-    #print(model(word))
-
-    
-
-    #print(cache.reference_caches)
