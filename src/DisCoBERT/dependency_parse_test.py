@@ -2,7 +2,7 @@ import spacy
 
 nlp = spacy.load("en_core_web_trf")
 
-text = "Sam and Tom walked"
+text = "The dogs among the men."
 
 doc = nlp(text)
 
@@ -13,5 +13,5 @@ give_children = doc[1].children
 
 for token in doc:
     print("---------------------")
-    print(token.text + f"({token.pos_})" + ":")
-    [print(child.text, child.pos_) for child in token.children]    
+    print(token.text + f"({token.pos_}), ({token.dep_})" + ":")
+    [print(child.text + f"({child.pos_}), ({child.dep_})") for child in token.children]    

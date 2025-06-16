@@ -378,8 +378,8 @@ class Circuit(Category):
 
         while len(queue) > 0:
             v = queue.pop(0)
-            #print("\n\n********Current node:********:", v.get_label())
-            #print("Breadth-first traversal queue:\n\n", [q.get_label() for q in queue])
+            print("\n\n********Current node:********:", v.get_label())
+            print("Breadth-first traversal queue:\n\n", [q.get_label() for q in queue])
 
             if v.check_packet_status():
                 #print(v.get_label())
