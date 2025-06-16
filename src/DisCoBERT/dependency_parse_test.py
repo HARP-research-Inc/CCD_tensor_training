@@ -2,7 +2,7 @@ import spacy
 
 nlp = spacy.load("en_core_web_trf")
 
-text = "Tarare did you eat a fucking baby?"
+text = "Sam and Tom walked"
 
 doc = nlp(text)
 

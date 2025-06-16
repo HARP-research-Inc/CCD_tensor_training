@@ -146,6 +146,35 @@ class Adjective(Box):
         #adv handling will be implemented when adv class is implemented
         return self.model
 
+class Intransitive_Verb(Box):
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.grammar = ['NOUN', 'SELF', 'NOUN']
+        self.type = "INTRANSITIVE_VERB"
+
+        self.inward_requirements: dict = {("ADV", "0:inf"),
+                                          ("INTJ", "0:inf"), 
+                                         ("NOUN", "1:1")}
+        self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
+    
+    def forward_helper(self):
+        noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+
+        print("packet length", len(self.packets))
+        if len(noun_packets) != 1:
+            raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
+        
+
+        ####adverb stuff####
+        for packet in self.packets:
+            if packet[0] == "ADV" or packet[0] == "INTJ":
+                print("test")
+                model:torch.nn.Module = packet[1]
+                output = model(output)
+
+        return output
+        
+    
 
 class Transitive_Verb(Box):
     """
@@ -154,7 +183,7 @@ class Transitive_Verb(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
-        self.type = "VERB"
+        self.type = "TRANSITIVE_VERB"
 
         self.inward_requirements: dict = {("ADV", "0:inf"),
                                           ("INTJ", "0:inf"), 
@@ -204,17 +233,35 @@ class Box_Factory(object):
         self.model_path = model_path
         self.lenient = lenient
 
-    def create_box(self, label: str, feature: str):
+    def create_box(self, token: spacy.tokens.Token, feature: str):
+        
+        if token is not None:
+            label = token.text
+
         if feature == "spider":
-            return Spider(label, self.model_path)
+            return Spider("SPIDER", self.model_path)
         elif feature == "bureaucrat":
-            return Bureaucrat(label)
+            return Bureaucrat("REFERENCE")
         elif feature == "NOUN" or feature == "PROPN" or feature == "PRON":
             return Noun(label, self.model_path)
         elif feature == "ADJ":
             return Adjective(label, self.model_path)
         elif feature == "VERB":
-            return Transitive_Verb(label, self.model_path)
+            nsubj = None
+            dobj = None
+            dative = None
+
+            for child in token.children:
+                if child.dep_ == "nsubj":
+                    nsubj = child.text
+                if child.dep_ == "dobj":
+                    dobj = child.text
+                if child.dep_ == "dative":
+                    dative = child.text
+            if not nsubj:
+                raise ValueError(f"Sanity check: verb {label} somehow has no subject.")
+            else:
+                return Transitive_Verb(label, self.model_path)
         elif feature == "DET":
             return Determiner(label, self.model_path)
         elif feature == "ADV":

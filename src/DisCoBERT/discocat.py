@@ -35,7 +35,7 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
     
     pos = token.pos_
     
-    child_box = factory.create_box(token.text, pos)
+    child_box = factory.create_box(token, pos)
 
     #print(pos, type(child_box))
 
@@ -106,10 +106,10 @@ def driver(discourse: str, nlp: spacy.load):
     circuit = Circuit("*****DISCOURSE*****")
 
     # Create a root box for the circuit
-    root_box = factory.create_box("REFERENCE", "bureaucrat")
+    root_box = factory.create_box(None, "bureaucrat")
 
     # Composer box to combine clauses
-    composer = factory.create_box("SPIDER COMPOSE", "spider")
+    composer = factory.create_box(None, "spider")
 
     for i, clause in enumerate(clauses):
         #print("CLAUSE", i+1, ":", clause)
@@ -146,13 +146,15 @@ if __name__ == "__main__":
     dummy.set_nlp(nlp)
 
 
-    ref, discourse = driver("hey the french freak quickly ate the baby", nlp)
-    ref, discourse2 = driver("the french freak quickly ate the baby", nlp)
+    ref, discourse = driver("Dave gave his teacher a gift", nlp)
+    #ref, discourse2 = driver("the french freak quickly ate the baby", nlp)
 
-    embedding = discourse.forward()
-    embedding2 = discourse2.forward()
+    print(discourse)
 
-    print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
+    # embedding = discourse.forward()
+    # embedding2 = discourse2.forward()
+
+    # print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
 
     
     # print(discourse)
