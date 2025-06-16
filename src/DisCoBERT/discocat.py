@@ -146,25 +146,19 @@ if __name__ == "__main__":
     dummy.set_nlp(nlp)
 
 
-    ref, discourse = driver("Dave gave his teacher a gift", nlp)
+    ref, discourse = driver("John gave Ted a gift", nlp)
     #ref, discourse2 = driver("the french freak quickly ate the baby", nlp)
 
     print(discourse)
 
-    # embedding = discourse.forward()
+
+
+    embedding = discourse.forward()
+
+    print(type(embedding))
     # embedding2 = discourse2.forward()
 
     # print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
-
-    
-    # print(discourse)
-
-    # [print(source) for source in discourse.sources]
-
-    #print(discourse)
-    # final_embedding = discourse1.forward()
-    # comparison_embedding = discourse2.forward()
-    #ground_truth = Box.model_cache.retrieve_BERT(one_clause)
 
     # start_time = time.time()
     # for i in range(1000):
@@ -184,9 +178,5 @@ if __name__ == "__main__":
 
     # print("DisCoBERT time:", DCBERT_time)
     # print("SBERT time:", SBERT_time)
-
-
-
-    #print(F.cosine_similarity(final_embedding[1], comparison_embedding[1], dim=1))
     
 

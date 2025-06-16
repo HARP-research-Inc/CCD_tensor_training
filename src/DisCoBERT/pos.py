@@ -150,7 +150,7 @@ class Intransitive_Verb(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
-        self.type = "INTRANSITIVE_VERB"
+        self.type = "VERB"
 
         self.inward_requirements: dict = {("ADV", "0:inf"),
                                           ("INTJ", "0:inf"), 
@@ -164,6 +164,7 @@ class Intransitive_Verb(Box):
         if len(noun_packets) != 1:
             raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
         
+        output = self.model(noun_packets[0])
 
         ####adverb stuff####
         for packet in self.packets:
@@ -183,7 +184,7 @@ class Transitive_Verb(Box):
     def __init__(self, label: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
-        self.type = "TRANSITIVE_VERB"
+        self.type = "VERB"
 
         self.inward_requirements: dict = {("ADV", "0:inf"),
                                           ("INTJ", "0:inf"), 
@@ -213,7 +214,74 @@ class Transitive_Verb(Box):
 
         return output
 
-            
+class Ditransitive_Verb(Box):
+    """
+
+    """
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.grammar = ['NOUN', 'SELF', 'NOUN']
+        self.type = "VERB"
+
+        self.inward_requirements: dict = {("ADV", "0:inf"),
+                                          ("INTJ", "0:inf"), 
+                                         ("NOUN", "3:3")} 
+        
+        self.model = Box.model_cache.load_ann((label, "ditransitive_model"), n=3)
+
+    def forward_helper(self):
+        """
+        returns an embedding state after processing the NOUN packets.
+        """
+        noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+
+        print("packet length", len(self.packets))
+        if len(noun_packets) != 3:
+            raise ValueError(f"Transitive verb {self.label} requires exactly three NOUN packets, got {len(noun_packets)}.")  
+        
+        #noun packets at index 1 should be pytorch tensors
+        output = self.model(noun_packets[0], noun_packets[1], noun_packets[2])
+
+        ####adverb stuff####
+        for packet in self.packets:
+            if packet[0] == "ADV" or packet[0] == "INTJ":
+                print("test")
+                model:torch.nn.Module = packet[1]
+                output = model(output)
+
+        return output
+
+class Preposition(Box):
+    """
+
+    """
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+        self.grammar = ['NOUN', 'SELF', 'NOUN']
+        self.type = "PREP"
+
+        # self.inward_requirements: dict = {("ADV", "0:inf"),
+        #                                   ("INTJ", "0:inf"), 
+        #                                  ("NOUN", "2:2")} 
+        
+        self.model = Box.model_cache.load_ann((label, "prep_model"), n=2)
+
+    def forward_helper(self):
+        """
+        """        
+        output = self.model(self.packets[0][1], self.packets[1][1])
+
+        ####adverb stuff####
+        for packet in self.packets:
+            if packet[0] == "ADV" or packet[0] == "INTJ":
+                print("test")
+                model:torch.nn.Module = packet[1]
+                output = model(output)
+
+        return output
+
+
+
     """
     "PART OF SPEECH" DEFINITION PROBLEM...
 
@@ -247,10 +315,7 @@ class Box_Factory(object):
         elif feature == "ADJ":
             return Adjective(label, self.model_path)
         elif feature == "VERB":
-            nsubj = None
-            dobj = None
-            dative = None
-
+            nsubj, dobj, dative = None
             for child in token.children:
                 if child.dep_ == "nsubj":
                     nsubj = child.text
@@ -261,7 +326,12 @@ class Box_Factory(object):
             if not nsubj:
                 raise ValueError(f"Sanity check: verb {label} somehow has no subject.")
             else:
-                return Transitive_Verb(label, self.model_path)
+                if dobj and dative:
+                    return Ditransitive_Verb(label, self.model_path)
+                elif dobj:
+                    return Transitive_Verb(label, self.model_path)
+                else:
+                    return Intransitive_Verb(label, self.model_path)
         elif feature == "DET":
             return Determiner(label, self.model_path)
         elif feature == "ADV":

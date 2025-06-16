@@ -131,6 +131,6 @@ if __name__ == "__main__":
 
     nlp = spacy.load("en_core_web_trf")
     cache.set_nlp(nlp)
-    model = cache.load_ann(("did", "prep_verb_model"), n=2)
+    model = cache.load_ann(("among", "prep_model"), n=2)
 
     print(type(model))
