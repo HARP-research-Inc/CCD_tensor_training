@@ -251,6 +251,10 @@ class Ditransitive_Verb(Box):
 
         return output
 
+class PrepositionHelper(Category):
+    def __init__(self, label):
+        super().__init__(label)
+
 class Preposition(Box):
     """
 
@@ -259,24 +263,15 @@ class Preposition(Box):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
         self.type = "PREP"
-
-        # self.inward_requirements: dict = {("ADV", "0:inf"),
-        #                                   ("INTJ", "0:inf"), 
-        #                                  ("NOUN", "2:2")} 
         
         self.model = Box.model_cache.load_ann((label, "prep_model"), n=2)
 
     def forward_helper(self):
         """
-        """        
-        output = self.model(self.packets[0][1], self.packets[1][1])
-
-        ####adverb stuff####
+        """
         for packet in self.packets:
-            if packet[0] == "ADV" or packet[0] == "INTJ":
-                print("test")
-                model:torch.nn.Module = packet[1]
-                output = model(output)
+            if packet[0] == "NOUN" or packet[0] == "VERB":
+                output = (self.model, )
 
         return output
 
@@ -296,7 +291,7 @@ class Box_Factory(object):
     """
     Factory for creating boxes.
     """
-    def __init__(self, NLP: spacy.load, model_path, lenient = False):
+    def __init__(self, NLP: spacy.load, model_path, lenient = True):
         self.NLP = NLP
         self.model_path = model_path
         self.lenient = lenient
@@ -338,6 +333,8 @@ class Box_Factory(object):
             return Adverb(label, self.model_path)
         elif feature == "INTJ":
             return Interjection(label, self.model_path)
+        elif feature == "ADP":
+            return Preposition(label, self.model_path)
         else:
             if self.lenient:
                 return Box(label, self.model_path)
