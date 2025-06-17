@@ -144,18 +144,19 @@ if __name__ == "__main__":
     dummy = Category("blank")
 
     dummy.set_nlp(nlp)
+    
 
 
-    ref, discourse = driver("John gave Ted a gift", nlp)
+    ref, discourse = driver("The dogs among the men.", nlp)
     #ref, discourse2 = driver("the french freak quickly ate the baby", nlp)
 
     print(discourse)
 
 
 
-    embedding = discourse.forward()
+    #embedding = discourse.forward()
 
-    print(type(embedding))
+    #print(type(embedding))
     # embedding2 = discourse2.forward()
 
     # print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
