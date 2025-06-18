@@ -1,0 +1,20 @@
+{
+  "num_sentences": 1004,
+  "discocirc_naive": 210959085696.0,
+  "discocirc_cp": 1329580800.0,
+  "bert_vanilla": 4565999954880.0,
+  "bert_flash": 4453755052032.0,
+  "dataset_stats": {
+    "total_articles": 1801350,
+    "total_sentences": 4548336,
+    "total_tokens": 97989460,
+    "is_complete": true,
+    "timestamp": "20250501_184919"
+  },
+  "articles_processed": 700,
+  "checkpoint_info": {
+    "timestamp": "20250501_185150",
+    "is_final": false,
+    "status": "in_progress"
+  }
+}
