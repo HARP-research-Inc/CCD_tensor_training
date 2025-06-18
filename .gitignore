@@ -41,3 +41,4 @@ data
 data_raw
 src/discocirc/dummy_weights
 *_model
+results/

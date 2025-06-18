@@ -386,7 +386,7 @@ def model_worker(index: int, queue, destination, epochs):
 	print(f'Thread {index} completed')
 
 
-def build_model(src: str, destination: str, epochs: int, producerThreads=3, consumerThreads=3):
+def build_model(src: str, destination: str, epochs: int, producerThreads=3, consumerThreads=3, reverse=False):
 	with open(src) as file_in:
 		data = json.load(file_in)
 
@@ -410,7 +410,7 @@ def build_model(src: str, destination: str, epochs: int, producerThreads=3, cons
 
 	wordQueue = manager4.Queue()
 
-	for key in data:
+	for key in (list(reversed(sorted(data.keys()))) if reverse else list(data.keys())):
 		wordQueue.put(key)
 	
 	for _ in range(producerThreads):
@@ -513,7 +513,7 @@ def tense_model_worker(index: int, queue, destination, epochs):
 	print(f'Thread {index} completed')
 
 
-def build_tense_model(src: str, destination: str, epochs: int, producerThreads=3, consumerThreads=3):
+def build_tense_model(src: str, destination: str, epochs: int, producerThreads=3, consumerThreads=3, reverse=False):
 	with open(src) as file_in:
 		data = json.load(file_in)
 
@@ -537,7 +537,7 @@ def build_tense_model(src: str, destination: str, epochs: int, producerThreads=3
 
 	wordQueue = manager4.Queue()
 
-	for key in data:
+	for key in (list(reversed(sorted(data.keys()))) if reverse else data.keys()):
 		wordQueue.put(key)
 	
 	for _ in range(producerThreads):
@@ -571,6 +571,8 @@ if __name__ == "__main__":
 
 	#build_two_word_model("data/top_aux.json", "aux_model", epochs=5000)
 
+	# build_model("data/top_verb_nsubj.json", "intransitive_model", 5000, 10, 20)
+	# build_model("data/top_adj_amod.json", "adj_model", 5000, 10, 20)
 	# build_trans_verb_model("data/top_transitive.json", "transitive_model", epochs=5000)
 	# build_model("data/top_adv.json", "adv_model", 5000, 6, 3)
 	# build_model("data/top_pron_NOUN_poss.json", "pron_model", 5000, 6, 3)
@@ -584,8 +586,9 @@ if __name__ == "__main__":
 	# build_model("data/top_sconj_mark_VERB_advcl_VERB.json", "sconj_model", 5000, 6, 3)
 	# build_model("data/top_cconj_cc_ADJ_conj_ADJ.json", "cconj_adj_model", 5000, 6, 3)
 	# build_model("data/top_cconj_cc_VERB_conj_VERB.json", "cconj_verb_model", 5000, 6, 3)
-	# build_model("data/top_det_NOUN_det.json", "det_model", 5000, 6, 3)
+	# build_model("data/top_det_NOUN_det.json", "det_model", 5000, 20, 10)
+	build_model("data/top_aux.json", "aux_model", 5000, 6, 3)
 	# bert_on_bert("data/one_verb.json", "models", epochs=500)
-	build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
+	# build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
 
 	print("Regression complete.")
