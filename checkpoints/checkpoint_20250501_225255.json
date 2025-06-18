@@ -1,0 +1,15 @@
+{
+  "num_sentences": 3413,
+  "discocirc_naive": 7353287782656.0,
+  "discocirc_cp": 11731200000.0,
+  "bert_vanilla": 17131110395856.0,
+  "bert_flash": 17032723292160.0,
+  "start_time": 1746154284.524054,
+  "processed_examples": 1465,
+  "last_update_time": 1746154310.6921072,
+  "checkpoint_info": {
+    "dataset_position": 1465,
+    "timestamp": "20250501_225255",
+    "is_final": false
+  }
+}
