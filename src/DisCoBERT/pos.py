@@ -250,14 +250,18 @@ class Linking_Verb(Box):
 		"""
 		returns an embedding state after processing the NOUN packets.
 		"""
-		word_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "ADJ" or packet[0] == "ADP"]
+		word_packets = [packet[1] for packet in self.packets] #if packet[0] == "NOUN" or packet[0] == "ADJ" or packet[0] == "ADP"]
 
 		print("linking packet length", len(self.packets))
 		if len(word_packets) != 2:
 			raise ValueError(f"Linking verb {self.label} requires exactly two packets, got {len(word_packets)}.")  
 		
-		print(word_packets)
 		#noun packets at index 1 should be pytorch tensors
+
+		for i in range(len(word_packets)):
+			if isinstance(word_packets[i], torch.nn.Module):
+				word_packets[i] = word_packets[i](word_packets[i - 1])
+		
 		output = self.model(word_packets[0], word_packets[1])
 
 		return output
@@ -313,7 +317,7 @@ class Preposition(Box):
 
 	def forward_helper(self):
 		print(f"Parsing preposition {self.label}...")
-		word_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "VERB" or packet[0] == "AUX"]
+		word_packets = [packet[1] for packet in self.packets]#if packet[0] == "NOUN" or packet[0] == "VERB" or packet[0] == "AUX"]
 		print([packet[0] for packet in self.packets])
 
 		print("packet length", len(self.packets))
@@ -431,7 +435,7 @@ class Box_Factory(object):
 			return Spider("SPIDER", self.model_path)
 		elif feature == "bureaucrat":
 			return Bureaucrat("REFERENCE")
-		elif feature == "AUX" and set(child.dep_ for child in token.children) in [set(['nsubj', 'prep']), set(['nsubj', 'acomp'])]:
+		elif feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set(['nsubj', 'prep']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp'])] or (feature == "AUX" and not any(dep in token.dep_ for dep in ["aux", "nsubj", "obj", "prep"]))):
 			return Linking_Verb(label, self.model_path)
 		elif feature == "PRON" and any(child.dep_ == "poss" for child in token.children):
 			return Possessive(label, self.model_path)
