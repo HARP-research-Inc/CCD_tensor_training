@@ -20,7 +20,7 @@ CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUN
 	SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
 	SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
 	SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
-	SUBORDINATING_CONJUNCTIONS["relative (nominal)"] | SUBORDINATING_CONJUNCTIONS["exception"]# |\
+	SUBORDINATING_CONJUNCTIONS["exception"]# | SUBORDINATING_CONJUNCTIONS["relative (nominal)"] |
 	#{"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
 
 PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
@@ -56,6 +56,22 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
 	for child in token.children:
 		#print(token.text, child.text)
 		parse_driver(circuit, child_box, leaves, child, factory, doc, levels, level + 1)
+
+def flip(doc, relation):
+	for token in doc:
+		if token.dep_ == relation:
+			prev_token = token
+			prev_token_dep = token.dep_
+			original_head = token.head
+			original_head_dep = original_head.dep_
+
+			print("flipped", prev_token.text, original_head.text)
+			print(prev_token_dep, original_head_dep)
+
+			prev_token.head = prev_token if original_head.head == original_head else original_head.head
+			prev_token.dep_ = original_head_dep
+			original_head.head = prev_token
+			original_head.dep_ = prev_token_dep
 
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, levels: dict, source: Box = None):
 	"""
@@ -101,7 +117,6 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			if found:
 				break
 
-	# Flip prep relationships directly in the spacy structure
 	for token in doc:
 		if token.pos_ == "VERB":
 			prep_children = [child for child in token.children if child.dep_ == "prep"]
@@ -110,16 +125,51 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				for i in range(1, len(prep_children)):
 					prep_children[i].head = prep_children[i - 1]
 	
-	# Flip prep relationships directly in the spacy structure
-	for token in doc:
+	"""for token in doc:
 		if token.dep_ == "prep":
 			prep_token = token
 			original_head = token.head
 
 			print(prep_token.text, original_head.text)
 
-			prep_token.head = prep_token
-			original_head.head = prep_token
+			prep_token.head = prep_token if original_head.head == original_head else original_head.head
+			original_head.head = prep_token"""
+	
+	remove = set()
+	for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
+			
+		if token.dep_ == "relcl":
+			print(token.text, "is a relcl")
+			if len(list(token.lefts)) > 0:
+				child = list(token.lefts)[0]
+				dep = child.dep_
+				remove.add(child)
+				child.head = child
+				
+				if token.pos_ == "VERB" and token.head.head != token.head:
+					print(token.head.text, "becomes child of", token.text, "and", token.text, "becomes child of", token.head.head.text)
+					prevHead = token.head.head
+					token.head.head = token
+					token.head.dep_ = dep
+					token.head = prevHead
+
+				break
+	
+	print(remove)
+	for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
+	doc = [token for token in doc if token not in remove]
+
+	#flip(doc, "relcl")
+	
+	flip(doc, "prep")
+
+	for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
 	
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
@@ -235,7 +285,7 @@ if __name__ == "__main__":
 
 	from nltk import Tree
 
-	doc = nlp("accuracy was increased by repeating the test. the dogs among the men")
+	doc = nlp("accuracy was increased by repeating the test. the dogs among the men. ugly is he who wears the crown. the movie we watched was amazing")
 
 	def to_nltk_tree(node):
 		if node.n_lefts + node.n_rights > 0:
@@ -258,14 +308,22 @@ if __name__ == "__main__":
 	embedding5 = discourse5.forward()
 
 	example_sentences = [
+		"he is ugly",
+		"ugly is he who wears the crown",
+		"the movie that we watched was amazing",
+		"the man walks without feet",
+		"the man who walks without feet is strange",
+		"strange is the man who walks without feet",
 		"i had eaten",
-		#"his face was extremely ugly",
+		"his face was extremely ugly",
+		# "his face was repulsive to look at as a result of his neglectful upbringing",
+		"what she said that he thought she meant was, in fact, not what she meant at all",
 		"the book is on the table",
-		#"she walked through the park in the morning",
-		#"he sat beside his friend during the movie",
-		"they arrived after the meeting had started",
-		# "the keys are under the couch",
-		#"we met at the coffee shop near the station",
+		"she walked through the park in the morning",
+		"he sat beside his friend during the movie",
+		"they arrived long after the meeting had started",
+		"the keys are under the couch",
+		"we met at the coffee shop near the station",
 		"he jumped over the fence quickly",
 		"the cat hid behind the curtain",
 		"she poured milk into the glass",
