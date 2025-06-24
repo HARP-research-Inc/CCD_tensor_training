@@ -113,7 +113,8 @@ class Noun(Box):
 
         self.embedding_state = Box.model_cache.retrieve_BERT(label)
 
-        self.inward_requirements: dict = {("ADJ", "0:inf")}
+        self.inward_requirements: dict = {("ADJ", "0:inf"),
+                                          ("PREP", "0:inf")}
 
     def forward_helper(self):
         for packet in self.packets:
@@ -123,6 +124,12 @@ class Noun(Box):
                     raise ValueError(f"Expected a torch.nn.Module for adjective model, got {type(adjective_model)}")
                 
                 self.embedding_state = adjective_model(self.embedding_state)
+            
+            if packet[0] == "PREP":
+                if not (isinstance(packet[1][0], torch.tensor) and isinstance(packet[1][1], torch.nn.Module)):
+                    raise ValueError(f"Expected regression model and tensor")
+                self.embedding_state = packet[1][1](self.embedding_state, packet[1][0])
+
         
         return self.embedding_state
 
@@ -145,6 +152,14 @@ class Adjective(Box):
 
         #adv handling will be implemented when adv class is implemented
         return self.model
+
+class Verb(Box):
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+    
+    def __nouns_output():
+        return None
+
 
 class Intransitive_Verb(Box):
     def __init__(self, label: str, model_path: str):
@@ -271,7 +286,7 @@ class Preposition(Box):
         """
         for packet in self.packets:
             if packet[0] == "NOUN" or packet[0] == "VERB":
-                output = (self.model, )
+                output = (self.model, packet[1])
 
         return output
 

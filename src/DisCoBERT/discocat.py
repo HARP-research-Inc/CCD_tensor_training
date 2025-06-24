@@ -154,9 +154,9 @@ if __name__ == "__main__":
 
 
 
-    #embedding = discourse.forward()
+    embedding = discourse.forward()
 
-    #print(type(embedding))
+    print(type(embedding))
     # embedding2 = discourse2.forward()
 
     # print(F.cosine_similarity(embedding[1], embedding2[1], dim=1))
