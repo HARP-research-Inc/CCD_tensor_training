@@ -587,7 +587,9 @@ if __name__ == "__main__":
 	# build_model("data/top_cconj_cc_ADJ_conj_ADJ.json", "cconj_adj_model", 5000, 6, 3)
 	# build_model("data/top_cconj_cc_VERB_conj_VERB.json", "cconj_verb_model", 5000, 6, 3)
 	# build_model("data/top_det_NOUN_det.json", "det_model", 5000, 20, 10)
-	build_model("data/top_aux.json", "aux_model", 5000, 6, 3)
+	# build_model("data/top_aux.json", "aux_model", 5000, 6, 3)
+	# build_model("data/top_aux_nsubj_acomp.json", "aux_linking_model", 5000, 5, 10)
+	build_model("data/top_adp_pobj.json", "prep_noun_model", 5000, 10, 10)
 	# bert_on_bert("data/one_verb.json", "models", epochs=500)
 	# build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
 
