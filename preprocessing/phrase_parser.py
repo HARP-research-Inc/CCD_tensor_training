@@ -50,7 +50,6 @@ def worker(index, data, queue: Queue, target_pos: str):
 
 def parse(data: str, target_pos: str):
 	file_in = open(data, 'r')
-	file_out = open(f"data/top_{target_pos.lower()}.json", 'w')
 
 	text = re.split(r"\.|\?|\!|\;", file_in.read())
 
@@ -87,6 +86,7 @@ def parse(data: str, target_pos: str):
 	for token in json_ready_dict:
 		print(token, json_ready_dict[token])
 		
+	file_out = open(f"data/top_{target_pos.lower()}.json", 'w')
 	json.dump(json_ready_dict, file_out)
 
 	file_out.close()

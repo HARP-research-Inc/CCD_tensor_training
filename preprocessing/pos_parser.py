@@ -291,4 +291,6 @@ if __name__ == "__main__":
 	# parse("data_raw/wikitext_textblock.txt", "DET", Conjunction(POS("NOUN"), DEP("det")), "parent")
 	# parse("data_raw/wikitext_textblock.txt", "SCONJ", Chain(Conjunction(DEP("mark"), POS("VERB")), Conjunction(DEP("advcl"), POS("VERB"))), ["parent", "parent"])
 	# parse("data_raw/wikitext_textblock.txt", "ADJ", DEP("amod"), "parent")
-	parse("data_raw/wikitext_textblock.txt", "VERB", DEP("nsubj"), "child")
+	# parse("data_raw/wikitext_textblock.txt", "VERB", DEP("nsubj"), "child")
+	# parse("data_raw/wikitext_textblock.txt", "AUX", OutputArr(DEP("nsubj"), DEP("acomp")), "child")
+	parse("data_raw/wikitext_textblock.txt", "ADP", DEP("pobj"), "child")
