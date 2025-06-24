@@ -220,6 +220,14 @@ class Adjective(Box):
 		#adv handling will be implemented when adv class is implemented
 		return self.model
 
+class Verb(Box):
+    def __init__(self, label: str, model_path: str):
+        super().__init__(label, model_path)
+    
+    def __nouns_output():
+        return None
+
+
 class Intransitive_Verb(Box):
 	def __init__(self, label: str, model_path: str):
 		super().__init__(label, model_path)
