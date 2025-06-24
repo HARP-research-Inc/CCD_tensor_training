@@ -303,7 +303,7 @@ class PrepositionHelper(Category):
 	def __init__(self, label):
 		super().__init__(label)
 
-"""class Preposition(Box):
+class Preposition(Box):
 	def __init__(self, label: str, model_path: str):
 		super().__init__(label, model_path)
 		self.grammar = ['VERB', 'SELF', 'VERB', '|', 'AUX', 'SELF', 'NOUN', '|', 'NOUN', 'SELF', 'NOUN']
@@ -324,12 +324,9 @@ class PrepositionHelper(Category):
 			else self.models[1](word_packets[0], word_packets[1]) if word_packets[0] == "AUX" and word_packets[1] == "NOUN" \
 			else self.models[2](word_packets[0], word_packets[1])
 
-		return output"""
+		return output
 
-class Preposition(Box):
-	"""
-
-	"""
+"""class Preposition(Box):
 	def __init__(self, label: str, model_path: str):
 		super().__init__(label, model_path)
 		self.grammar = ['SELF', 'NOUN']
@@ -337,9 +334,6 @@ class Preposition(Box):
 		self.model = Box.model_cache.load_ann((label, "prep_noun_model"), n=1)
 
 	def forward_helper(self):
-		"""
-		returns an embedding state after processing the NOUN packets.
-		"""
 		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "VERB"]
 
 		if len(noun_packets) != 1:
@@ -348,7 +342,7 @@ class Preposition(Box):
 		#noun packets at index 1 should be pytorch tensors
 		output = self.model(noun_packets[0])
 
-		return output
+		return output"""
 
 class Intransitive_Verb(Box):
 	def __init__(self, label: str, model_path: str):

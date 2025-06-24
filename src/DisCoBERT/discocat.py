@@ -102,16 +102,16 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				break
 
 	# Flip prep relationships directly in the spacy structure
-	"""for token in doc:
+	for token in doc:
 		if token.pos_ == "VERB":
 			prep_children = [child for child in token.children if child.dep_ == "prep"]
 			if len(prep_children) > 1:
 				prep_children = sorted(prep_children, key=lambda t: t.i)
 				for i in range(1, len(prep_children)):
-					prep_children[i].head = prep_children[i - 1]"""
+					prep_children[i].head = prep_children[i - 1]
 	
 	# Flip prep relationships directly in the spacy structure
-	"""for token in doc:
+	for token in doc:
 		if token.dep_ == "prep":
 			prep_token = token
 			original_head = token.head
@@ -119,7 +119,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			print(prep_token.text, original_head.text)
 
 			prep_token.head = prep_token
-			original_head.head = prep_token"""
+			original_head.head = prep_token
 	
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
@@ -259,7 +259,7 @@ if __name__ == "__main__":
 
 	example_sentences = [
 		"i had eaten",
-		"his face was extremely ugly",
+		#"his face was extremely ugly",
 		"the book is on the table",
 		#"she walked through the park in the morning",
 		#"he sat beside his friend during the movie",
