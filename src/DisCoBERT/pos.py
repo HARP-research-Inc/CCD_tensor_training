@@ -159,19 +159,41 @@ class Verb(Box):
     
     def __nouns_output():
         return None
+    
+    def forward_helper(self):
+        """
+        returns an embedding state after processing the NOUN packets.
+        """
+        
+        output = self.__nouns_output()
+
+        ####adverb stuff####
+        for packet in self.packets:
+            if packet[0] == "ADV" or packet[0] == "INTJ":
+                print("test")
+                model:torch.nn.Module = packet[1]
+                output = model(output)
+
+        return output
+
+    
 
 
-class Intransitive_Verb(Box):
-    def __init__(self, label: str, model_path: str):
+
+class Intransitive_Verb(Verb):
+    def __init__(self, label: str, nsubj: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
         self.type = "VERB"
+
+        self.nsubj = nsubj
 
         self.inward_requirements: dict = {("ADV", "0:inf"),
                                           ("INTJ", "0:inf"), 
                                          ("NOUN", "1:1")}
         self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
     
+
     def forward_helper(self):
         noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
 
@@ -192,11 +214,11 @@ class Intransitive_Verb(Box):
         
     
 
-class Transitive_Verb(Box):
+class Transitive_Verb(Verb):
     """
 
     """
-    def __init__(self, label: str, model_path: str):
+    def __init__(self, label: str, nsubj: str, dobj: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
         self.type = "VERB"
@@ -229,11 +251,11 @@ class Transitive_Verb(Box):
 
         return output
 
-class Ditransitive_Verb(Box):
+class Ditransitive_Verb(Verb):
     """
 
     """
-    def __init__(self, label: str, model_path: str):
+    def __init__(self, label: str, nsubj: str, dobj: str, dative: str, model_path: str):
         super().__init__(label, model_path)
         self.grammar = ['NOUN', 'SELF', 'NOUN']
         self.type = "VERB"
