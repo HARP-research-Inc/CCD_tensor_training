@@ -1,7 +1,10 @@
 import numpy as np
 from mteb.encoder_interface import PromptType
+from src.DisCoBERT.DisCoBERT import DisCoBERT
 
-class DisCoCircWrapper:
+class DisCoBERTWrapper:
+	def __init__(self):
+		self.model = DisCoBERT("en_core_web_lg")
 	def encode(
 		self,
 		sentences: list[str],
@@ -20,4 +23,7 @@ class DisCoCircWrapper:
 		Returns:
 			The encoded sentences.
 		"""
-		pass
+		
+
+#if __name__ == "__main__":
+	
