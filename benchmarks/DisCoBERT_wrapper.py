@@ -1,6 +1,7 @@
 import numpy as np
 from mteb.encoder_interface import PromptType
 from src.DisCoBERT.DisCoBERT import DisCoBERT
+import mteb
 
 class DisCoBERTWrapper:
 	def __init__(self):
@@ -23,7 +24,24 @@ class DisCoBERTWrapper:
 		Returns:
 			The encoded sentences.
 		"""
-		
 
-#if __name__ == "__main__":
-	
+		matrix = np.zeros((len(sentences), 384))
+
+
+
+		for i, sentence in enumerate(sentences):
+			matrix[i] = self.model.encode(sentence[i])
+		
+		return matrix
+
+if __name__ == "__main__":
+	# or using SentenceTransformers
+	model = DisCoBERTWrapper()
+
+	# select the desired tasks and evaluate
+	tasks = mteb.get_tasks(tasks=["AmazonReviewsClassification"], languages=["eng"])
+	evaluation = mteb.MTEB(tasks=tasks)
+	results = evaluation.run(model)
+
+	for result in results:
+		print(result)

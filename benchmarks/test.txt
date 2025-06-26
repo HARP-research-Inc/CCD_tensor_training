@@ -1,0 +1,45 @@
+Bob Coecke is a Belgian theoretical physicist and logician who is Chief Scientist at quantum computing company Quantinuum.
+He was Professor of Quantum foundations, Logics, and Structures at Oxford University until 2020.
+He is also Distinguished Visiting Research Chair at the Perimeter Institute for Theoretical Physics.
+He pioneered categorical quantum mechanics, Quantum Picturalism, ZX-calculus, DisCoCat model for natural language, and quantum natural language processing (QNLP).
+He is a founder of the Quantum Physics and Logic community and conference series, and of the journal Compositionality.
+Coecke is also a composer and musician, who has been called a pioneer of industrial music, and is also one of the pioneers of employing quantum computers in music.
+I am Chief Scientist at Quantinuum, head Quantinuum's Oxford-based Quantum NLP & Compositional Intelligence sub-team, I am Distinguished Visiting Research Chair at the Perimeter Institute for Theoretical Physics, I am Emeritus Fellow at Wolfson College Oxford, and Visiting Fellow at the Computer Science Department and the Mathematical Institute of Oxford University.
+Previously I was Professor of Quantum Foundations, Logics and Structures at the Department of Computer Science at Oxford University, where I was 20 years, and co-founded and led a multi-disciplinary Quantum Group that grew to 50 members and I supervised close to 70 PhD students.
+I am still supervising, at Oxford and elsewhere, and also still teach at Oxford's Mathematical Institute.
+I pioneered Categorical Quantum Mechanics (now in AMS's MSC2020 classification), ZX-calculus, DisCoCat natural language meaning, mathematical foundations for resource theories, Quantum Natural Language Processing, and DisCoCirc natural language meaning.
+I co-authored Picturing Quantum Processes, with Aleks Kissinger, a book providing a fully diagrammatic treatment of quantum theory and its applications.
+I co-authored Quantum in Pictures, with Stefano Gogioso, which does the same, but now accessible to people with no maths background.
+I co-authored some 200 research papers. I obtained approx. 35 grants, including from NFWO, EPSRC, Leverhulme, EU, ONR, AFOSR, FQXi, JTF.
+I still hold grants with the latter two.
+I am a founding father of the QPL (Quantum Physics and Logic) and ACT (Applied Category Theory) communities, of the diamond-open-access journal Compositionality, and Cambridge University Press' Applied Category Theory book series.
+I was the first person to have Quantum Foundations as part of his academic title.
+My work has been headlined by various media outlets, including Forbes, New Scientist, PhysicsWorld, ComputerWeekly.
+
+Hearts of Iron IV is a grand strategy wargame that revolves around World War II.
+The player may play as any nation in the world in the 1936 or 1939 start dates in single-player or multiplayer.
+A nation's military is divided between ground forces, naval forces, and aerial forces.
+For the ground forces, the player may train, customize, and command divisions consisting of various types of infantry, tanks, and other units.
+These divisions require equipment and manpower to fight properly.
+The navy and air force also require men and equipment, including the actual warships and warplanes that are used in combat.
+The tanks, airplanes, and boats could also be manually customised by the player.
+Equipment is produced by military factories, while ships are built by dockyards.
+These military factories and dockyards are, in turn, constructed using civilian factories, which also construct a variety of other buildings, produce consumer goods for the civilian population, and oversee commerce with other nations.
+Most nations are initially forced to devote a significant number of their civilian factories to producing consumer goods, but as the nation becomes increasingly mobilized, more factories will be freed up for other purposes.
+Mobilization is represented as a "policy" that the player may adjust with the proper amount of political power, an abstract "resource" that is also used to appoint new ministers and change other facets of the nation's government.
+In addition to mobilization, there are other policies, including the nation's stance on conscription and commerce.
+
+Land in Hearts of Iron IV is divided into tiny regions known as provinces (also called tiles), which are grouped to form states.
+Each state has a certain amount of shared and state building slots, both of which affect the whole state, while provinces have province building slots that only impact the individual province.
+Similarly, major seas and oceans (for warships) and the sky (for warplanes) are divided into different zones known as strategic regions.
+Sea regions and provinces each have a type of terrain and weather assigned to them that determines how well different types of units will perform in combat there.
+Air regions do not have terrain types but still have weather.
+Divisions are deployed in provinces and can capture enemy provinces and engage in combat.
+How well divisions perform in combat depends on various factors, such as the quality of their equipment, the weather, the type of terrain, the skill and traits of the general commanding the divisions, aerial combat in the region, supply lines, and supporting units.
+Technologies can be researched to improve equipment.
+Military doctrines can be upgraded by using army XP, among other things, which often means that a more technologically advanced nation will have an edge in combat.
+If a division (or a group of divisions) successfully overwhelms an enemy province, they may occupy it.
+Some provinces may have victory points, which can push a nation closer towards capitulation if occupied.
+Occupying key provinces within a state allows the occupying power to access the enemy's factories and natural resources in that state.
+Resistance to occupation within a state can hamper the occupying power's control over it.
+Nations can develop nuclear bombs if they have the proper technology, which can be used to devastate enemy provinces and states.

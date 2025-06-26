@@ -1,8 +1,35 @@
 from sentence_transformers import SentenceTransformer
 import mteb
-from benchmarks.DisCoBERT_wrapper import DisCoBERTWrapper
+from src.DisCoBERT.DisCoBERT import DisCoBERT
 
-if __name__ == "__main__":
+
+def sentence_to_circuit_test():
+	model = DisCoBERT("en_core_web_lg")
+	with open("benchmarks/test.txt") as f:
+		sentences = f.readlines()
+	total = 0
+	breaks = 0
+
+	working_sentences = list()
+	breaking_sentences = list()
+
+	for sentence in sentences:
+		print(sentence)
+		sentence = sentence.strip().lower().replace(",", "")
+		if len(sentence) <= 2 or sentence[0] == "=":
+			continue
+		total += 1
+		try:
+			model.encode(sentence)
+		except:
+			breaks += 1
+			breaking_sentences.append(sentence)
+		else:
+			working_sentences.append(sentence)
+
+	return total, breaks, working_sentences, breaking_sentences
+
+def example():
 	model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
 	# or using SentenceTransformers
@@ -15,3 +42,15 @@ if __name__ == "__main__":
 
 	for result in results:
 		print(result)
+
+
+if __name__ == "__main__":
+	
+
+	total, breaks, working_sentences, breaking_sentences = sentence_to_circuit_test()
+
+	print(f"DisCoBERT breaks for {breaks} of {total} sentences tested. Framemwork breaks for {breaks/total * 100:.2f}% of sentences.")
+	print("Working sentences:")
+	[print("-", sentence) for sentence in working_sentences]
+	print("Breaking sentences:")
+	[print("-", sentence) for sentence in breaking_sentences]

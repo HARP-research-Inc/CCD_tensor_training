@@ -21,6 +21,12 @@ class DisCoBERT(object):
 
         return embedding
 
+    def driver(self, text: str):
+        ref, discourse = DCC.driver(text, self.nlp)
+        embedding = discourse.forward()[1]
+
+        return ref, embedding
+
         
 
 if __name__ == "__main__":
