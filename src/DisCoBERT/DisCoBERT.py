@@ -9,7 +9,7 @@ class DisCoBERT(object):
         DisCoBERT wrapper.
         
         Args:
-            model_path (str): Path to the BERT model.
+            model_path (str): spaCy model.
         """
         self.nlp = spacy.load(spacy_model)
         dummy = Category("blank")
