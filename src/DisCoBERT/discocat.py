@@ -16,11 +16,11 @@ from src.regression import CPTensorRegression, TwoWordTensorRegression
 ###############################
 
 MODEL_PATH = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/"
-CONJUNCTION_LIST = SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
-	SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
-	SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
-	SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
-	SUBORDINATING_CONJUNCTIONS["exception"]# | SUBORDINATING_CONJUNCTIONS["relative (nominal)"] |
+CONJUNCTION_LIST = set()#SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
+	#SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
+	#SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
+	#SUBORDINATING_CONJUNCTIONS["comparison"] | SUBORDINATING_CONJUNCTIONS["manner"] | \
+	#SUBORDINATING_CONJUNCTIONS["exception"]# | SUBORDINATING_CONJUNCTIONS["relative (nominal)"] |
 	#{"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
 
 PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
@@ -57,9 +57,11 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
 		#print(token.text, child.text)
 		parse_driver(circuit, child_box, leaves, child, factory, doc, levels, level + 1)
 
-def flip(doc, relation):
+def flip(doc, relation, where: lambda token: True):
+	alreadyParsed = set()
+
 	for token in doc:
-		if token.dep_ == relation:
+		if token.dep_ == relation and token not in alreadyParsed and where(token):
 			prev_token = token
 			prev_token_dep = token.dep_
 			original_head = token.head
@@ -72,6 +74,7 @@ def flip(doc, relation):
 			prev_token.dep_ = original_head_dep
 			original_head.head = prev_token
 			original_head.dep_ = prev_token_dep
+			alreadyParsed.add(original_head)
 
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, levels: dict, source: Box = None):
 	"""
@@ -84,6 +87,11 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	"""
 	print("tree parse", string)
 	doc = spacy_model(string)
+
+	for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
+	print()
 	
 	"""for token in doc:
 		found = False
@@ -109,7 +117,28 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 				token.head = childB
 				childA.head = childB
-				childB.head = prevTokenHead if prevTokenHead != token else childB.head
+				childB.head = prevTokenHead if prevTokenHead != token else childB
+
+				found = True
+				break
+			
+			if found:
+				break
+	
+	for token in doc:
+		found = False
+		for childA in [child for child in token.children if child.dep_ == "advcl" or child.dep_ == "ccomp"]:
+			for childB in [child for child in childA.children if child.dep_ == "mark" and child.pos_ == "SCONJ"]:
+				prevTokenHead = token.head
+				prevTokenDep = token.dep_
+
+				token.head = childB
+				childA.head = childB
+				childB.head = prevTokenHead if prevTokenHead != token else childB
+				token.dep_ = childB.dep_
+				childB.dep_ = prevTokenDep
+
+				print("Found", token.text, childA.text, childB.text)
 
 				found = True
 				break
@@ -117,13 +146,13 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			if found:
 				break
 
-	for token in doc:
+	"""for token in doc:
 		if token.pos_ == "VERB":
 			prep_children = [child for child in token.children if child.dep_ == "prep"]
 			if len(prep_children) > 1:
 				prep_children = sorted(prep_children, key=lambda t: t.i)
 				for i in range(1, len(prep_children)):
-					prep_children[i].head = prep_children[i - 1]
+					prep_children[i].head = prep_children[i - 1]"""
 	
 	"""for token in doc:
 		if token.dep_ == "prep":
@@ -140,7 +169,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		for child in token.children:
 			print(token.text, child.dep_, child.text)
 			
-		if token.dep_ == "relcl":
+		if token.dep_ == "relcl" and token.pos_ != "SCONJ":
 			print(token.text, "is a relcl")
 			if len(list(token.lefts)) > 0:
 				child = list(token.lefts)[0]
@@ -156,6 +185,10 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 					token.head = prevHead
 
 				break
+		
+		#if token.dep_ == "mark" and token.pos_ == "SCONJ":
+		#	remove.add(token)
+		#	child.head = child
 	
 	print(remove)
 	for token in doc:
@@ -165,7 +198,13 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	#flip(doc, "relcl")
 	
-	flip(doc, "prep")
+	flip(doc, "prep", lambda token: len(list(token.children)) > 0)
+
+	for token in doc:
+		if token.pos_ == "ADP":
+			aux_children = [child for child in token.children if child.pos_ == "AUX"]
+			for child in aux_children:
+				child.pos_ = "VERB"
 
 	for token in doc:
 		for child in token.children:
@@ -173,6 +212,17 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
+	
+	from nltk import Tree
+
+	def to_nltk_tree(node):
+		if node.n_lefts + node.n_rights > 0:
+			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
+		else:
+			return node.orth_
+
+
+	to_nltk_tree(root).pretty_print()
 
 	leaves = list()
 
@@ -211,7 +261,8 @@ def split_clauses_with_markers(sentence, nlp: spacy.load):
 	punct_pattern = '|'.join(re.escape(p) for p in PUNCTUATION_DELIMS)
 
 	# Combined pattern: capture all splitters
-	pattern = r'\s*(%s|%s)\s*' % (conj_pattern, punct_pattern)
+	#pattern = r'\s*(%s|%s)\s*' % (conj_pattern, punct_pattern)
+	pattern = r'\s*(%s)\s*' % (punct_pattern)
 
 	# Split and keep delimiters
 	parts = re.split(pattern, sentence)
@@ -285,7 +336,7 @@ if __name__ == "__main__":
 
 	from nltk import Tree
 
-	doc = nlp("accuracy was increased by repeating the test. the dogs among the men. ugly is he who wears the crown. the movie we watched was amazing")
+	doc = nlp("his face was repulsive to look at as a result of his neglectful upbringing")
 
 	def to_nltk_tree(node):
 		if node.n_lefts + node.n_rights > 0:
@@ -308,6 +359,12 @@ if __name__ == "__main__":
 	embedding5 = discourse5.forward()
 
 	example_sentences = [
+		"in addition to mobilization there are other policies including the nation's stance on conscription and commerce",
+		#"similarly major seas for oceans (for warships) and the sky (for warplanes) are divided into different zones known as strategic regions",
+		"if he had studied the material more thoroughly he might have performed better on the exam which ultimately determined whether he would qualify for the advanced program that begins in the fall",
+		"i did not think he was ugly before he showed me his face",
+		"he who is without stones commits the first sin",
+		"i am sinking",
 		"he is ugly",
 		"ugly is he who wears the crown",
 		"the movie that we watched was amazing",
@@ -316,7 +373,18 @@ if __name__ == "__main__":
 		"strange is the man who walks without feet",
 		"i had eaten",
 		"his face was extremely ugly",
-		# "his face was repulsive to look at as a result of his neglectful upbringing",
+		"looking at his face was repulsive",
+		"to look at his face was repulsive",
+		"i saw him leave",
+		# "he is so fast",
+		"he was left to die",
+		"i suggest that he go home early",
+		"kids grow up so fast",
+		"to be or not to be, that is the question",
+		"i wish it were friday already",
+		#"kids grow up so fast these days",
+		"his face was repulsive to look at",
+		"his face was repulsive to look at as a result of his neglectful upbringing",
 		"what she said that he thought she meant was, in fact, not what she meant at all",
 		"the book is on the table",
 		"she walked through the park in the morning",

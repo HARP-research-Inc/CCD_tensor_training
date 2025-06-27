@@ -192,7 +192,7 @@ def worker(index, data, queue: Queue, target_pos: str, outputs: ParseObj, target
 				if isinstance(outputs, OutputArr | Chain) and len(subTokens.items()) != len(outputs):
 					continue
 
-				print(sentence, " -> ", token.text.lower(), [(t.text, t.pos_, t.dep_) for t in printTokens])
+				#print(sentence, " -> ", token.text.lower(), [(t.text, t.pos_, t.dep_) for t in printTokens])
 
 				for idx, subToken in subTokens.items():
 					tok = token.text.lower()
@@ -293,4 +293,6 @@ if __name__ == "__main__":
 	# parse("data_raw/wikitext_textblock.txt", "ADJ", DEP("amod"), "parent")
 	# parse("data_raw/wikitext_textblock.txt", "VERB", DEP("nsubj"), "child")
 	# parse("data_raw/wikitext_textblock.txt", "AUX", OutputArr(DEP("nsubj"), DEP("acomp")), "child")
-	parse("data_raw/wikitext_textblock.txt", "ADP", DEP("pobj"), "child")
+	# parse("data_raw/wikitext_textblock.txt", "ADP", DEP("pobj"), "child")
+	# parse("data_raw/wikitext_textblock.txt", "ADP", DEP("prt"), "parent")
+	parse("data_raw/wikitext_textblock.txt", "ADV", DEP("advmod"), "parent")

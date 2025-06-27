@@ -70,7 +70,7 @@ class Adverb(Box):
 		super().__init__(label, model_path)
 		self.type = "ADV"
 		self.grammar = ['SELF', 'VERB', '|', "SELF", "ADJ"]
-		self.model = Box.model_cache.load_ann((label, "adv_model"), n=1)
+		self.model = Box.model_cache.load_ann((label, "general_adv_model"), n=1)
 	
 	def forward_helper(self):
 		"""
@@ -147,6 +147,31 @@ class Noun(Box):
 		
 		return self.embedding_state
 
+class VerbState(Box):
+	"""
+
+	"""
+	def __init__(self, label: str, model_path: str):
+		super().__init__(label, model_path)
+		self.type = "STATE"
+		self.grammar = ['PREP_MOD','SELF']
+
+		self.embedding_state = Box.model_cache.retrieve_BERT(label)
+
+		self.inward_requirements: dict = {("PREP_MOD", "0:inf")}
+
+	def forward_helper(self):
+		print(f"Parsing noun {self.label}...")
+
+		for packet in self.packets:
+			if packet[0] in ["PREP_MOD"]:
+				modifier_model : torch.nn.Module = packet[1]
+				if not isinstance(modifier_model, torch.nn.Module):
+					raise ValueError(f"Expected a torch.nn.Module to modify this verb state, got {type(modifier_model)}")
+				
+				self.embedding_state = modifier_model(self.embedding_state)
+		
+		return self.embedding_state
 
 class Adjective(Box):
 	"""
@@ -181,7 +206,7 @@ class Intransitive_Verb(Box):
 	def forward_helper(self):
 		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
 
-		print("packet length", len(self.packets))
+		print("intransitive packet length", len(self.packets))
 		if len(noun_packets) != 1:
 			raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
 		
@@ -217,9 +242,9 @@ class Transitive_Verb(Box):
 		"""
 		returns an embedding state after processing the NOUN packets.
 		"""
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+		noun_packets = [packet[1] for packet in self.packets if packet[0] and not isinstance(packet[1], torch.nn.Module)]
 
-		print("packet length", len(self.packets))
+		print("transitive packet length", len(self.packets))
 		if len(noun_packets) != 2:
 			raise ValueError(f"Transitive verb {self.label} requires exactly two NOUN packets, got {len(noun_packets)}.")  
 		
@@ -228,7 +253,7 @@ class Transitive_Verb(Box):
 
 		####adverb stuff####
 		for packet in self.packets:
-			if packet[0] == "ADV" or packet[0] == "INTJ":
+			if isinstance(packet[1], torch.nn.Module):
 				print("test")
 				model:torch.nn.Module = packet[1]
 				output = model(output)
@@ -250,19 +275,22 @@ class Linking_Verb(Box):
 		"""
 		returns an embedding state after processing the NOUN packets.
 		"""
-		word_packets = [packet[1] for packet in self.packets] #if packet[0] == "NOUN" or packet[0] == "ADJ" or packet[0] == "ADP"]
+		word_packets = [packet[1] for packet in self.packets if packet[0] != "ADV"] #if packet[0] == "NOUN" or packet[0] == "ADJ" or packet[0] == "ADP"]
+		adv_packets = [packet[1] for packet in self.packets if packet[0] == "ADV"]
 
 		print("linking packet length", len(self.packets))
 		if len(word_packets) != 2:
 			raise ValueError(f"Linking verb {self.label} requires exactly two packets, got {len(word_packets)}.")  
-		
-		#noun packets at index 1 should be pytorch tensors
 
 		for i in range(len(word_packets)):
 			if isinstance(word_packets[i], torch.nn.Module):
 				word_packets[i] = word_packets[i](word_packets[i - 1])
 		
 		output = self.model(word_packets[0], word_packets[1])
+
+		for packet in adv_packets:
+			model:torch.nn.Module = packet
+			output = model(output)
 
 		return output
 
@@ -287,7 +315,7 @@ class Ditransitive_Verb(Box):
 		"""
 		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
 
-		print("packet length", len(self.packets))
+		print("ditransitive packet length", len(self.packets))
 		if len(noun_packets) != 3:
 			raise ValueError(f"Transitive verb {self.label} requires exactly three NOUN packets, got {len(noun_packets)}.")  
 		
@@ -330,6 +358,37 @@ class Preposition(Box):
 
 		return output
 
+class PrepositionalModifier(Box):
+	def __init__(self, label: str, model_path: str):
+		super().__init__(label, model_path)
+		self.grammar = ['SELF']
+		self.type = "PREP_MOD"
+		
+		self.model = Box.model_cache.load_ann((label, "prep_prt_model"), n=1)
+
+	def forward_helper(self):
+		return self.model
+
+
+class SubordinatingConjunction(Box):
+	def __init__(self, label: str, model_path: str):
+		super().__init__(label, model_path)
+		self.grammar = ['SENTENCE', 'SELF', 'SENTENCE']
+		self.type = "SCONJ"
+		
+		self.models = [Box.model_cache.load_ann((label, "general_sconj_model"), n=1), Box.model_cache.load_ann((label, "sconj_model"), n=2)]
+
+	def forward_helper(self):
+		word_packets = [packet[1] for packet in self.packets]
+
+		print("packet length", len(self.packets))
+		if len(word_packets) not in (1, 2):
+			raise ValueError(f"Subordinating conjunction {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
+		
+		output = self.models[len(word_packets) - 1](*word_packets)
+	
+		return output
+	
 """class Preposition(Box):
 	def __init__(self, label: str, model_path: str):
 		super().__init__(label, model_path)
@@ -360,11 +419,11 @@ class Intransitive_Verb(Box):
 		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
 	
 	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "SCONJ"]
 
 		print("packet length", len(self.packets))
 		if len(noun_packets) != 1:
-			raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
+			raise ValueError(f"Intransitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
 		
 		output = self.model(noun_packets[0])
 
@@ -448,7 +507,7 @@ class Box_Factory(object):
 			for child in token.children:
 				if child.dep_ == "nsubj" or child.dep_ == "nsubjpass":
 					nsubj = child.text
-				if child.dep_ == "dobj":
+				if child.dep_ == "dobj" or child.dep_ == "ccomp":
 					dobj = child.text
 				if child.dep_ == "dative":
 					dative = child.text
@@ -456,7 +515,8 @@ class Box_Factory(object):
 				if dobj:
 					return Intransitive_Verb(label, self.model_path)
 				else:
-					raise ValueError(f"Sanity check: verb {label} somehow has no subject.")
+					#raise ValueError(f"Sanity check: verb {label} somehow has no subject.")
+					return VerbState(label, self.model_path)
 			else:
 				if dobj and dative:
 					return Ditransitive_Verb(label, self.model_path)
@@ -470,8 +530,12 @@ class Box_Factory(object):
 			return Adverb(label, self.model_path)
 		elif feature == "INTJ":
 			return Interjection(label, self.model_path)
+		elif feature == "ADP" and len(list(token.children)) == 0:
+			return PrepositionalModifier(label, self.model_path)
 		elif feature == "ADP":
 			return Preposition(label, self.model_path)
+		elif feature == "SCONJ":
+			return SubordinatingConjunction(label, self.model_path)
 		elif feature == "AUX":
 			return Auxilliary(label, self.model_path)
 		elif feature == "CCONJ":

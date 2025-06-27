@@ -96,4 +96,5 @@ if __name__ == "__main__":
 	#parse("VERB", Conjunction(POS("AUX"), DEP("aux")), "child")
 	#parse("AUX", Conjunction(POS("AUX"), DEP("aux")), "parent")
 	#parse("ADV")
-	parse("data_raw/wikitext_textblock.txt", "INTJ")
+	#parse("data_raw/wikitext_textblock.txt", "INTJ")
+	parse("data_raw/wikitext_textblock.txt", "SCONJ")

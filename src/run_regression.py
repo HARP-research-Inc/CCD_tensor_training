@@ -337,7 +337,8 @@ def embedding_generator(index: int, data, queue, wordQueue, cache: dict, counter
 						cache[word] = embedding
 						embeddings.append(embedding)
 				
-					sentence_embeddings.append(get_embedding_in_parallel(f'{queue_obj} {word}', model))
+					sentence_embeddings.append(get_embedding_in_parallel(f'{word} {queue_obj}', model))
+					#sentence_embeddings.append(get_embedding_in_parallel(f'{queue_obj} {word}', model))
 
 			queue.put((queue_obj, embeddings, sentence_embeddings))
 			print(f"embedding_generator {index} took {int(time.time() - t)} seconds, {counter["count"]} threads completed")
@@ -589,8 +590,11 @@ if __name__ == "__main__":
 	# build_model("data/top_det_NOUN_det.json", "det_model", 5000, 20, 10)
 	# build_model("data/top_aux.json", "aux_model", 5000, 6, 3)
 	# build_model("data/top_aux_nsubj_acomp.json", "aux_linking_model", 5000, 5, 10)
-	build_model("data/top_adp_pobj.json", "prep_noun_model", 5000, 10, 10)
+	# build_model("data/top_adp_pobj.json", "prep_noun_model", 5000, 10, 10)
+	# build_model("data/top_adp_prt.json", "prep_prt_model", 5000, 10, 10)
+	# build_model("data/top_adv_advmod.json", "general_adv_model", 5000, 10, 10)
 	# bert_on_bert("data/one_verb.json", "models", epochs=500)
 	# build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
+	build_model("data/top_sconj.json", "general_sconj_model", 5000, 10, 10)
 
 	print("Regression complete.")
