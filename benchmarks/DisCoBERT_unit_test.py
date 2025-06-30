@@ -53,7 +53,7 @@ def test_caching(global_model):
     assert timeC2 - timeC1 < timeN2 - timeN1, "Caching did not work as expected. Model should be faster on repeated calls."
 
 ##################################
-####### basic P.O.S. tests #######
+####### Basic P.O.S. tests #######
 ##################################
 
 def test_basic_intransitive(global_model):
@@ -113,7 +113,28 @@ def test_basic_imperative(global_model):
 
 #     embedding1 = model.encode("placeholder")
 
+def test_basic_adjective(global_model):
+    model = global_model
 
+    nd_1 = model.encode("Dog")
+    nd_2 = model.encode("Someone")
+    nd_3 = model.encode("Churchgoers gave visitors cakes")
+
+    embedding1a = model.encode("Big dog")
+    embedding1b = model.encode("Big red dog")
+
+    embedding2a = model.encode("Someone important")
+    embedding2b = model.encode("Someone concerned")
+
+    embedding3a = model.encode("Kind churchgoers gave visitors nourishing cakes")
+    embedding3b = model.encode("Angry churchgoers gave intruding visitors fake cakes")
+    
+    assert nn.CosineSimilarity(dim=1)(embedding1a, nd_1) < 0.99
+    assert nn.CosineSimilarity(dim=1)(embedding1b, nd_1) < 0.99
+    assert nn.CosineSimilarity(dim=1)(embedding2a, nd_2) < 0.99
+    assert nn.CosineSimilarity(dim=1)(embedding2b, nd_2) < 0.99
+    assert nn.CosineSimilarity(dim=1)(embedding3a, nd_3) < 0.99
+    assert nn.CosineSimilarity(dim=1)(embedding3b, nd_3) < 0.99
 
 def test_basic_determiner(global_model):
     model = global_model
@@ -143,7 +164,7 @@ def test_basic_determiner(global_model):
     assert nn.CosineSimilarity(dim=1)(embedding5, nd_5) < 0.99, "Determiner 'some' did not work as expected."
     #assert nn.CosineSimilarity(dim=1)(embedding6, nd_6) < 0.99, "Determiner 'her' did not work as expected."
 
-def test_adverb_on_verbs(global_model):
+def test_basic_adverb_on_verbs(global_model):
     model = global_model
 
     na_1 = model.encode("James ran")
@@ -182,11 +203,94 @@ def test_adverb_on_verbs(global_model):
     assert nn.CosineSimilarity(dim=1)(embedding3a, embedding3b) > 0.95, "Identity case 3 failed"
     assert nn.CosineSimilarity(dim=1)(embedding4a, embedding4b) > 0.95, "Identity case 4 failed"
 
+def test_interjections(global_model):
+    model = global_model
+
+    ni_1 = model.encode("The fox jumped")
+    ni_2 = model.encode("Your bat struck her ball")
+
+    embedding1a = model.encode("Dang the fox jumped")
+    embedding1b = model.encode("Cool, the fox jumped")
+    
+    embedding2a = model.encode("Wow your bat struck her ball")
+    embedding2b = model.encode("Wow, your bat struck her ball")
+
+    assert nn.CosineSimilarity(dim=1)(embedding1a, ni_1) < 0.99, "(non-comma) Interjection 'dang' did not work as expected (non-comma)"
+    assert nn.CosineSimilarity(dim=1)(embedding1b, ni_1) < 0.99, "(comma case) Interjection 'cool' did not work as expected "
+    assert nn.CosineSimilarity(dim=1)(embedding2a, ni_2) < 0.99, "(non-comma) Interjection 'wow' did not work as expected"
+    assert nn.CosineSimilarity(dim=1)(embedding2b, ni_2) < 0.99, "(comma case) Interjection 'wow,' did not work as expected"
+    
+def test_auxilliary(global_model):
+    model = global_model
+
+    na_1 = model.encode("The fox jumped")
+    na_2 = model.encode("Your bat struck her ball")
+
+    embedding1a = model.encode("The fox has jumped")
+    embedding1b = model.encode("The fox is jumping")
+    
+    embedding2a = model.encode("Your bat was striking her ball")
+    embedding2b = model.encode("Your bat had struck her ball")
+
+    assert nn.CosineSimilarity(dim=1)(embedding1a, na_1) < 0.99, "Auxilliary verb 'has' did not work as expected."
+    assert nn.CosineSimilarity(dim=1)(embedding1b, na_1) < 0.99, "Auxilliary verb 'had' did not work as expected."
+    assert nn.CosineSimilarity(dim=1)(embedding2a, na_2) < 0.99, "Auxilliary verb 'is' did not work as expected."
+    assert nn.CosineSimilarity(dim=1)(embedding2b, na_2) < 0.99, "Auxilliary verb 'was' did not work as expected."
+
+##################################
+######## Edge P.O.S. tests #######
+##################################
+
+def test_multiple_verbs_for_subj_connected_by_conj(global_model):
+    model = global_model
+
+    _ = model.encode("Bobby runs and jumps")
+    # _ = model.encode("Triathletes swim, bike and run")
+    # _ = model.encode("Lebron eats, sleeps, balls, and repeats")
+
+def test_multiple_adj_connected_by_conj(global_model):
+    model = global_model
+
+    _ = model.encode("The big and red dog")
+    # _ = model.encode("The big, red and fluffy dog")
+    # _ = model.encode("The big, red, fluffy and cute dog")
+
+##################################
+######### Semantic tests #########
+##################################
+
+def test_coreference_resolution(global_model):
+    """
+    Test attempts to measure model's ability to resolve coreference.
+    May not work perfectly. Best approach is aggregate results over many sentences.
+    """
+    model = global_model
+
+    ambiguous1 = model.encode("Alice bit Bob and he cried")
+    ambiguous2 = model.encode("Alice bit Bob and she cried")
+
+    ambiguous3 = model.encode("John cycles. He is very fast.")
+
+    candidateA = model.encode("Alice bit Bob and Bob cried")
+    candidateB = model.encode("Alice bit Bob and Alice cried")
+
+    canddiateC = model.encode("John cycles. Stacy is very fast.")
+    canddiateD = model.encode("John cycles very fast.")
+
+    similarity1A = nn.CosineSimilarity(dim=1)(ambiguous1, candidateA)
+    similarity1B = nn.CosineSimilarity(dim=1)(ambiguous1, candidateB)
+
+    similarity2A = nn.CosineSimilarity(dim=1)(ambiguous2, candidateA)
+    similarity2B = nn.CosineSimilarity(dim=1)(ambiguous2, candidateB)
+
+    similarity3C = nn.CosineSimilarity(dim=1)(ambiguous3, canddiateC)
+    similarity3D = nn.CosineSimilarity(dim=1)(ambiguous3, canddiateD)
+
+    assert similarity1A > similarity1B
+    assert similarity2A < similarity2B
+
+    # 0.5 is our general threshold for semantic similarity
+    assert nn.CosineSimilarity(dim=1)(ambiguous3, canddiateD) > 0.5
+    assert similarity3C < similarity3D
     
 
-
-
-
-##################################
-######### semantic tests #########
-##################################

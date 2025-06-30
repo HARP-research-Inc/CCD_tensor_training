@@ -348,35 +348,6 @@ class Preposition(Box):
 
 		return output"""
 
-class Intransitive_Verb(Box):
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
-		self.grammar = ['NOUN', 'SELF', 'NOUN']
-		self.type = "VERB"
-
-		self.inward_requirements: dict = {("ADV", "0:inf"),
-										  ("INTJ", "0:inf"), 
-										 ("NOUN", "1:1")}
-		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
-	
-	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
-
-		print("packet length", len(self.packets))
-		if len(noun_packets) != 1:
-			raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
-		
-		output = self.model(noun_packets[0])
-
-		####adverb stuff####
-		for packet in self.packets:
-			if packet[0] == "ADV" or packet[0] == "INTJ" or packet[0] == "AUX":
-				print("test")
-				model:torch.nn.Module = packet[1]
-				output = model(output)
-
-		return output
-
 class Conjunction(Box):
 	"""
 
