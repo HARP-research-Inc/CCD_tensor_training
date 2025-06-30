@@ -23,7 +23,7 @@ CONJUNCTION_LIST = set()#SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_
 	#SUBORDINATING_CONJUNCTIONS["exception"]# | SUBORDINATING_CONJUNCTIONS["relative (nominal)"] |
 	#{"and", "but", "or", "nor", "for", "so", "yet", "either", "neither", "and/or"}
 
-PUNCTUATION_DELIMS = {",", ".", "!", "?", ";", ":"}
+PUNCTUATION_DELIMS = {".", "!", "?", ";", ":"}
 
 def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.tokens.Token, factory: Box_Factory, doc, levels: dict, level: int):
 	"""
@@ -39,7 +39,7 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
 	
 	child_box = factory.create_box(token, pos)
 
-	#print(pos, type(child_box))
+	print(pos, type(child_box))
 
 	#traversal is in the opposite direction of the tree.
 	circuit.add_wire(child_box, parent) # order swapped from tree traversal order
@@ -76,6 +76,44 @@ def flip(doc, relation, where: lambda token: True):
 			original_head.dep_ = prev_token_dep
 			alreadyParsed.add(original_head)
 
+def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False):
+	alreadyParsed = set()
+
+	if isinstance(relation, str):
+		relation = [relation]
+	if isinstance(relationRoot, str):
+		relationRoot = [relationRoot]
+
+	for token in doc:
+		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+				print(token.text, childA.text, childB.text, token in alreadyParsed)	
+		if token in alreadyParsed:
+			continue
+	
+		found = False
+
+		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+				prevTokenHead = token.head
+				prevTokenDep = token.dep_
+
+				token.head = childB
+				childA.head = childB
+				childB.head = prevTokenHead if prevTokenHead != token else childB
+				token.dep_ = childB.dep_
+				childB.dep_ = prevTokenDep
+
+				alreadyParsed.add(childB)
+
+				print("Rearranged", token.text, childA.text, childB.text)
+
+				#found = True
+				#break
+			
+			#if found:
+			#	break
+
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, levels: dict, source: Box = None):
 	"""
 	Parsing traversal order should be in the opposite direction of the circuit.
@@ -85,13 +123,71 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	args:
 		source: source box for the whole tree (in the prototype, it is a composer spider)
 	"""
+	string = string.replace("-", "")
 	print("tree parse", string)
 	doc = spacy_model(string)
 
+	remove = set()
+	for token in doc:
+		if re.match(r'^[^A-Za-z]$', token.text):
+			remove.add(token)
+			token.head = token
+
+	doc = [token for token in doc if token not in remove]
+	
+
+	for token in doc:
+		print(token.pos_, token.text)
+		for child in token.children:
+			print(">>>", child.dep_, child.text)
+	print()
+
+	from nltk import Tree
+
+	def to_nltk_tree(node):
+		if node.n_lefts + node.n_rights > 0:
+			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
+		else:
+			return node.orth_
+	
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	remove = set()
+	"""for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
+			
+		if token.dep_ == "relcl" and token.pos_ != "SCONJ":
+			print(token.text, "is a relcl")
+			if len(list(token.lefts)) > 0:
+				child = list(token.lefts)[0]
+				dep = child.dep_
+
+				if child.pos_ != "SCONJ":
+					remove.add(child)
+					child.head = child
+				
+					if token.pos_ == "VERB" and token.head.head != token.head:
+						print(token.head.text, "becomes child of", token.text, "and", token.text, "becomes child of", token.head.head.text)
+						prevHead = token.head.head
+						token.head.head = token
+						if dep != "aux":
+							token.head.dep_ = dep
+						token.head = prevHead"""
+		
+		#if token.dep_ == "mark" and token.pos_ == "SCONJ":
+		#	remove.add(token)
+		#	child.head = child
+	
+	print(remove)
 	for token in doc:
 		for child in token.children:
 			print(token.text, child.dep_, child.text)
-	print()
+	doc = [token for token in doc if token not in remove]
 	
 	"""for token in doc:
 		found = False
@@ -109,24 +205,67 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			if found:
 				break"""
 
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	rearrange(doc, ["advcl", "ccomp", "relcl"], ["mark", "advmod"], "SCONJ", True)
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	explored = set()
 	for token in doc:
-		found = False
-		for childA in [child for child in token.children if child.dep_ == "conj"]:
-			for childB in [child for child in token.children if child.dep_ == "cc"]:
-				prevTokenHead = token.head
+		if token in explored:
+			continue
+		
+		print("Exploring", token.text)
+		elems = [token]
+		coordinator = None
 
-				token.head = childB
-				childA.head = childB
-				childB.head = prevTokenHead if prevTokenHead != token else childB
+		while True:
+			expanded = False
 
-				found = True
+			targetElem = elems[-1]
+			for child in targetElem.children:
+				if child.dep_ == "conj":
+					print("Collected", child.text)
+					elems.append(child)
+					expanded = True
+				if child.dep_ == "cc":
+					print("Collected coordinator", child.text)
+					coordinator = child
+
+			if not expanded or coordinator:
 				break
+		
+		if coordinator:
+			print(coordinator.text, "has", [elem.text for elem in elems], "children")
+			prevTokenHead = elems[0].head
+			prevTokenDep = elems[0].dep_
+
+			for elem in elems:
+				elem.head = coordinator
+				elem.dep_ = "conj"
 			
-			if found:
-				break
+			coordinator.head = prevTokenHead if prevTokenHead != elems[0] else coordinator
+			coordinator.dep_ = prevTokenDep
+			explored.add(coordinator)
+
+				
 	
-	for token in doc:
+	#rearrange(doc, "conj", "cc")
+
+	#flip(doc, "advmod", lambda token: token.pos_ == "SCONJ" and token.dep_ == "advmod")
+	
+	"""for token in doc:
 		found = False
+		alreadyParsed = set()
+		
 		for childA in [child for child in token.children if child.dep_ == "advcl" or child.dep_ == "ccomp"]:
 			for childB in [child for child in childA.children if child.dep_ == "mark" and child.pos_ == "SCONJ"]:
 				prevTokenHead = token.head
@@ -144,15 +283,26 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				break
 			
 			if found:
-				break
+				break"""
 
-	"""for token in doc:
-		if token.pos_ == "VERB":
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	for token in doc:
+		if token.pos_ == "NOUN":
 			prep_children = [child for child in token.children if child.dep_ == "prep"]
 			if len(prep_children) > 1:
 				prep_children = sorted(prep_children, key=lambda t: t.i)
 				for i in range(1, len(prep_children)):
-					prep_children[i].head = prep_children[i - 1]"""
+					prep_children[i].head = prep_children[i - 1]
+		elif token.pos_ == "VERB":
+			prep_children = [child for child in token.children if child.dep_ == "ccomp"]
+			if len(prep_children) > 1:
+				prep_children = sorted(prep_children, key=lambda t: t.i)
+				for i in range(1, len(prep_children)):
+					prep_children[i].head = prep_children[i - 1]
 	
 	"""for token in doc:
 		if token.dep_ == "prep":
@@ -163,38 +313,11 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 			prep_token.head = prep_token if original_head.head == original_head else original_head.head
 			original_head.head = prep_token"""
-	
-	remove = set()
-	for token in doc:
-		for child in token.children:
-			print(token.text, child.dep_, child.text)
-			
-		if token.dep_ == "relcl" and token.pos_ != "SCONJ":
-			print(token.text, "is a relcl")
-			if len(list(token.lefts)) > 0:
-				child = list(token.lefts)[0]
-				dep = child.dep_
-				remove.add(child)
-				child.head = child
-				
-				if token.pos_ == "VERB" and token.head.head != token.head:
-					print(token.head.text, "becomes child of", token.text, "and", token.text, "becomes child of", token.head.head.text)
-					prevHead = token.head.head
-					token.head.head = token
-					token.head.dep_ = dep
-					token.head = prevHead
 
-				break
-		
-		#if token.dep_ == "mark" and token.pos_ == "SCONJ":
-		#	remove.add(token)
-		#	child.head = child
-	
-	print(remove)
-	for token in doc:
-		for child in token.children:
-			print(token.text, child.dep_, child.text)
-	doc = [token for token in doc if token not in remove]
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
 
 	#flip(doc, "relcl")
 	
@@ -212,15 +335,6 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
-	
-	from nltk import Tree
-
-	def to_nltk_tree(node):
-		if node.n_lefts + node.n_rights > 0:
-			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
-		else:
-			return node.orth_
-
 
 	to_nltk_tree(root).pretty_print()
 
@@ -282,7 +396,7 @@ def driver(discourse: str, nlp: spacy.load):
 	returns: circuit object containing circuit reprsenentation of the discourse.
 
 	"""
-	clauses, conjunctions = split_clauses_with_markers(discourse.lower(), nlp)
+	clauses, conjunctions = split_clauses_with_markers(discourse, nlp)
 
 	factory = Box_Factory(nlp, MODEL_PATH)
 
@@ -359,6 +473,13 @@ if __name__ == "__main__":
 	embedding5 = discourse5.forward()
 
 	example_sentences = [
+		#"For the ground forces, the player may train, customize, and command divisions consisting of various types of infantry, tanks, and other units",
+		#"He is a founder of the Quantum Physics and Logic community and conference series, and of the journal Compositionality",
+		"previously i was professor of quantum foundations logics and structures at the department of computer science at oxford university where i was 20 years and co-founded and led a multi-disciplinary quantum group that grew to 50 members and i supervised close to 70 phd students",
+		"he is also distinguished visiting research chair at the perimeter institute for theoretical physics",
+		"i was the first person to have quantum foundations as part of his academic title",
+		"he was professor of quantum foundations logics and structures at Oxford University until 2020",
+		"bob coecke is a belgian theoretical physicist and logician who is chief scientist at quantum computing company Quantinuum",
 		"in addition to mobilization there are other policies including the nation's stance on conscription and commerce",
 		#"similarly major seas for oceans (for warships) and the sky (for warplanes) are divided into different zones known as strategic regions",
 		"if he had studied the material more thoroughly he might have performed better on the exam which ultimately determined whether he would qualify for the advanced program that begins in the fall",
@@ -380,7 +501,7 @@ if __name__ == "__main__":
 		"he was left to die",
 		"i suggest that he go home early",
 		"kids grow up so fast",
-		"to be or not to be, that is the question",
+		#"to be or not to be",
 		"i wish it were friday already",
 		#"kids grow up so fast these days",
 		"his face was repulsive to look at",
