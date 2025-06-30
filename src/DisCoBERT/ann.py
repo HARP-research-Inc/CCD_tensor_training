@@ -56,7 +56,7 @@ class ModelBank(object):
 
             score = F.cosine_similarity(target_embedding, candidate_embedding, dim=1).item()
             
-            print(f"Comparing '{target}' with '{candidate}': score = {score}")
+            # print(f"Comparing '{target}' with '{candidate}': score = {score}")
             
             if score > max_score:
                 max_score = score

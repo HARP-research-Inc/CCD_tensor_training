@@ -277,6 +277,7 @@ class Linking_Verb(Box):
 		"""
 		word_packets = [packet[1] for packet in self.packets if packet[0] != "ADV"] #if packet[0] == "NOUN" or packet[0] == "ADJ" or packet[0] == "ADP"]
 		adv_packets = [packet[1] for packet in self.packets if packet[0] == "ADV"]
+		print([packet[0] for packet in self.packets])
 
 		print("linking packet length", len(self.packets))
 		if len(word_packets) != 2:
@@ -429,8 +430,7 @@ class Intransitive_Verb(Box):
 
 		####adverb stuff####
 		for packet in self.packets:
-			if packet[0] == "ADV" or packet[0] == "INTJ" or packet[0] == "AUX":
-				print("test")
+			if isinstance(packet[1], torch.nn.Module):
 				model:torch.nn.Module = packet[1]
 				output = model(output)
 
@@ -453,12 +453,13 @@ class Conjunction(Box):
 		"""
 
 		print(f"Parsing conjunction {self.label}...")
-		word_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "VERB" or packet[0] == "AUX"]
+		word_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 		print([packet[0] for packet in self.packets])
 
 		print("packet length", len(self.packets))
-		if len(word_packets) != 2:
-			raise ValueError(f"Conjunction {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
+		while len(word_packets) > 2:
+			word_packets[1] = self.models[3](word_packets[0], word_packets[1])
+			word_packets = word_packets[1:]
 		
 		output = self.models[0](word_packets[0], word_packets[1]) if word_packets[0] == "VERB" and word_packets[1] == "VERB" \
 			else self.models[1](word_packets[0], word_packets[1]) if word_packets[0] == "AUX" and word_packets[1] == "VERB" \
@@ -486,28 +487,35 @@ class Box_Factory(object):
 		self.model_path = model_path
 		self.lenient = lenient
 
+	def returns_state(self, token, feature):
+		return self.is_linking_verb(token, feature) if feature == "AUX" else feature not in ["ADV", "AUX", "DET"]
+
+	def is_linking_verb(self, token, feature: str):
+		return feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set(['nsubj', 'prep']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp']), set(['acomp', 'relcl'])] or (feature == "AUX" and any("subj" in child.dep_ for child in token.children) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in token.children)))
+
 	def create_box(self, token: spacy.tokens.Token, feature: str):
 		if token is not None:
-			label = token.text
+			label = str(token.text).replace(',', '').lower()
 
 		if feature == "spider":
 			return Spider("SPIDER", self.model_path)
 		elif feature == "bureaucrat":
 			return Bureaucrat("REFERENCE")
-		elif feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set(['nsubj', 'prep']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp'])] or (feature == "AUX" and not any(dep in token.dep_ for dep in ["aux", "nsubj", "obj", "prep"]))):
+		elif self.is_linking_verb(token, feature):
+			print(token.text, "is linking verb because", [child.dep_ for child in token.children])
 			return Linking_Verb(label, self.model_path)
 		elif feature == "PRON" and any(child.dep_ == "poss" for child in token.children):
 			return Possessive(label, self.model_path)
-		elif feature == "NOUN" or feature == "PROPN" or feature == "PRON":
+		elif feature == "NOUN" or feature == "PROPN" or feature == "PRON" or feature == "NUM":
 			return Noun(label, self.model_path)
 		elif feature == "ADJ":
 			return Adjective(label, self.model_path)
 		elif feature == "VERB":
 			nsubj, dobj, dative = (None, None, None)
 			for child in token.children:
-				if child.dep_ == "nsubj" or child.dep_ == "nsubjpass":
+				if child.dep_ in ["nsubj", "nsubjpass", "attr"]:
 					nsubj = child.text
-				if child.dep_ == "dobj" or child.dep_ == "ccomp":
+				if child.dep_ == "dobj" or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
 					dobj = child.text
 				if child.dep_ == "dative":
 					dative = child.text

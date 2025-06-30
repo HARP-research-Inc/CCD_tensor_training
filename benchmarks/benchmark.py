@@ -15,7 +15,7 @@ def sentence_to_circuit_test():
 
 	for sentence in sentences:
 		print(sentence)
-		sentence = sentence.strip().lower().replace(",", "")
+		sentence = sentence.strip()#.lower().replace(",", "")
 		if len(sentence) <= 2 or sentence[0] == "=":
 			continue
 		total += 1
@@ -24,6 +24,8 @@ def sentence_to_circuit_test():
 		except:
 			breaks += 1
 			breaking_sentences.append(sentence)
+			import traceback
+			print(traceback.format_exc())
 		else:
 			working_sentences.append(sentence)
 
