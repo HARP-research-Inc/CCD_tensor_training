@@ -75,8 +75,50 @@ def flip(doc, relation, where: lambda token: True):
 			original_head.head = prev_token
 			original_head.dep_ = prev_token_dep
 			alreadyParsed.add(original_head)
+def exchange(doc, childCase: lambda token: True, parentCase: lambda token: True):
+	alreadyParsed = set()
 
-def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False):
+	for token in doc:
+		if token not in alreadyParsed and childCase(token) and parentCase(token.head):
+			prev_token = token
+			prev_token_dep = token.dep_
+			original_head = token.head
+			original_head_dep = original_head.dep_
+
+			print("exchanged", prev_token.text, original_head.text)
+			print(prev_token_dep, original_head_dep)
+
+			prev_token.head = prev_token if original_head.head == original_head else original_head.head
+			prev_token.dep_ = original_head_dep
+			original_head.head = prev_token
+			original_head.dep_ = prev_token_dep
+			alreadyParsed.add(original_head)
+
+			for t in prev_token.children:
+				if t != original_head:
+					print(t.text, "now has parent", original_head.text)
+					t.head = original_head
+
+def rewire(doc, relation, childCase: lambda token: True, parentCase: lambda token: True):
+	alreadyParsed = set()
+
+	for token in doc:
+		if token.dep_ == relation and token not in alreadyParsed and childCase(token.head) and parentCase(token.head.head):
+			prev_token = token
+			prev_token_dep = token.dep_
+			original_head = token.head.head
+			original_head_dep = original_head.dep_
+
+			print("flipped", prev_token.text, original_head.text)
+			print(prev_token_dep, original_head_dep)
+
+			prev_token.head = prev_token if original_head.head.head == original_head.head else original_head.head.head
+			prev_token.dep_ = original_head_dep
+			original_head.head = prev_token
+			original_head.dep_ = prev_token_dep
+			alreadyParsed.add(original_head)	
+
+def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False, replacePOS=None, sourcePOS=None):
 	alreadyParsed = set()
 
 	if isinstance(relation, str):
@@ -89,6 +131,9 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False):
 			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				print(token.text, childA.text, childB.text, token in alreadyParsed)	
 		if token in alreadyParsed:
+			continue
+
+		if sourcePOS and token.pos_ != sourcePOS:
 			continue
 	
 		found = False
@@ -104,6 +149,9 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False):
 				token.dep_ = childB.dep_
 				childB.dep_ = prevTokenDep
 
+				if replacePOS:
+					childB.pos_ = replacePOS
+
 				alreadyParsed.add(childB)
 
 				print("Rearranged", token.text, childA.text, childB.text)
@@ -113,6 +161,48 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False):
 			
 			#if found:
 			#	break
+
+def rearrangeRoot(doc, relation, relationRoot, rootPOS=None, multiLevel=False, replacePOS=None, sourcePOS=None):
+	alreadyParsed = set()
+
+	if isinstance(relation, str):
+		relation = [relation]
+	if isinstance(relationRoot, str):
+		relationRoot = [relationRoot]
+
+	for token in doc:
+		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+				print(token.text, childA.text, childB.text, token in alreadyParsed)	
+		if token in alreadyParsed:
+			continue
+
+		if sourcePOS and token.pos_ != sourcePOS:
+			continue
+	
+		found = False
+		
+		root = token
+		while root.head != root:
+			root = root.head
+
+		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+				prevTokenHead = root.head
+				prevTokenDep = root.dep_
+
+				root.head = childB
+				childA.head = childB
+				childB.head = prevTokenHead if prevTokenHead != root else childB
+				token.dep_ = childB.dep_
+				childB.dep_ = prevTokenDep
+
+				if replacePOS:
+					childB.pos_ = replacePOS
+
+				alreadyParsed.add(childB)
+
+				print("Rearranged", root.text, childA.text, childB.text)
 
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, levels: dict, source: Box = None):
 	"""
@@ -149,7 +239,6 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
 		else:
 			return node.orth_
-	
 
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
@@ -211,7 +300,67 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	to_nltk_tree(root).pretty_print()
 
+	for token in doc:
+		if token.dep_ == "conj":
+			has_cc_sibling = any(sib.dep_ == "cc" for sib in token.head.children if sib is not token)
+
+			if not has_cc_sibling:
+				for candidate in doc:
+					if candidate.dep_ == "cc":
+						has_conj_sibling = any(sib.dep_ == "conj" for sib in candidate.head.children if sib is not candidate)
+
+						if not has_conj_sibling:
+							if candidate.head != token and token.head != candidate:
+								token.head = candidate.head
+								break
+
+	
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	rearrange(doc, ["relcl"], ["nsubjpass", "nsubj"], "PRON", True, "SCONJ")
+
+	for token in doc:
+		for child in token.children:
+			print(token.text, child.dep_, child.text)
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	#rearrange(doc, ["prep"], ["pobj"], "SCONJ", True)
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	rewire(doc, "prep", lambda child: child.dep_ == "advmod" and child.pos_ == "ADV", lambda parent: parent.pos_ == "VERB")
+
+	for token in doc:
+		print(token.pos_, token.text)
+		for child in token.children:
+			print(">>>", child.dep_, child.text)
+		print()
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
 	rearrange(doc, ["advcl", "ccomp", "relcl"], ["mark", "advmod"], "SCONJ", True)
+	
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	rearrange(doc, "nsubjpass", "auxpass")
+
+	rearrange(doc, "xcomp", "aux", "PART", True, "ADP", "VERB")
 
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
@@ -223,22 +372,32 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		if token in explored:
 			continue
 		
-		print("Exploring", token.text)
 		elems = [token]
+		nextParse = [token]
 		coordinator = None
 
 		while True:
 			expanded = False
 
-			targetElem = elems[-1]
-			for child in targetElem.children:
-				if child.dep_ == "conj":
-					print("Collected", child.text)
-					elems.append(child)
-					expanded = True
-				if child.dep_ == "cc":
-					print("Collected coordinator", child.text)
-					coordinator = child
+			targets = nextParse
+			nextParse = []
+
+			for targetElem in targets:
+				hasConj = False
+				for child in targetElem.children:
+					if child.dep_ == "conj":
+						hasConj = True
+				
+				for child in targetElem.children:
+					if child.dep_ == "conj" or (hasConj and child.dep_ == "dobj"):
+						elems.append(child)
+						nextParse.append(child)
+						expanded = True
+					if child.dep_ == "cc":
+						if coordinator:
+							break
+
+						coordinator = child
 
 			if not expanded or coordinator:
 				break
@@ -257,8 +416,17 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			explored.add(coordinator)
 
 				
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
 	
-	#rearrange(doc, "conj", "cc")
+	rearrange(doc, "conj", "cc")
+
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
 
 	#flip(doc, "advmod", lambda token: token.pos_ == "SCONJ" and token.dep_ == "advmod")
 	
@@ -285,11 +453,6 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			if found:
 				break"""
 
-	root = [token for token in doc if token.head == token][0]
-	print("root", root)
-
-	to_nltk_tree(root).pretty_print()
-
 	for token in doc:
 		if token.pos_ == "NOUN":
 			prep_children = [child for child in token.children if child.dep_ == "prep"]
@@ -303,6 +466,11 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				prep_children = sorted(prep_children, key=lambda t: t.i)
 				for i in range(1, len(prep_children)):
 					prep_children[i].head = prep_children[i - 1]
+		elif token.pos_ == "CCONJ":
+			print([child.pos_ for child in token.children])
+			adv_children = [child for child in token.children if child.pos_ == "ADV"]
+			for child in adv_children:
+				child.pos_ = "NOUN"
 	
 	"""for token in doc:
 		if token.dep_ == "prep":
@@ -321,7 +489,8 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	#flip(doc, "relcl")
 	
-	flip(doc, "prep", lambda token: len(list(token.children)) > 0)
+	flip(doc, "prep", lambda token: len(list(token.children)) > 0 and token.pos_ == "ADP")
+	flip(doc, "agent", lambda token: len(list(token.children)) > 0 and token.pos_ == "ADP")
 
 	for token in doc:
 		if token.pos_ == "ADP":
@@ -333,6 +502,14 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		for child in token.children:
 			print(token.text, child.dep_, child.text)
 	
+	root = [token for token in doc if token.head == token][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
+
+	#rearrange(doc, ["advmod"], ["advmod"], "SCONJ")
+	flip(doc, "advmod", lambda token: token.pos_ == "SCONJ")
+
 	root = [token for token in doc if token.head == token][0]
 	print("root", root)
 
@@ -473,7 +650,16 @@ if __name__ == "__main__":
 	embedding5 = discourse5.forward()
 
 	example_sentences = [
-		#"For the ground forces, the player may train, customize, and command divisions consisting of various types of infantry, tanks, and other units",
+		"I co-authored Quantum in Pictures, with Stefano Gogioso, which does the same, but now accessible to people with no maths background.",
+		"These divisions require equipment and manpower to fight properly",
+		"The tanks, airplanes, and boats could also be manually customised by the player",
+		"I co-authored Picturing Quantum Processes, with Aleks Kissinger, a book providing a fully diagrammatic treatment of quantum theory and its applications",
+		"Sea regions and provinces each have a type of terrain and weather assigned to them that determines how well different types of units will perform in combat there.",
+		"Coecke is also a composer and musician, who has been called a pioneer of industrial music, and is also one of the pioneers of employing quantum computers in music",
+		"Similarly, major seas and oceans (for warships) and the sky (for warplanes) are divided into different zones known as strategic regions",
+		"How well divisions perform in combat depends on various factors, such as the quality of their equipment, the weather, the type of terrain, the skill and traits of the general commanding the divisions, aerial combat in the region, supply lines, and supporting units",
+		"I am still supervising, at Oxford and elsewhere, and also still teach at Oxford's Mathematical Institute",
+		"For the ground forces, the player may train, customize, and command divisions consisting of various types of infantry, tanks, and other units",
 		#"He is a founder of the Quantum Physics and Logic community and conference series, and of the journal Compositionality",
 		"previously i was professor of quantum foundations logics and structures at the department of computer science at oxford university where i was 20 years and co-founded and led a multi-disciplinary quantum group that grew to 50 members and i supervised close to 70 phd students",
 		"he is also distinguished visiting research chair at the perimeter institute for theoretical physics",
