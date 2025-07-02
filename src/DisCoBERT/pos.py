@@ -23,6 +23,16 @@ Models trained:
 
 """
 
+class NestedNetwork(torch.nn.Module):
+	def __init__(self, parent: torch.nn.Module, child: torch.nn.Module):
+		super().__init__()
+
+		self.parent = parent
+		self.child = child
+
+	def forward(self, *inputs):
+		return self.parent(self.child(*inputs))
+
 class Spider(Box):
 	"""
 	DisCoCat Spider. Defined as a Box utilzing a composition
@@ -89,10 +99,18 @@ class Auxilliary(Box):
 		"""
 		returns the model
 		"""
-		if len(self.packets) == 1:
-			return self.packets[0][1]
+		state_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 
-		return self.model
+		if len(state_packets) == 1:
+			output = self.model(state_packets[0])
+
+			for packet in self.packets:
+				if isinstance(packet[1], torch.nn.Module):
+					output = packet[1](output)
+			
+			return output
+		else:
+			return self.model
 
 class Interjection(Box):
 	def __init__(self, label: str, model_path: str):
@@ -138,12 +156,8 @@ class Noun(Box):
 		print(f"Parsing noun {self.label}...")
 
 		for packet in self.packets:
-			if packet[0] == "ADJ" or packet[0] == "PRON":
-				adjective_model : torch.nn.Module = packet[1]
-				if not isinstance(adjective_model, torch.nn.Module):
-					raise ValueError(f"Expected a torch.nn.Module for adjective model, got {type(adjective_model)}")
-				
-				self.embedding_state = adjective_model(self.embedding_state)
+			if isinstance(packet[1], torch.nn.Module):
+				self.embedding_state = packet[1](self.embedding_state)
 		
 		return self.embedding_state
 
@@ -164,12 +178,8 @@ class VerbState(Box):
 		print(f"Parsing noun {self.label}...")
 
 		for packet in self.packets:
-			if packet[0] in ["PREP_MOD"]:
-				modifier_model : torch.nn.Module = packet[1]
-				if not isinstance(modifier_model, torch.nn.Module):
-					raise ValueError(f"Expected a torch.nn.Module to modify this verb state, got {type(modifier_model)}")
-				
-				self.embedding_state = modifier_model(self.embedding_state)
+			if isinstance(packet[1], torch.nn.Module):
+				self.embedding_state = packet[1](self.embedding_state)
 		
 		return self.embedding_state
 
@@ -204,20 +214,17 @@ class Intransitive_Verb(Box):
 		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
 	
 	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+		state_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 
 		print("intransitive packet length", len(self.packets))
-		if len(noun_packets) != 1:
-			raise ValueError(f"Transitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
+		if len(state_packets) != 1:
+			raise ValueError(f"Transitive verb {self.label} requires exactly one state packet, got {len(state_packets)}.")  
 		
-		output = self.model(noun_packets[0])
+		output = self.model(state_packets[0])
 
-		####adverb stuff####
 		for packet in self.packets:
-			if packet[0] == "ADV" or packet[0] == "INTJ" or packet[0] == "AUX":
-				print("test")
-				model:torch.nn.Module = packet[1]
-				output = model(output)
+			if isinstance(packet[1], torch.nn.Module):
+				output = packet[1](output)
 
 		return output
 		
@@ -343,19 +350,24 @@ class Preposition(Box):
 		self.type = "PREP"
 		
 		self.models = [Box.model_cache.load_ann((label, "prep_model"), n=2), Box.model_cache.load_ann((label, "prep_aux_model"), n=2), Box.model_cache.load_ann((label, "prep_verb_model"), n=2)]
+		self.general_model = Box.model_cache.load_ann((label, "prep_noun_model"), n=1)
 
 	def forward_helper(self):
 		print(f"Parsing preposition {self.label}...")
-		word_packets = [packet[1] for packet in self.packets]#if packet[0] == "NOUN" or packet[0] == "VERB" or packet[0] == "AUX"]
+		word_packets = [packet for packet in self.packets if isinstance(packet[1], torch.Tensor)]#if packet[0] == "NOUN" or packet[0] == "VERB" or packet[0] == "AUX"]
 		print([packet[0] for packet in self.packets])
 
-		print("packet length", len(self.packets))
+		print("packet length", len(word_packets), "out of", len(self.packets))
+
+		#if len(word_packets) == 1:
+		#	return self.general_model(word_packets[0][1])
+
 		if len(word_packets) != 2:
 			raise ValueError(f"Preposition {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
 		
-		output = self.models[0](word_packets[0], word_packets[1]) if word_packets[0] == "NOUN" and word_packets[1] == "NOUN" \
-			else self.models[1](word_packets[0], word_packets[1]) if word_packets[0] == "AUX" and word_packets[1] == "NOUN" \
-			else self.models[2](word_packets[0], word_packets[1])
+		output = self.models[0](word_packets[0][1], word_packets[1][1]) if word_packets[0][0] == "NOUN" and word_packets[1][0] == "NOUN" \
+			else self.models[1](word_packets[0][1], word_packets[1][1]) if word_packets[0][0] == "AUX" and word_packets[1][0] == "NOUN" \
+			else self.models[2](word_packets[0][1], word_packets[1][1])
 
 		return output
 
@@ -386,6 +398,9 @@ class SubordinatingConjunction(Box):
 		if len(word_packets) not in (1, 2):
 			raise ValueError(f"Subordinating conjunction {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
 		
+		if len(word_packets) == 1 and isinstance(word_packets[0], torch.nn.Module):
+			return NestedNetwork(self.models[len(word_packets) - 1], word_packets[0])
+
 		output = self.models[len(word_packets) - 1](*word_packets)
 	
 		return output
@@ -420,7 +435,7 @@ class Intransitive_Verb(Box):
 		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
 	
 	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN" or packet[0] == "SCONJ"]
+		noun_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 
 		print("packet length", len(self.packets))
 		if len(noun_packets) != 1:
@@ -456,7 +471,7 @@ class Conjunction(Box):
 		word_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 		print([packet[0] for packet in self.packets])
 
-		print("packet length", len(self.packets))
+		print("packet length", len(word_packets), "out of", len(self.packets))
 		while len(word_packets) > 2:
 			word_packets[1] = self.models[3](word_packets[0], word_packets[1])
 			word_packets = word_packets[1:]
@@ -490,8 +505,8 @@ class Box_Factory(object):
 	def returns_state(self, token, feature):
 		return self.is_linking_verb(token, feature) if feature == "AUX" else feature not in ["ADV", "AUX", "DET"]
 
-	def is_linking_verb(self, token, feature: str):
-		return feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set(['nsubj', 'prep']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp']), set(['acomp', 'relcl'])] or (feature == "AUX" and any("subj" in child.dep_ for child in token.children) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in token.children)))
+	def is_linking_verb(self, token, feature: str): # set(['nsubj', 'prep']), set(['nsubj', 'attr']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp']), set(['acomp', 'relcl']) 
+		return feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set([relA, relB]) for relA in ['nsubj', 'acomp'] for relB in ['prep', 'attr', 'acomp', 'ccomp', 'relcl', 'xcomp']] or (feature == "AUX" and any("subj" in child.dep_ for child in token.children) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in token.children)))
 
 	def create_box(self, token: spacy.tokens.Token, feature: str):
 		if token is not None:
@@ -513,9 +528,9 @@ class Box_Factory(object):
 		elif feature == "VERB":
 			nsubj, dobj, dative = (None, None, None)
 			for child in token.children:
-				if child.dep_ in ["nsubj", "nsubjpass", "attr"]:
+				if "subj" in child.dep_ or child.dep_ in ["nsubj", "nsubjpass", "attr", "relcl"]:
 					nsubj = child.text
-				if child.dep_ == "dobj" or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
+				if child.dep_ in ["dobj", "expl"] or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
 					dobj = child.text
 				if child.dep_ == "dative":
 					dative = child.text
