@@ -2,9 +2,71 @@ import spacy
 from transformers import BertTokenizer
 
 ###############################################################################
+# 0) MoE Parser Complexity Models (from parser_complexity.py)
+###############################################################################
+class DenseModel:
+    """spaCy-sm dense parser model"""
+    def __init__(self, tagger_params=750_000, parser_params=1_300_000, flops_per_weight=2):
+        self.tagger_params = tagger_params
+        self.parser_params = parser_params
+        self.flops_per_weight = flops_per_weight
+
+    def flops(self, n_tokens: int) -> int:
+        total_params = self.tagger_params + self.parser_params
+        return n_tokens * total_params * self.flops_per_weight
+
+class MoeBaseline:
+    """Baseline MoE parser with quadratic scorer"""
+    def __init__(self,
+                 expert_dim=32,
+                 n_layers=2,
+                 scorer_flops_per_pair=2048,     # biaffine O(N²)
+                 router_params=50_000,
+                 router_flops_per_weight=2):
+        self.expert_dim = expert_dim
+        self.n_layers = n_layers
+        self.scorer_flops_per_pair = scorer_flops_per_pair
+        self.router_params = router_params
+        self.router_flops_per_weight = router_flops_per_weight
+
+    def flops(self, n_tokens: int, k_active: int) -> int:
+        router = n_tokens * self.router_params * self.router_flops_per_weight
+        expert_per_tok = k_active * self.n_layers * (self.expert_dim ** 2) * 2
+        experts_total = n_tokens * expert_per_tok
+        scorer = (n_tokens ** 2) * self.scorer_flops_per_pair
+        return router + experts_total + scorer
+
+class MoeFast:
+    """Fast MoE parser with linear scorer"""
+    def __init__(self,
+                 expert_dim=32,
+                 n_layers=2,
+                 scorer_flops_per_token=512,     # linear alternative scorer
+                 router_params=4_096,            # tiny CNN router
+                 router_flops_per_weight=2):
+        self.expert_dim = expert_dim
+        self.n_layers = n_layers
+        self.scorer_flops_per_token = scorer_flops_per_token
+        self.router_params = router_params
+        self.router_flops_per_weight = router_flops_per_weight
+
+    def flops(self, n_tokens: int, k_active: int) -> int:
+        router = n_tokens * self.router_params * self.router_flops_per_weight
+        expert_per_tok = k_active * self.n_layers * (self.expert_dim ** 2) * 2
+        experts_total = n_tokens * expert_per_tok
+        scorer = n_tokens * self.scorer_flops_per_token      # linear cost
+        return router + experts_total + scorer
+
+###############################################################################
 # 1) Load a spaCy model (download "en_core_web_sm" if not installed)
 ###############################################################################
-nlp = spacy.load("en_core_web_sm")
+try:
+    nlp = spacy.load("en_core_web_sm")
+    SPACY_AVAILABLE = True
+except OSError:
+    print("Warning: spaCy model not available. Using simple token counting.")
+    SPACY_AVAILABLE = False
+    nlp = None
 
 ###############################################################################
 # 2) DisCoCirc Complexity Estimation (full-rank vs CP-rank-R)
@@ -29,21 +91,33 @@ def get_token_rank(token):
         return 1
     return 1               # fallback
 
-def estimate_discocirc_complexity(sentence, d=300):
-    """Full-rank cost: operator rank-r  →  d**r FLOPs."""
+def estimate_discocirc_complexity(sentence, d=300, include_parser=True):
+    """Full-rank cost: operator rank-r  →  d**r FLOPs + parser cost."""
+    if not SPACY_AVAILABLE:
+        return 0, []
+    
     doc = nlp(sentence)
-    total_flops, breakdown = 0, []
+    discocirc_flops, breakdown = 0, []
     for tok in doc:
         r = get_token_rank(tok)
         cost = d ** r
         breakdown.append((tok.text, tok.pos_, r, cost))
-        total_flops += cost
-    return total_flops, breakdown
+        discocirc_flops += cost
+    
+    if include_parser:
+        # Add spaCy parser cost
+        n_tokens = len(sentence.split())
+        parser = DenseModel()
+        parser_flops = parser.flops(n_tokens)
+        total_flops = discocirc_flops + parser_flops
+        return total_flops, breakdown
+    else:
+        return discocirc_flops, breakdown
 
 # --------------------------------------------------------------------------- #
 # >>> NEW: CP-DisCoCirc complexity                                            #
 # --------------------------------------------------------------------------- #
-def estimate_cp_discocirc_complexity(sentence, d=300, R=50):
+def estimate_cp_discocirc_complexity(sentence, d=300, R=50, include_parser=True):
     """
     CP-decomposed cost:   FLOPs ≈ R * (r+2) * d     (see derivation in notes)
 
@@ -51,14 +125,26 @@ def estimate_cp_discocirc_complexity(sentence, d=300, R=50):
     • d   = embedding dimension
     • R   = chosen CP rank   (default 50 is typical for d≈300)
     """
+    if not SPACY_AVAILABLE:
+        return 0, []
+    
     doc = nlp(sentence)
-    total_flops, breakdown = 0, []
+    discocirc_flops, breakdown = 0, []
     for tok in doc:
         r = get_token_rank(tok)
         cost = R * (r + 2) * d        # linear in d instead of d**r
         breakdown.append((tok.text, tok.pos_, r, cost))
-        total_flops += cost
-    return total_flops, breakdown
+        discocirc_flops += cost
+    
+    if include_parser:
+        # Add spaCy parser cost
+        n_tokens = len(sentence.split())
+        parser = DenseModel()
+        parser_flops = parser.flops(n_tokens)
+        total_flops = discocirc_flops + parser_flops
+        return total_flops, breakdown
+    else:
+        return discocirc_flops, breakdown
 
 ###############################################################################
 # 3) BERT Complexity Estimation (vanilla vs. optimised)
@@ -108,35 +194,63 @@ def bert_forward_flops(sentence: str,
 if __name__ == "__main__":
     sentence = "Once upon a midnight dreary, while I pondered, weak and weary, over many a quaint and curious volume of forgotten lore, while I nodded, nearly napping, suddenly there came a tapping, as of some one gently rapping, rapping at my chamber door."
 
-    H = 384        # Unified dimensionality for all systems
+    H = 384*4        # Unified dimensionality for all systems
     R = 50         # CP rank
     layers = 12    # Standard for BERT-base
+    k = 1          # MoE active experts
+
+    # Get token count for parser models
+    L_parser = len(sentence.split())  # Simple whitespace tokenization for parser models
 
     # Compute FLOPs
-    full_total, _  = estimate_discocirc_complexity(sentence, d=H)
-    cp_total,   _  = estimate_cp_discocirc_complexity(sentence, d=H, R=R)
+    if SPACY_AVAILABLE:
+        full_total, _  = estimate_discocirc_complexity(sentence, d=H)
+        cp_total,   _  = estimate_cp_discocirc_complexity(sentence, d=H, R=R)
+    else:
+        full_total, cp_total = None, None
+        print("DisCoCirc complexity skipped (spaCy not available)")
+
     bert_total, L  = bert_forward_flops(sentence, hidden=H, layers=layers)
     bert_opt,   _  = bert_forward_flops(sentence, hidden=H, layers=layers, optimised=True)
 
+    # MoE Parser models
+    dense_parser = DenseModel()
+    moe_baseline = MoeBaseline()
+    moe_fast = MoeFast()
+    
+    dense_total = dense_parser.flops(L_parser)
+    moe_baseline_total = moe_baseline.flops(L_parser, k)
+    moe_fast_total = moe_fast.flops(L_parser, k)
+
     # Print each block
-    print("\n==== FLOP Comparison (H = "+str(H)+", CP-rank = "+str(R)+") ====\n")
+    print("\n==== FLOP Comparison (H = "+str(H)+", CP-rank = "+str(R)+", MoE k = "+str(k)+") ====\n")
 
     print(f"Sentence: {sentence}")
-    print(f"Tokenized length (w/ specials): {L}")
+    print(f"BERT tokenized length (w/ specials): {L}")
+    print(f"Parser tokenized length (whitespace): {L_parser}")
     print()
 
-    print(f"[1] Full-rank DisCoCirc         : {full_total:,.0f} FLOPs")
-    print(f"[2] CP-rank-{R} DisCoCirc        : {cp_total:,.0f} FLOPs")
+    if SPACY_AVAILABLE:
+        print(f"[1] Full-rank DisCoCirc+Parser  : {full_total:,.0f} FLOPs")
+        print(f"[2] CP-rank-{R} DisCoCirc+Parser : {cp_total:,.0f} FLOPs")
     print(f"[3] BERT-base (vanilla)         : {bert_total:,.0f} FLOPs")
-    print(f"[4] BERT-base (optimised)       : {bert_opt:,.0f} FLOPs\n")
+    print(f"[4] BERT-base (optimised)       : {bert_opt:,.0f} FLOPs")
+    print(f"[5] spaCy-sm Parser only        : {dense_total:,.0f} FLOPs")
+    print(f"[6] MoE Baseline Parser (k={k})   : {moe_baseline_total:,.0f} FLOPs")
+    print(f"[7] MoE Fast Parser (k={k})       : {moe_fast_total:,.0f} FLOPs\n")
 
     # Compute relative comparisons
     methods = {
-        "Full-rank DisCoCirc": full_total,
-        f"CP-rank-{R} DisCoCirc": cp_total,
         "BERT-base (vanilla)": bert_total,
         "BERT-base (optimised)": bert_opt,
+        "spaCy-sm Parser only": dense_total,
+        f"MoE Baseline Parser (k={k})": moe_baseline_total,
+        f"MoE Fast Parser (k={k})": moe_fast_total,
     }
+    
+    if SPACY_AVAILABLE:
+        methods["Full-rank DisCoCirc+Parser"] = full_total
+        methods[f"CP-rank-{R} DisCoCirc+Parser"] = cp_total
 
     names = list(methods.keys())
     print("==== Relative FLOP Ratios ====\n")
