@@ -84,21 +84,24 @@ example_text = "The quick brown fox jumps over the lazy dog."
 n_tokens = len(example_text.strip().split())
 
 df_single = compare_models(n_tokens)
-# Add thousands separator
+
+# Calculate percentage savings and speedup compared to spaCy
+spacy_flops = df_single[df_single["Model"] == "spaCy‑sm"]["FLOPs"].iloc[0]
+df_single["Savings %"] = df_single["FLOPs"].apply(
+    lambda x: f"{((spacy_flops - x) / spacy_flops * 100):.1f}%" if x != spacy_flops else "baseline"
+)
+df_single["Speedup"] = df_single["FLOPs"].apply(
+    lambda x: f"{(spacy_flops / x):.2f}x" if x != spacy_flops else "1.00x"
+)
+
+# Add thousands separator for FLOPs
 df_single["FLOPs"] = df_single["FLOPs"].map("{:,}".format)
 
-df_sweep = sweep_lengths()
-df_sweep["FLOPs"] = df_sweep["FLOPs"].map("{:,}".format)
-
-print("Single sentence FLOPs:")
-print("=" * 50)
+print("FLOP Analysis for Single Sentence:")
+print("=" * 60)
 print(df_single.to_string(index=False))
-print("=" * 50)
+print("=" * 60)
 print(f"Example sentence: '{example_text}'")
 print(f"Number of tokens: {n_tokens}")
 print()
-
-print("Sentence length sweep:")
-print("=" * 50)
-print(df_sweep.to_string(index=False))
-print("=" * 50)
+print("Note: Negative savings % means the model uses MORE FLOPs than spaCy")
