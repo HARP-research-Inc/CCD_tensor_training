@@ -33,6 +33,24 @@ class NestedNetwork(torch.nn.Module):
 	def forward(self, *inputs):
 		return self.parent(self.child(*inputs))
 
+class FunctionConjunction(torch.nn.Module):
+	def __init__(self, coordinator: torch.nn.Module, children: list[torch.nn.Module]):
+		super().__init__()
+
+		self.coordinator = coordinator
+		self.children = children
+
+	def forward(self, *inputs):
+		arr = self.children
+		state = self.coordinator(arr[0](*inputs) if isinstance(arr[0], torch.nn.Module) else arr[0], arr[1](*inputs) if isinstance(arr[1], torch.nn.Module) else arr[1])
+		arr = arr[2:]
+
+		while arr:
+			state = self.coordinator(state, arr[0](*inputs) if isinstance(arr[0], torch.nn.Module) else arr[0])
+			arr = arr[1:]
+
+		return state
+
 class Spider(Box):
 	"""
 	DisCoCat Spider. Defined as a Box utilzing a composition
@@ -470,6 +488,9 @@ class Conjunction(Box):
 		print(f"Parsing conjunction {self.label}...")
 		word_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 		print([packet[0] for packet in self.packets])
+
+		if any(isinstance(packet[1], torch.nn.Module) for packet in self.packets):
+			return FunctionConjunction(self.models[3], [packet[1] for packet in self.packets])
 
 		print("packet length", len(word_packets), "out of", len(self.packets))
 		while len(word_packets) > 2:

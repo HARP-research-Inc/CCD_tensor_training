@@ -53,28 +53,86 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
 	else:
 		levels[level] = [child_box]
 	
-	for child in token.children:
+	for child in get_children(token):
 		#print(token.text, child.text)
 		parse_driver(circuit, child_box, leaves, child, factory, doc, levels, level + 1)
+
+def get_children(token):
+	return [t for t in token.doc if t.head == token if t != token]
 
 def flip(doc, relation, where: lambda token: True):
 	alreadyParsed = set()
 
-	for token in doc:
-		if token.dep_ == relation and token not in alreadyParsed and where(token):
-			prev_token = token
-			prev_token_dep = token.dep_
-			original_head = token.head
-			original_head_dep = original_head.dep_
+	while True:
+		flipped = False
+		root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
+		print("root", root)
+		for token in doc:
+			print("-", token.text)
+			if token.dep_ == relation and token not in alreadyParsed and where(token):
+				prev_token = token
+				prev_token_dep = token.dep_
+				original_head = token.head
+				original_head_dep = original_head.dep_
+				original_head_head = original_head.head
 
-			print("flipped", prev_token.text, original_head.text)
-			print(prev_token_dep, original_head_dep)
+				original_root = original_head_head == original_head
 
-			prev_token.head = prev_token if original_head.head == original_head else original_head.head
-			prev_token.dep_ = original_head_dep
-			original_head.head = prev_token
-			original_head.dep_ = prev_token_dep
-			alreadyParsed.add(original_head)
+				"""print(f"\nBEFORE FLIP:")
+				print(f"  {prev_token.text} -> {prev_token.head.text} (dep: {prev_token.dep_})")
+				print(f"  {original_head.text} -> {original_head.head.text} (dep: {original_head.dep_})")
+				print(f"  {original_head.text} children: {[c.text for c in get_children(original_head)]}")
+
+
+				print(f"\nALL TOKENS BEFORE FLIP:")
+				for t in doc:
+					children_texts = [c.text for c in get_children(t)]
+					print(f"  {t.text}: children={children_texts} subtree={list(tok.text for tok in t.subtree)}")
+					
+					# Verify children actually point back to this token
+					for child in get_children(t):
+						if child.head != t:
+							print(f"    WARNING: {child.text} is child of {t.text} but points to {child.head.text}")"""
+
+				prev_token.dep_ = original_head_dep
+				original_head.dep_ = prev_token_dep
+				
+				prev_token.head = prev_token if original_root else original_head_head
+				original_head.head = prev_token
+
+				"""print(f"\nAFTER FLIP:")
+				print(f"  {prev_token.text} -> {prev_token.head.text} (dep: {prev_token.dep_})")
+				print(f"  {original_head.text} -> {original_head.head.text} (dep: {original_head.dep_})")
+				print(f"  {original_head.text} children: {[c.text for c in get_children(original_head)]}")
+				
+				# Check if any token lost children unexpectedly
+				print(f"\nALL TOKENS AFTER FLIP:")
+				for t in doc:
+					children_texts = [c.text for c in get_children(t)]
+					print(f"  {t.text}: children={children_texts} subtree={list(tok.text for tok in t.subtree)}")
+
+					for child in doc:
+						if child.head == t:
+							print(child.text, "is child of", t.text, t.is_ancestor(child), child in get_children(t))
+					
+					# Verify children actually point back to this token
+					for child in get_children(t):
+						if child.head != t:
+							print(f"    WARNING: {child.text} is child of {t.text} but points to {child.head.text}")"""
+								
+				root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
+				print("root", root)
+
+				to_nltk_tree(root).pretty_print()
+				
+				alreadyParsed.add(original_head)
+				alreadyParsed.add(prev_token)
+				flipped = True
+				break
+
+		if not flipped:
+			break
+	
 def exchange(doc, childCase: lambda token: True, parentCase: lambda token: True):
 	alreadyParsed = set()
 
@@ -94,7 +152,7 @@ def exchange(doc, childCase: lambda token: True, parentCase: lambda token: True)
 			original_head.dep_ = prev_token_dep
 			alreadyParsed.add(original_head)
 
-			for t in prev_token.children:
+			for t in get_children(prev_token):
 				if t != original_head:
 					print(t.text, "now has parent", original_head.text)
 					t.head = original_head
@@ -127,8 +185,8 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False, repla
 		relationRoot = [relationRoot]
 
 	for token in doc:
-		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				print(token.text, childA.text, childB.text, token in alreadyParsed)	
 		if token in alreadyParsed:
 			continue
@@ -138,8 +196,8 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False, repla
 	
 		found = False
 
-		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				prevTokenHead = token.head
 				prevTokenDep = token.dep_
 
@@ -171,8 +229,8 @@ def rearrangeRoot(doc, relation, relationRoot, rootPOS=None, multiLevel=False, r
 		relationRoot = [relationRoot]
 
 	for token in doc:
-		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				print(token.text, childA.text, childB.text, token in alreadyParsed)	
 		if token in alreadyParsed:
 			continue
@@ -186,8 +244,8 @@ def rearrangeRoot(doc, relation, relationRoot, rootPOS=None, multiLevel=False, r
 		while root.head != root:
 			root = root.head
 
-		for childA in [child for child in token.children if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (childA.children if multiLevel else token.children) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				prevTokenHead = root.head
 				prevTokenDep = root.dep_
 
@@ -204,6 +262,16 @@ def rearrangeRoot(doc, relation, relationRoot, rootPOS=None, multiLevel=False, r
 
 				print("Rearranged", root.text, childA.text, childB.text)
 
+
+
+from nltk import Tree
+
+def to_nltk_tree(node):
+	if len(get_children(node)) > 0:
+		return Tree(node.orth_, [to_nltk_tree(child) for child in get_children(node)])
+	else:
+		return node.orth_
+	
 def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_Factory, levels: dict, source: Box = None):
 	"""
 	Parsing traversal order should be in the opposite direction of the circuit.
@@ -222,32 +290,26 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		if re.match(r'^[^A-Za-z]$', token.text):
 			remove.add(token)
 			token.head = token
+			token.dep_ = "removed"
 
-	doc = [token for token in doc if token not in remove]
+
+	# doc = [token for token in doc if token not in remove]
 	
 
 	for token in doc:
 		print(token.pos_, token.text)
-		for child in token.children:
+		for child in get_children(token):
 			print(">>>", child.dep_, child.text)
 	print()
 
-	from nltk import Tree
-
-	def to_nltk_tree(node):
-		if node.n_lefts + node.n_rights > 0:
-			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
-		else:
-			return node.orth_
-
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
 	remove = set()
 	"""for token in doc:
-		for child in token.children:
+		for child in get_children(token):
 			print(token.text, child.dep_, child.text)
 			
 		if token.dep_ == "relcl" and token.pos_ != "SCONJ":
@@ -272,16 +334,16 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		#	remove.add(token)
 		#	child.head = child
 	
-	print(remove)
+	"""print(remove)
 	for token in doc:
-		for child in token.children:
+		for child in get_children(token):
 			print(token.text, child.dep_, child.text)
-	doc = [token for token in doc if token not in remove]
+	doc = [token for token in doc if token not in remove]"""
 	
 	"""for token in doc:
 		found = False
-		for childA in [child for child in token.children if child.dep_ == "advcl"]:
-			for childB in [child for child in childA.children if child.dep_ == "mark"]:
+		for childA in [child for child in get_children(token) if child.dep_ == "advcl"]:
+			for childB in [child for child in get_children(childA) if child.dep_ == "mark"]:
 				prevTokenHead = token.head
 
 				token.head = childB
@@ -295,45 +357,51 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				break"""
 
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
+
+	print("\n\n<<< CONJUNCTION FIXING >>>\n\n")
+
 	for token in doc:
-		if token.dep_ == "conj":
-			has_cc_sibling = any(sib.dep_ == "cc" for sib in token.head.children if sib is not token)
+		if token.dep_ == "conj" or token.dep_ == "punct":
+			has_cc_sibling = any(sib.dep_ == "cc" for sib in get_children(token.head) if sib is not token)
 
 			if not has_cc_sibling:
 				for candidate in doc:
 					if candidate.dep_ == "cc":
-						has_conj_sibling = any(sib.dep_ == "conj" for sib in candidate.head.children if sib is not candidate)
+						has_conj_sibling = any(sib.dep_ == "conj" for sib in get_children(candidate.head) if sib is not candidate)
 
 						if not has_conj_sibling:
 							if candidate.head != token and token.head != candidate:
 								token.head = candidate.head
+								token.dep_ = "conj"
 								break
 
 	
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
+	print("\n\n<<< CLAUSE POS MODIFICATION >>>\n\n")
+
 	rearrange(doc, ["relcl"], ["nsubjpass", "nsubj"], "PRON", True, "SCONJ")
 
 	for token in doc:
-		for child in token.children:
+		for child in get_children(token):
 			print(token.text, child.dep_, child.text)
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
 	#rearrange(doc, ["prep"], ["pobj"], "SCONJ", True)
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
@@ -342,18 +410,20 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	for token in doc:
 		print(token.pos_, token.text)
-		for child in token.children:
+		for child in get_children(token):
 			print(">>>", child.dep_, child.text)
 		print()
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
-	rearrange(doc, ["advcl", "ccomp", "relcl"], ["mark", "advmod"], "SCONJ", True)
+	print("\n\n<<< CLAUSE REORDERING >>>\n\n")
+
+	rearrange(doc, ["advcl", "ccomp", "relcl"], ["mark", "advmod", "nsubjpass", "nsubj"], "SCONJ", True)
 	
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
@@ -362,10 +432,12 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	rearrange(doc, "xcomp", "aux", "PART", True, "ADP", "VERB")
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
+
+	print("\n\n<<< CONJUNCTION MODIFICATION >>>\n\n")
 
 	explored = set()
 	for token in doc:
@@ -384,11 +456,11 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 			for targetElem in targets:
 				hasConj = False
-				for child in targetElem.children:
+				for child in get_children(targetElem):
 					if child.dep_ == "conj":
 						hasConj = True
 				
-				for child in targetElem.children:
+				for child in get_children(targetElem):
 					if child.dep_ == "conj" or (hasConj and child.dep_ == "dobj"):
 						elems.append(child)
 						nextParse.append(child)
@@ -416,14 +488,14 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			explored.add(coordinator)
 
 				
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 	
 	rearrange(doc, "conj", "cc")
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
@@ -434,8 +506,8 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		found = False
 		alreadyParsed = set()
 		
-		for childA in [child for child in token.children if child.dep_ == "advcl" or child.dep_ == "ccomp"]:
-			for childB in [child for child in childA.children if child.dep_ == "mark" and child.pos_ == "SCONJ"]:
+		for childA in [child for child in get_children(token) if child.dep_ == "advcl" or child.dep_ == "ccomp"]:
+			for childB in [child for child in get_children(childA) if child.dep_ == "mark" and child.pos_ == "SCONJ"]:
 				prevTokenHead = token.head
 				prevTokenDep = token.dep_
 
@@ -452,25 +524,6 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			
 			if found:
 				break"""
-
-	for token in doc:
-		if token.pos_ == "NOUN":
-			prep_children = [child for child in token.children if child.dep_ == "prep"]
-			if len(prep_children) > 1:
-				prep_children = sorted(prep_children, key=lambda t: t.i)
-				for i in range(1, len(prep_children)):
-					prep_children[i].head = prep_children[i - 1]
-		elif token.pos_ == "VERB":
-			prep_children = [child for child in token.children if child.dep_ == "ccomp"]
-			if len(prep_children) > 1:
-				prep_children = sorted(prep_children, key=lambda t: t.i)
-				for i in range(1, len(prep_children)):
-					prep_children[i].head = prep_children[i - 1]
-		elif token.pos_ == "CCONJ":
-			print([child.pos_ for child in token.children])
-			adv_children = [child for child in token.children if child.pos_ == "ADV"]
-			for child in adv_children:
-				child.pos_ = "NOUN"
 	
 	"""for token in doc:
 		if token.dep_ == "prep":
@@ -482,27 +535,34 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 			prep_token.head = prep_token if original_head.head == original_head else original_head.head
 			original_head.head = prep_token"""
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
 	#flip(doc, "relcl")
 	
-	flip(doc, "prep", lambda token: len(list(token.children)) > 0 and token.pos_ == "ADP")
-	flip(doc, "agent", lambda token: len(list(token.children)) > 0 and token.pos_ == "ADP")
+	print("\n\n<<< PREP FLIP >>>\n\n")
+
+	flip(doc, "prep", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
+	flip(doc, "agent", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
+
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
+	print("root", root)
+
+	to_nltk_tree(root).pretty_print()
 
 	for token in doc:
 		if token.pos_ == "ADP":
-			aux_children = [child for child in token.children if child.pos_ == "AUX"]
+			aux_children = [child for child in get_children(token) if child.pos_ == "AUX"]
 			for child in aux_children:
 				child.pos_ = "VERB"
 
 	for token in doc:
-		for child in token.children:
+		for child in get_children(token):
 			print(token.text, child.dep_, child.text)
 	
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
@@ -510,10 +570,35 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	#rearrange(doc, ["advmod"], ["advmod"], "SCONJ")
 	flip(doc, "advmod", lambda token: token.pos_ == "SCONJ")
 
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
+	print("\n\n<<< POS FIXING >>>\n\n")
+
+	for token in doc:
+		if token.pos_ == "NOUN":
+			prep_children = [child for child in get_children(token) if child.dep_ == "prep"]
+			if len(prep_children) > 1:
+				prep_children = sorted(prep_children, key=lambda t: t.i)
+				for i in range(1, len(prep_children)):
+					prep_children[i].head = prep_children[i - 1]
+		elif token.pos_ == "VERB":
+			prep_children = [child for child in get_children(token) if child.dep_ == "ccomp"]
+			if len(prep_children) > 1:
+				prep_children = sorted(prep_children, key=lambda t: t.i)
+				for i in range(1, len(prep_children)):
+					prep_children[i].head = prep_children[i - 1]
+		elif token.pos_ == "CCONJ" or token.pos_ == "SCONJ":
+			print(token.text, "has children", [child.pos_ for child in get_children(token)])
+			adv_children = [child for child in get_children(token) if child.pos_ == "ADV"]
+			for child in adv_children:
+				child.pos_ = "NOUN"
+
+			if any(child.pos_ == "ADJ" for child in get_children(token)):
+				for child in get_children(token):
+					if child.pos_ == "NOUN":
+						child.pos_ = "ADJ"
 
 	leaves = list()
 
@@ -532,7 +617,7 @@ def tree_parse_old(circuit: Circuit, string, spacy_model: spacy.load, factory: B
 	"""
 	print("tree parse", string)
 	doc = spacy_model(string)
-	root = [token for token in doc if token.head == token][0]
+	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	leaves = list()
@@ -631,7 +716,7 @@ if __name__ == "__main__":
 
 	def to_nltk_tree(node):
 		if node.n_lefts + node.n_rights > 0:
-			return Tree(node.orth_, [to_nltk_tree(child) for child in node.children])
+			return Tree(node.orth_, [to_nltk_tree(child) for child in get_children(node)])
 		else:
 			return node.orth_
 
@@ -650,11 +735,13 @@ if __name__ == "__main__":
 	embedding5 = discourse5.forward()
 
 	example_sentences = [
-		"I co-authored Quantum in Pictures, with Stefano Gogioso, which does the same, but now accessible to people with no maths background.",
+		"The player may play as any nation in the world in the 1936 or 1939 start dates in single-player or multiplayer.",
+		#"I co-authored Quantum in Pictures, with Stefano Gogioso, which does the same, but now accessible to people with no maths background.",
+		# "Each state has a certain amount of shared and state building slots, both of which affect the whole state, while provinces have province building slots that only impact the individual province.",
 		"These divisions require equipment and manpower to fight properly",
 		"The tanks, airplanes, and boats could also be manually customised by the player",
-		"I co-authored Picturing Quantum Processes, with Aleks Kissinger, a book providing a fully diagrammatic treatment of quantum theory and its applications",
-		"Sea regions and provinces each have a type of terrain and weather assigned to them that determines how well different types of units will perform in combat there.",
+		#"I co-authored Picturing Quantum Processes, with Aleks Kissinger, a book providing a fully diagrammatic treatment of quantum theory and its applications",
+		#"Sea regions and provinces each have a type of terrain and weather assigned to them that determines how well different types of units will perform in combat there.",
 		"Coecke is also a composer and musician, who has been called a pioneer of industrial music, and is also one of the pioneers of employing quantum computers in music",
 		"Similarly, major seas and oceans (for warships) and the sky (for warplanes) are divided into different zones known as strategic regions",
 		"How well divisions perform in combat depends on various factors, such as the quality of their equipment, the weather, the type of terrain, the skill and traits of the general commanding the divisions, aerial combat in the region, supply lines, and supporting units",
