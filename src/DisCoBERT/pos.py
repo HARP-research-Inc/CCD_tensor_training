@@ -469,6 +469,7 @@ class Intransitive_Verb(Box):
 
 		return output
 
+
 class Conjunction(Box):
 	"""
 

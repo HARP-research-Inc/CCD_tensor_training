@@ -4,6 +4,7 @@ He is also Distinguished Visiting Research Chair at the Perimeter Institute for 
 He pioneered categorical quantum mechanics, Quantum Picturalism, ZX-calculus, DisCoCat model for natural language, and quantum natural language processing (QNLP).
 He is a founder of the Quantum Physics and Logic community and conference series, and of the journal Compositionality.
 Coecke is also a composer and musician, who has been called a pioneer of industrial music, and is also one of the pioneers of employing quantum computers in music.
+
 I am Chief Scientist at Quantinuum, head Quantinuum's Oxford-based Quantum NLP & Compositional Intelligence sub-team, I am Distinguished Visiting Research Chair at the Perimeter Institute for Theoretical Physics, I am Emeritus Fellow at Wolfson College Oxford, and Visiting Fellow at the Computer Science Department and the Mathematical Institute of Oxford University.
 Previously I was Professor of Quantum Foundations, Logics and Structures at the Department of Computer Science at Oxford University, where I was 20 years, and co-founded and led a multi-disciplinary Quantum Group that grew to 50 members and I supervised close to 70 PhD students.
 I am still supervising, at Oxford and elsewhere, and also still teach at Oxford's Mathematical Institute.
@@ -43,3 +44,24 @@ Some provinces may have victory points, which can push a nation closer towards c
 Occupying key provinces within a state allows the occupying power to access the enemy's factories and natural resources in that state.
 Resistance to occupation within a state can hamper the occupying power's control over it.
 Nations can develop nuclear bombs if they have the proper technology, which can be used to devastate enemy provinces and states.
+
+Enter Synthetic Formal Linguistics (SFL), a revolutionary approach that moves beyond statistical pattern recognition toward structured reasoning and abstract comprehension.
+Unlike traditional machine learning, which relies on large datasets and statistical correlations, SFL is built on mathematical frameworks that allow AI to process language, logic, and meaning in an explainable and generalizable way.
+This shift has the potential to dramatically reduce computational costs while vastly improving AI’s reasoning capabilities.
+To understand why this shift is necessary, we must examine the fundamental difference between analytic and synthetic problem-solving.
+What does making the big problems bigger look like?
+In a mathematical context, analytic problem solving uses step-by-step analysis to break larger problems into more context-specific ones.
+Examples include elementary algebra, calculus, and linear algebra.
+Conversely, synthetic problem solving generalizes problems out of their specific context to create broad, interdisciplinary solutions and arrive at core truths.
+To illustrate the difference between analytic and synthetic problem-solving, imagine you want to find the shortest route from your house to the grocery store.
+The analytic approach would be to try every possible route, recording the landmarks and timing each trip.
+Once you’ve tested enough routes, you can pick the fastest one.
+The synthetic approach would be to make a map of all the paths in town and then use that map to determine the shortest route.
+While making a map is more complicated than simply timing individual trips, it delivers more than the answer to this one question.
+Instead of only knowing the best way to the grocery store, you now have a tool that can help you find the shortest route to anywhere in town.
+By taking a bird’s-eye view of the problem, the synthetic approach doesn’t just solve a single case; it reveals a deeper structure, allowing you to solve an entire class of similar problems efficiently.
+This is the power of synthetic thinking: instead of repeatedly solving small, isolated problems, it creates broad, reusable solutions that apply across different situations.
+For simple situations, analytic problem solving will get you a solution, but if you want true generality and understanding, synthetic problem solving is required.
+The foundations of modern analytic machine learning are rooted in the advent of modern linear algebra by Cauchy, Gauss, and Cayley in the 1830s, providing the mathematical groundwork for handling large sets of numerical relationships.
+The first formal model of neural networks was introduced by McCulloch & Pitts in 1943, describing neurons as simple logic gates that process inputs and produce outputs.
+This step-by-step, data-driven approach remains the backbone of AI today; modern machine learning models, including large language models (LLMs), rely on linear algebra, probability, and statistical pattern recognition to process and predict information.
