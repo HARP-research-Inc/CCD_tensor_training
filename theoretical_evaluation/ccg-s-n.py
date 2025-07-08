@@ -51,28 +51,28 @@ def s_to_n(cat: Category) -> Category:
                 return Category.parse('N')
         return cat
     else:
-        # For complex categories, recursively transform result and argument
-        result_converted = s_to_n(cat.result)
-        argument_converted = s_to_n(cat.argument)
+        # For complex categories, work with string representation and transform all S->N
+        cat_str = str(cat)
         
-        # If neither result nor argument changed, return original
-        if (str(result_converted) == str(cat.result) and 
-            str(argument_converted) == str(cat.argument)):
-            return cat
-            
-        # Otherwise try to construct the new category
-        try:
-            # Build the category string and parse it
-            cat_str = f'{result_converted}{cat.dir}{argument_converted}'
-            return Category.parse(cat_str)
-        except:
-            # If parsing still fails, we need to signal that this category
-            # contains S but couldn't be transformed properly
-            # For now, return a placeholder that's clearly different
+        # Replace all atomic S occurrences with N while preserving features
+        # This regex matches S followed by optional features and looks ahead for non-alphanumeric chars
+        import re
+        
+        # Replace S[feature] with N[feature] 
+        transformed_str = re.sub(r'\bS(\[[^\]]+\])', r'N\1', cat_str)
+        
+        # Replace standalone S with N (not followed by [ or alphanumeric)
+        transformed_str = re.sub(r'\bS(?![a-zA-Z0-9\[])', 'N', transformed_str)
+        
+        # If the string changed, parse the new category
+        if transformed_str != cat_str:
             try:
-                return Category.parse('TRANSFORM_FAILED')
+                return Category.parse(transformed_str)
             except:
+                # If parsing fails, return original
                 return cat
+        else:
+            return cat
 
 converted = {s_to_n(c) for c in original}
 
