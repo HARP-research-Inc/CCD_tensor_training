@@ -188,13 +188,13 @@ def bert_forward_flops(sentence: str,
                  else flops_transformer_layer_vanilla)(L, hidden)
     return per_layer * layers, L
 
-###############################################################################
+#############################################################`##################
 # 4) Example comparison
 ###############################################################################
 if __name__ == "__main__":
     sentence = "Once upon a midnight dreary, while I pondered, weak and weary, over many a quaint and curious volume of forgotten lore, while I nodded, nearly napping, suddenly there came a tapping, as of some one gently rapping, rapping at my chamber door."
 
-    H = 384*4        # Unified dimensionality for all systems
+    H = 384*2        # Unified dimensionality for all systems
     R = 50         # CP rank
     layers = 12    # Standard for BERT-base
     k = 1          # MoE active experts
@@ -231,21 +231,25 @@ if __name__ == "__main__":
     print()
 
     if SPACY_AVAILABLE:
+        # Get parser breakdown for DisCoCirc methods
+        full_disco, _ = estimate_discocirc_complexity(sentence, d=H, include_parser=False)
+        cp_disco, _ = estimate_cp_discocirc_complexity(sentence, d=H, R=R, include_parser=False)
+        
         print(f"[1] Full-rank DisCoCirc+Parser  : {full_total:,.0f} FLOPs")
+        print(f"    └─ DisCoCirc compositional  : {full_disco:,.0f} FLOPs")
+        print(f"    └─ spaCy parser             : {dense_total:,.0f} FLOPs")
         print(f"[2] CP-rank-{R} DisCoCirc+Parser : {cp_total:,.0f} FLOPs")
+        print(f"    └─ DisCoCirc compositional  : {cp_disco:,.0f} FLOPs")
+        print(f"    └─ spaCy parser             : {dense_total:,.0f} FLOPs")
     print(f"[3] BERT-base (vanilla)         : {bert_total:,.0f} FLOPs")
     print(f"[4] BERT-base (optimised)       : {bert_opt:,.0f} FLOPs")
-    print(f"[5] spaCy-sm Parser only        : {dense_total:,.0f} FLOPs")
-    print(f"[6] MoE Baseline Parser (k={k})   : {moe_baseline_total:,.0f} FLOPs")
-    print(f"[7] MoE Fast Parser (k={k})       : {moe_fast_total:,.0f} FLOPs\n")
+    print(f"[5] MoE Baseline Parser (k={k})   : {moe_baseline_total:,.0f} FLOPs")
+    print(f"[6] MoE Fast Parser (k={k})       : {moe_fast_total:,.0f} FLOPs\n")
 
     # Compute relative comparisons
     methods = {
         "BERT-base (vanilla)": bert_total,
         "BERT-base (optimised)": bert_opt,
-        "spaCy-sm Parser only": dense_total,
-        f"MoE Baseline Parser (k={k})": moe_baseline_total,
-        f"MoE Fast Parser (k={k})": moe_fast_total,
     }
     
     if SPACY_AVAILABLE:
