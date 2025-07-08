@@ -194,7 +194,7 @@ def bert_forward_flops(sentence: str,
 if __name__ == "__main__":
     sentence = "Once upon a midnight dreary, while I pondered, weak and weary, over many a quaint and curious volume of forgotten lore, while I nodded, nearly napping, suddenly there came a tapping, as of some one gently rapping, rapping at my chamber door."
 
-    H = 384*2        # Unified dimensionality for all systems
+    H = 384 # 384*4        # Unified dimensionality for all systems
     R = 50         # CP rank
     layers = 12    # Standard for BERT-base
     k = 1          # MoE active experts
@@ -253,8 +253,13 @@ if __name__ == "__main__":
     }
     
     if SPACY_AVAILABLE:
+        # Calculate CP-rank DisCoCirc + Fast MoE Parser
+        cp_disco_only, _ = estimate_cp_discocirc_complexity(sentence, d=H, R=R, include_parser=False)
+        cp_fast_total = cp_disco_only + moe_fast_total
+        
         methods["Full-rank DisCoCirc+Parser"] = full_total
         methods[f"CP-rank-{R} DisCoCirc+Parser"] = cp_total
+        methods[f"CP-rank-{R} DisCoCirc+FastMoE"] = cp_fast_total
 
     names = list(methods.keys())
     print("==== Relative FLOP Ratios ====\n")
