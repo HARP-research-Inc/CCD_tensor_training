@@ -19,10 +19,10 @@ from tqdm import tqdm
 ###############################################################################
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
-N_TAGS       = 17          # Universal-POS
+N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
 BATCH_SIZE   = 256
 LR           = 2e-3
-EPOCHS       = 10
+EPOCHS       = 40
 MAX_LEN      = 64          # truncate very long sentences
 
 ###############################################################################
@@ -75,8 +75,7 @@ def build_vocab(train):
 def encode_sent(ex, vocab):
     ids = [vocab.get(tok, 0) for tok in ex["tokens"]][:MAX_LEN]
     pos = ex["upos"][:MAX_LEN]
-    # Ensure POS tags are in valid range [0, N_TAGS-1]
-    pos = [min(max(p, 0), N_TAGS-1) if isinstance(p, int) else 0 for p in pos]
+    # No clipping needed - dataset has exactly 18 tags (0-17) and model expects 18
     return {"ids": ids, "upos": pos}
 
 def collate(batch):
