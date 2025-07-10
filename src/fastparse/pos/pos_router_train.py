@@ -28,7 +28,7 @@ from tqdm import tqdm
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 8192  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
+BATCH_SIZE   = 12543 #4096 #8192  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
 LR_HIGH      = 4e-2  # Initial learning rate
 LR_LOW       = 2e-2  # Reduced learning rate after $schedule_max train acc
 EPOCHS       = 30
