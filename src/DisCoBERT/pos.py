@@ -98,7 +98,7 @@ class Adverb(Box):
 		super().__init__(label, model_path)
 		self.type = "ADV"
 		self.grammar = ['SELF', 'VERB', '|', "SELF", "ADJ"]
-		self.model = Box.model_cache.load_ann((label, "general_adv_model"), n=1)
+		self.model = Box.model_cache.load_ann((label, "adv_model"), n=1)
 	
 	def forward_helper(self):
 		"""
@@ -609,7 +609,7 @@ class Box_Factory(object):
 		return self
  
 if __name__ == "__main__":
-	factory = Box_Factory(spacy.load("en_core_web_trf"), "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/")
+	factory = Box_Factory(spacy.load("en_core_web_trf"), "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert")
 
 	# tiny_discourse = Circuit("Tiny Discourse")
 

@@ -15,7 +15,7 @@ from src.regression import CPTensorRegression, TwoWordTensorRegression
 ###### PARSING FUNCTIONS ######
 ###############################
 
-MODEL_PATH = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/"
+MODEL_PATH = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert"
 CONJUNCTION_LIST = set()#SUBORDINATING_CONJUNCTIONS["temporal"] | SUBORDINATING_CONJUNCTIONS["causal"] | \
 	#SUBORDINATING_CONJUNCTIONS["conditional"] | SUBORDINATING_CONJUNCTIONS["concessive"] | \
 	#SUBORDINATING_CONJUNCTIONS["purpose"] | SUBORDINATING_CONJUNCTIONS["result/consequence"] | \
@@ -696,7 +696,7 @@ if __name__ == "__main__":
 
 	#version 0.1.0 - bag of clauses approach
 
-	path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training"
+	path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert"
 	spacy_model = "en_core_web_lg"
 
 	one_clause = "the big fat deformed french man eats a small helpless newborn baby"

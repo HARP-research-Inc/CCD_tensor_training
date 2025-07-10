@@ -50,7 +50,7 @@ def build_data(path):
 
     return train_embeddings, train_classifications, test_embeddings, test_classifications
 
-def build_DCB_data(path):
+def build_DCB_data(path, toy_mode = False):
     with open(path, 'r') as file:
         data = file.readlines()
 
@@ -70,6 +70,9 @@ def build_DCB_data(path):
     for line in data:
         if line[0] == '#' or len(line) < 4:
             continue
+        if toy_mode and n % 100 != 0:
+            n += 1
+            continue
 
         point = line.strip().split("-", 1)
 
@@ -85,7 +88,7 @@ def build_DCB_data(path):
         for sentence in sentences:
             
             try:
-                embedding = model.encode(sentence.strip()).tolist()[0]
+                embedding = model.encode_confident(sentence.strip()).tolist()[0]
             except:
                 print(f"Error processing sentence: {sentence.strip()}")
                 breaks += 1
@@ -136,7 +139,7 @@ def logisitic_regression(train_embeddings, train_classifications, test_embedding
     return model
 
 if __name__ == "__main__":
-    train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt")
+    train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt", toy_mode=True)
     logisitic_regression(train_embeddings, train_classifications, test_embeddings, test_classifications)
     save_data(train_embeddings, train_classifications, test_embeddings, test_classifications)
 

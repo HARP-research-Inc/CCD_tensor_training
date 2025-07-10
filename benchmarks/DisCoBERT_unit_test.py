@@ -241,6 +241,11 @@ def test_auxilliary(global_model):
 ######## Edge P.O.S. tests #######
 ##################################
 
+# def test_deathstack_of_adj(global_model):
+#     model = global_model
+
+#     model.encode("Beautifl")
+
 def test_multiple_verbs_for_subj_connected_by_conj(global_model):
     model = global_model
 
@@ -254,6 +259,14 @@ def test_multiple_adj_connected_by_conj(global_model):
     _ = model.encode("The big and red dog")
     # _ = model.encode("The big, red and fluffy dog")
     # _ = model.encode("The big, red, fluffy and cute dog")
+
+def test_intransitive_verb_with_object(global_model):
+    model = global_model
+
+    _ = model.encode("Alice ran home")
+    _ = model.encode("Bob bites the apple")
+    _ = model.encode("The name of the application was altered to magnetic resonance imaging (MRI) to avoid the loaded word nuclear.")
+
 
 ##################################
 ######### Semantic tests #########

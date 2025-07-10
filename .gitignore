@@ -52,3 +52,4 @@ checkpoints/checkpoint_20250501_191638.json
 checkpoints/latest_checkpoint.txt
 preorder_output.txt
 *.tokens
+dump.txt
