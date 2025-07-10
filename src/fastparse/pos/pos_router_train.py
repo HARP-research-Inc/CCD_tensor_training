@@ -11,6 +11,8 @@
 # - Non-blocking GPU transfers
 # - Pre-tensorified datasets to avoid Python overhead
 
+# Run: python .\pos_router_train.py --combine
+
 # ---------------------------------------------------------------------#
 # 0.  Dependencies
 # ---------------------------------------------------------------------#
