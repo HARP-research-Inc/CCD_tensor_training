@@ -75,6 +75,8 @@ def build_vocab(train):
 def encode_sent(ex, vocab):
     ids = [vocab.get(tok, 0) for tok in ex["tokens"]][:MAX_LEN]
     pos = ex["upos"][:MAX_LEN]
+    # Ensure POS tags are in valid range [0, N_TAGS-1]
+    pos = [min(max(p, 0), N_TAGS-1) if isinstance(p, int) else 0 for p in pos]
     return {"ids": ids, "upos": pos}
 
 def collate(batch):
@@ -101,7 +103,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu"):
         ids, upos, mask = ids.to(device), upos.to(device), mask.to(device)
         logp = model(ids, mask)                # [B, T, 17]
         loss = nn.functional.nll_loss(
-            logp.transpose(1,2), upos, reduction="sum"
+            logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
         )
 
 
@@ -133,6 +135,14 @@ def main():
     ds_val   = load_dataset("universal_dependencies", args.treebank, split="validation")
 
     vocab = build_vocab(ds_train)
+    
+    # Debug: Check upos value ranges
+    all_upos = []
+    for ex in ds_train:
+        all_upos.extend(ex["upos"])
+    print(f"POS tag range in dataset: {min(all_upos)} to {max(all_upos)}")
+    print(f"Model expects: 0 to {N_TAGS-1}")
+    
     train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
     val_enc   = ds_val  .map(lambda ex: encode_sent(ex, vocab))
 
