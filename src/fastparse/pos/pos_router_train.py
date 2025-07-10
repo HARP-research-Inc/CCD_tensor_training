@@ -20,7 +20,7 @@ from tqdm import tqdm
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 4287 #1024
+BATCH_SIZE   = 2048  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
 LR_HIGH      = 4e-2  # Initial learning rate
 LR_LOW       = 2e-2  # Reduced learning rate after 95% train acc
 EPOCHS       = 50
@@ -126,13 +126,39 @@ def run_epoch(model, loader, optimiser=None, device="cpu"):
 ###############################################################################
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--treebank", default="en_gum",
-                        help="Any UD code accepted by datasets (e.g. en_ewt, fr_sequoia)")
+    parser.add_argument("--treebank", default="en_ewt",
+                        help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
+    parser.add_argument("--combine", action="store_true",
+                        help="Combine multiple English treebanks for more training data")
     args = parser.parse_args()
 
     print("Loading UD dataset …")
-    ds_train = load_dataset("universal_dependencies", args.treebank, split="train", trust_remote_code=True)
-    ds_val   = load_dataset("universal_dependencies", args.treebank, split="validation")
+    if args.combine:
+        print("🔥 Loading combined English treebanks for maximum training data!")
+        # Load multiple English treebanks
+        treebanks = ["en_ewt", "en_gum"]  # Add more if available
+        train_datasets = []
+        val_datasets = []
+        
+        for tb in treebanks:
+            try:
+                ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
+                ds_val_tb = load_dataset("universal_dependencies", tb, split="validation", trust_remote_code=True)
+                train_datasets.append(ds_train_tb)
+                val_datasets.append(ds_val_tb)
+                print(f"  ✓ Loaded {tb}: {len(ds_train_tb)} train, {len(ds_val_tb)} val")
+            except Exception as e:
+                print(f"  ❌ Failed to load {tb}: {e}")
+        
+        # Concatenate datasets
+        from datasets import concatenate_datasets
+        ds_train = concatenate_datasets(train_datasets)
+        ds_val = concatenate_datasets(val_datasets)
+        print(f"🎯 Combined total: {len(ds_train)} train, {len(ds_val)} val sentences")
+    else:
+        ds_train = load_dataset("universal_dependencies", args.treebank, split="train", trust_remote_code=True)
+        ds_val   = load_dataset("universal_dependencies", args.treebank, split="validation", trust_remote_code=True)
+        print(f"📊 {args.treebank}: {len(ds_train)} train, {len(ds_val)} val sentences")
 
     vocab = build_vocab(ds_train)
     
@@ -175,8 +201,14 @@ def main():
               f"val ppl {val_ppl:4.2f} | "
               f"lr {current_lr:.1e}")
 
-    torch.save(model.state_dict(), f"router_{args.treebank}.pt")
-    print("✓ finished; weights saved.")
+    # Save model with dataset info
+    if args.combine:
+        model_name = "router_combined.pt"
+    else:
+        model_name = f"router_{args.treebank}.pt"
+    
+    torch.save(model.state_dict(), model_name)
+    print(f"✓ finished; weights saved to {model_name}")
 
 if __name__ == "__main__":
     main()
