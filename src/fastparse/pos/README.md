@@ -76,7 +76,66 @@ python pos_inference.py --batch --num-sentences 5000 --batch-size 1024
 python batch_demo.py
 ```
 
-### 5. Extreme Scale Stress Testing
+### 5. Automatic Batch Size Optimization
+
+```bash
+# Find optimal batch size with fine-grained tuning (default)
+python pos_inference.py --optimize-batch-size
+
+# Fast optimization (skip fine-tuning, ~3x faster)
+python pos_inference.py --optimize-batch-size --no-fine-tuning
+
+# Use custom config file
+python pos_inference.py --optimize-batch-size --config-file my_gpu_config.json
+
+# After optimization, all future runs automatically use optimal batch size:
+python pos_inference.py --batch --num-sentences 5000  # Uses optimized batch size!
+
+# Interactive optimization demo
+python optimization_demo.py
+
+# Compare fast vs fine-tuned optimization
+python fine_tuning_comparison.py
+```
+
+**Optimization Features:**
+- **Three-phase optimization**: 
+  - Phase 1: Test standard powers of 2 (64, 128, 256, 512, 1024, 2048, 4096, 8192)
+  - Phase 2: Coarse refinement around best (±25%, ±50%)
+  - Phase 3: Fine-grained tuning in increments of 10-50 (±10% range)
+- **Adaptive step sizes**: Smaller increments for smaller batch sizes
+- **GPU memory monitoring**: Safely finds maximum batch size without crashing
+- **Intelligent stopping**: Halts on consecutive OOM errors
+- **Progress tracking**: Real-time performance feedback
+- **Persistent configuration**: Saves optimal settings with GPU info and timestamp
+- **Automatic loading**: Future runs automatically use optimized batch size
+- **Cross-session persistence**: Config works across different runs and reboots
+
+**Example Config File (`batch_config.json`):**
+```json
+{
+  "timestamp": "2024-01-15 14:30:22",
+  "gpu_info": "NVIDIA GeForce RTX 3060 Ti",
+  "gpu_memory": "8.0GB",
+  "optimal_batch_size": 4170,
+  "optimal_throughput": 46284,
+  "all_results": [
+    {"batch_size": 4170, "throughput": 46284},
+    {"batch_size": 4096, "throughput": 45623},
+    {"batch_size": 4220, "throughput": 45987},
+    {"batch_size": 2048, "throughput": 42105},
+    {"batch_size": 8192, "throughput": 38942}
+  ]
+}
+```
+
+**Fine-Tuning Benefits:**
+- **Precision**: Finds optimal batch size within ±10 tokens
+- **Performance gains**: Often 1-3% additional throughput
+- **Example**: 4096 → 4170 (+1.4% improvement)
+- **Adaptive**: Step size scales with batch size magnitude
+
+### 6. Extreme Scale Stress Testing
 
 ```bash
 # Automatic stress test with multiple configurations
@@ -101,7 +160,7 @@ python extreme_stress_test.py
 - Efficiency metrics per parameter
 - Progressive testing up to GPU memory limits
 
-### 6. Run Full Benchmark Demo
+### 7. Run Full Benchmark Demo
 
 ```bash
 python benchmark_demo.py

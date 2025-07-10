@@ -480,6 +480,257 @@ class POSPredictor:
         print(f"• GPU utilization: High (optimized pipeline)")
         
         return results
+    
+    def optimize_batch_size(self, config_file="batch_config.json", test_sentences=5000, fine_tune=True):
+        """Find optimal batch size for this GPU and save to config file."""
+        print(f"\n🎯 BATCH SIZE OPTIMIZATION")
+        print("=" * 60)
+        print(f"Finding optimal batch size for your GPU...")
+        print(f"Test dataset: {test_sentences:,} sentences")
+        
+        # Load test sentences
+        sentences = load_test_sentences(test_sentences, "en_ewt")
+        actual_sentences = len(sentences)
+        total_tokens = sum(len(self.tokenize(text)) for text in sentences)
+        
+        print(f"📊 Testing with {actual_sentences:,} sentences ({total_tokens:,} tokens)")
+        
+        # Test batch sizes - start with powers of 2, then refine
+        initial_batch_sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192]
+        
+        results = []
+        best_throughput = 0
+        best_batch_size = 512
+        
+        print(f"\n🔍 Phase 1: Testing standard batch sizes")
+        print("-" * 40)
+        
+        for batch_size in initial_batch_sizes:
+            try:
+                print(f"Testing batch size {batch_size:,}...", end=" ")
+                
+                # Warm up
+                warm_sentences = sentences[:min(1000, len(sentences))]
+                _ = self.predict_batch(warm_sentences, batch_size)
+                
+                # Actual test
+                start_time = time.time()
+                _ = self.predict_batch(sentences, batch_size)
+                test_time = time.time() - start_time
+                
+                throughput = total_tokens / test_time
+                results.append({
+                    "batch_size": batch_size,
+                    "time": test_time,
+                    "throughput": throughput,
+                    "tokens_per_sec": throughput
+                })
+                
+                print(f"{throughput:.0f} tokens/sec")
+                
+                if throughput > best_throughput:
+                    best_throughput = throughput
+                    best_batch_size = batch_size
+                
+                # Check GPU memory after each test
+                if torch.cuda.is_available():
+                    memory_used = torch.cuda.memory_allocated() / 1024**3
+                    if memory_used > 10:  # If using > 10GB, probably close to limit
+                        print(f"  (High GPU memory usage: {memory_used:.1f}GB)")
+                
+            except Exception as e:
+                print(f"FAILED ({e})")
+                print(f"  GPU memory limit reached at batch size {batch_size:,}")
+                break
+        
+        # Phase 2: Coarse refinement around the best batch size
+        if results:
+            print(f"\n🎯 Phase 2: Coarse refinement around optimal batch size")
+            print("-" * 40)
+            
+            # Test sizes around the best one
+            refinement_range = [
+                int(best_batch_size * 0.75),
+                int(best_batch_size * 1.25),
+                int(best_batch_size * 1.5)
+            ]
+            
+            for batch_size in refinement_range:
+                if batch_size <= 64 or batch_size in [r["batch_size"] for r in results]:
+                    continue  # Skip if too small or already tested
+                
+                try:
+                    print(f"Testing batch size {batch_size:,}...", end=" ")
+                    
+                    start_time = time.time()
+                    _ = self.predict_batch(sentences, batch_size)
+                    test_time = time.time() - start_time
+                    
+                    throughput = total_tokens / test_time
+                    results.append({
+                        "batch_size": batch_size,
+                        "time": test_time,
+                        "throughput": throughput,
+                        "tokens_per_sec": throughput
+                    })
+                    
+                    print(f"{throughput:.0f} tokens/sec")
+                    
+                    if throughput > best_throughput:
+                        best_throughput = throughput
+                        best_batch_size = batch_size
+                
+                except Exception as e:
+                    print(f"FAILED ({e})")
+        
+        # Phase 3: Fine-grained tuning (increments of 10-50)
+        if results and fine_tune:
+            # Update best batch size from all results so far
+            results.sort(key=lambda x: x["throughput"], reverse=True)
+            current_best = results[0]["batch_size"]
+            
+            print(f"\n🔬 Phase 3: Fine-grained tuning around {current_best:,}")
+            print("-" * 40)
+            
+            # Determine step size based on batch size magnitude
+            if current_best >= 4096:
+                step_size = 50  # For large batch sizes, step by 50
+            elif current_best >= 1024:
+                step_size = 20  # For medium batch sizes, step by 20
+            else:
+                step_size = 10  # For small batch sizes, step by 10
+            
+            # Test range: ±10% around current best in fine increments
+            range_size = max(100, int(current_best * 0.1))  # At least ±100
+            fine_range = []
+            
+            # Generate fine-grained test points
+            for offset in range(-range_size, range_size + 1, step_size):
+                test_batch = current_best + offset
+                if test_batch >= 64 and test_batch not in [r["batch_size"] for r in results]:
+                    fine_range.append(test_batch)
+            
+            # Sort by distance from current best (test closest first)
+            fine_range.sort(key=lambda x: abs(x - current_best))
+            
+            print(f"Testing {len(fine_range)} fine-grained batch sizes (step: {step_size})...")
+            
+            consecutive_failures = 0
+            max_failures = 3  # Stop if 3 consecutive OOM errors
+            
+            for i, batch_size in enumerate(fine_range):
+                try:
+                    print(f"Fine-tuning {batch_size:,}...", end=" ")
+                    
+                    start_time = time.time()
+                    _ = self.predict_batch(sentences, batch_size)
+                    test_time = time.time() - start_time
+                    
+                    throughput = total_tokens / test_time
+                    results.append({
+                        "batch_size": batch_size,
+                        "time": test_time,
+                        "throughput": throughput,
+                        "tokens_per_sec": throughput
+                    })
+                    
+                    print(f"{throughput:.0f} tokens/sec")
+                    consecutive_failures = 0  # Reset failure count
+                    
+                    if throughput > best_throughput:
+                        best_throughput = throughput
+                        best_batch_size = batch_size
+                        print(f"  🎯 New best!")
+                
+                except Exception as e:
+                    print(f"FAILED ({e})")
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_failures:
+                        print(f"  Stopping fine-tuning after {max_failures} consecutive failures")
+                        break
+                
+                # Show progress every 5 tests
+                if (i + 1) % 5 == 0:
+                    current_best_result = max(results, key=lambda x: x["throughput"])
+                    print(f"  Progress: {i+1}/{len(fine_range)}, current best: {current_best_result['batch_size']:,} ({current_best_result['throughput']:.0f} tok/s)")
+        
+        # Sort results by throughput and get final optimal config
+        results.sort(key=lambda x: x["throughput"], reverse=True)
+        optimal_result = results[0] if results else None
+        
+        # Gather system info
+        gpu_info = "N/A"
+        gpu_memory = "N/A"
+        if torch.cuda.is_available():
+            gpu_info = torch.cuda.get_device_name(0)
+            gpu_memory = f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB"
+        
+        # Save configuration
+        config = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "gpu_info": gpu_info,
+            "gpu_memory": gpu_memory,
+            "test_sentences": actual_sentences,
+            "test_tokens": total_tokens,
+            "optimal_batch_size": optimal_result["batch_size"] if optimal_result else 512,
+            "optimal_throughput": optimal_result["throughput"] if optimal_result else 0,
+            "all_results": results[:5],  # Keep top 5 results
+            "model_info": {
+                "vocab_size": len(self.vocab),
+                "parameters": "~64K",
+                "architecture": "DepthWiseCNN"
+            }
+        }
+        
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        # Display results
+        print(f"\n🏆 OPTIMIZATION COMPLETE!")
+        print("=" * 50)
+        print(f"🚀 Optimal batch size: {config['optimal_batch_size']:,}")
+        print(f"📈 Peak throughput: {config['optimal_throughput']:.0f} tokens/sec")
+        print(f"💾 Configuration saved to: {config_file}")
+        
+        print(f"\n📊 TOP PERFORMING BATCH SIZES:")
+        print("-" * 40)
+        for i, result in enumerate(results[:5], 1):
+            print(f"{i}. Batch {result['batch_size']:,}: {result['throughput']:.0f} tokens/sec")
+        
+        print(f"\n💡 RECOMMENDATIONS:")
+        print(f"• Use batch size {config['optimal_batch_size']:,} for maximum throughput")
+        print(f"• Add --batch-size {config['optimal_batch_size']:,} to your commands")
+        print(f"• Your GPU: {gpu_info}")
+        print(f"• Memory available: {gpu_memory}")
+        
+        # Show improvement from fine-tuning if applicable
+        if fine_tune and len(results) > 8:  # If we did fine-tuning
+            coarse_best = max(results[8:], key=lambda x: x["throughput"]) if len(results) > 8 else None
+            fine_best = results[0]
+            if coarse_best and fine_best["throughput"] > coarse_best["throughput"]:
+                improvement = ((fine_best["throughput"] - coarse_best["throughput"]) / coarse_best["throughput"]) * 100
+                print(f"🔬 Fine-tuning improvement: +{improvement:.1f}% throughput")
+                print(f"   ({coarse_best['throughput']:.0f} → {fine_best['throughput']:.0f} tokens/sec)")
+        
+        return config
+
+def load_optimal_batch_size(config_file="batch_config.json"):
+    """Load optimal batch size from config file."""
+    if not os.path.exists(config_file):
+        return None
+    
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Validate config has the expected structure
+        if 'optimal_batch_size' in config and 'gpu_info' in config:
+            return config
+        
+    except Exception as e:
+        print(f"⚠️  Warning: Could not load config from {config_file}: {e}")
+    
+    return None
 
 def load_test_sentences(num_sentences=2000, treebank="en_ewt"):
     """Load test sentences from Universal Dependencies dataset."""
@@ -685,12 +936,29 @@ def main():
                         help="Find and save optimal batch size for your GPU")
     parser.add_argument("--config-file", default="batch_config.json",
                         help="JSON file to store/load optimal batch size (default: batch_config.json)")
+    parser.add_argument("--no-fine-tuning", action="store_true",
+                        help="Skip fine-grained optimization (faster but less precise)")
     args = parser.parse_args()
 
     # Initialize predictor
     predictor = POSPredictor(args.model, args.treebank)
 
-    if args.stress_test:
+    # Load optimal batch size if available
+    optimal_config = load_optimal_batch_size(args.config_file)
+    if optimal_config and (not hasattr(args, 'batch_size') or args.batch_size == 512):
+        optimal_batch = optimal_config['optimal_batch_size']
+        print(f"💡 Using previously optimized batch size: {optimal_batch:,}")
+        print(f"   GPU: {optimal_config['gpu_info']}")
+        print(f"   Peak throughput: {optimal_config['optimal_throughput']:.0f} tokens/sec")
+        print(f"   Optimized on: {optimal_config['timestamp']}")
+        args.batch_size = optimal_batch
+    
+    if args.optimize_batch_size:
+        # Batch size optimization mode
+        fine_tune = not args.no_fine_tuning
+        config = predictor.optimize_batch_size(args.config_file, fine_tune=fine_tune)
+        
+    elif args.stress_test:
         # Extreme scale stress testing mode
         results = predictor.stress_test(args.max_batch_size)
         
