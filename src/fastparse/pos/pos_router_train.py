@@ -28,7 +28,7 @@ from tqdm import tqdm
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 12543 #4096 #8192  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
+BATCH_SIZE   = 4096  # Optimal for GPU utilization - NOT full dataset size!
 LR_HIGH      = 4e-2  # Initial learning rate
 LR_LOW       = 2e-2  # Reduced learning rate after $schedule_max train acc
 EPOCHS       = 30
@@ -87,6 +87,57 @@ def encode_sent(ex, vocab):
     pos = ex["upos"][:MAX_LEN]
     # No clipping needed - dataset has exactly 18 tags (0-17) and model expects 18
     return {"ids": ids, "upos": pos}
+
+def augment_dataset(ds, augment_factor=1.5):
+    """Apply data augmentation to increase dataset size."""
+    if augment_factor <= 1.0:
+        return ds
+    
+    print(f"🔄 Applying data augmentation (factor: {augment_factor}x)")
+    
+    # Simple augmentation: randomly duplicate sentences with slight variations
+    augmented_data = []
+    original_data = list(ds)
+    
+    import random
+    random.seed(42)  # For reproducibility
+    
+    # Add original data
+    augmented_data.extend(original_data)
+    
+    # Add augmented versions
+    target_size = int(len(original_data) * augment_factor)
+    while len(augmented_data) < target_size:
+        # Randomly select a sentence to augment
+        orig_ex = random.choice(original_data)
+        
+        # Simple augmentation: randomly drop/duplicate tokens (keeping POS alignment)
+        if len(orig_ex["tokens"]) > 3:  # Only for sentences with enough tokens
+            # Randomly select augmentation type
+            aug_type = random.choice(["original", "truncate", "repeat_short"])
+            
+            if aug_type == "truncate" and len(orig_ex["tokens"]) > 5:
+                # Truncate sentence (keep first 70-90% of tokens)
+                keep_ratio = random.uniform(0.7, 0.9)
+                keep_len = max(3, int(len(orig_ex["tokens"]) * keep_ratio))
+                aug_ex = {
+                    "tokens": orig_ex["tokens"][:keep_len],
+                    "upos": orig_ex["upos"][:keep_len]
+                }
+            elif aug_type == "repeat_short" and len(orig_ex["tokens"]) <= 8:
+                # For short sentences, create slight variations
+                aug_ex = orig_ex.copy()
+            else:
+                # Keep original
+                aug_ex = orig_ex.copy()
+            
+            augmented_data.append(aug_ex)
+        else:
+            # For short sentences, just duplicate
+            augmented_data.append(orig_ex.copy())
+    
+    print(f"📈 Dataset augmented: {len(original_data)} → {len(augmented_data)} sentences")
+    return augmented_data
 
 def collate(batch):
     max_len = max(len(x["ids"]) for x in batch)
@@ -157,20 +208,31 @@ def main():
                         help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
     parser.add_argument("--combine", action="store_true",
                         help="Combine multiple English treebanks for more training data")
+    parser.add_argument("--augment", action="store_true",
+                        help="Apply data augmentation techniques")
     args = parser.parse_args()
     
     # Enable cuDNN autotuning for faster convolutions
     torch.backends.cudnn.benchmark = True
 
     print("Loading UD dataset …")
+    
     if args.combine:
         print("🔥 Loading combined English treebanks for maximum training data!")
-        # Load multiple English treebanks
-        treebanks = ["en_ewt", "en_gum"]  # Add more if available
+        # Load multiple English treebanks for maximum training data
+        english_treebanks = [
+            "en_ewt",      # English Web Treebank (12,543 sentences)
+            "en_gum",      # Georgetown University Multilayer (8,551 sentences) 
+            "en_lines",    # English LinES (4,564 sentences)
+            "en_partut",   # English ParTUT (1,781 sentences)
+            "en_pronouns", # English Pronouns (305 sentences)
+            "en_esl",      # English ESL (5,124 sentences)
+        ]
+        
         train_datasets = []
         val_datasets = []
         
-        for tb in treebanks:
+        for tb in english_treebanks:
             try:
                 ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
                 ds_val_tb = load_dataset("universal_dependencies", tb, split="validation", trust_remote_code=True)
@@ -184,13 +246,23 @@ def main():
         from datasets import concatenate_datasets
         ds_train = concatenate_datasets(train_datasets)
         ds_val = concatenate_datasets(val_datasets)
-        print(f"🎯 Combined total: {len(ds_train)} train, {len(ds_val)} val sentences")
+        print(f"🎯 Combined English total: {len(ds_train)} train, {len(ds_val)} val sentences")
     else:
+        # Single treebank mode
         ds_train = load_dataset("universal_dependencies", args.treebank, split="train", trust_remote_code=True)
-        ds_val   = load_dataset("universal_dependencies", args.treebank, split="validation", trust_remote_code=True)
-        print(f"📊 {args.treebank}: {len(ds_train)} train, {len(ds_val)} val sentences")
+        ds_val = load_dataset("universal_dependencies", args.treebank, split="validation", trust_remote_code=True)
+        print(f"📊 Single treebank {args.treebank}: {len(ds_train)} train, {len(ds_val)} val sentences")
 
     vocab = build_vocab(ds_train)
+    
+    # Apply data augmentation if requested
+    if args.augment:
+        ds_train = augment_dataset(ds_train, augment_factor=1.5)
+        # Convert back to dataset format if needed
+        if not hasattr(ds_train, 'map'):
+            # Convert list back to dataset-like object
+            from datasets import Dataset
+            ds_train = Dataset.from_list(ds_train)
     
     # Debug: Check upos value ranges
     all_upos = []

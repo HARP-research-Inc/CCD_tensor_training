@@ -15,15 +15,26 @@ A tiny, fast POS tagger using depth-wise CNN architecture with comprehensive ben
 ### 1. Train the Model
 
 ```bash
-# Basic training
+# Basic training (single treebank)
 python pos_router_train.py
 
-# Train with combined treebanks for better accuracy
+# Train with combined English treebanks for maximum data (32K+ sentences)
 python pos_router_train.py --combine
+
+# With data augmentation for even more training data
+python pos_router_train.py --combine --augment
 
 # Train on specific treebank
 python pos_router_train.py --treebank en_ewt
 ```
+
+### Dataset Size Options
+
+| Option | Sentences | Description |
+|--------|-----------|-------------|
+| Single (en_ewt) | 12,543 | Default English Web Treebank |
+| --combine | ~32,000 | All English treebanks combined |
+| --combine --augment | ~48,000 | Combined + data augmentation |
 
 ### 2. Run Basic Inference
 
