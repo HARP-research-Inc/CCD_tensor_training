@@ -32,28 +32,46 @@ DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
 BATCH_SIZE   = 4096  # Optimal for GPU utilization - NOT full dataset size!
 LR_HIGH      = 4e-2  # Initial learning rate
-LR_LOW       = 2e-2  # Reduced learning rate after $schedule_max train acc
-EPOCHS       = 30
+LR_MID       = 2e-2  # Reduced learning rate after first threshold
+LR_LOW       = 1e-2  # Further reduced learning rate after second threshold
+EPOCHS       = 40    # Increased from 30 to allow more fine-tuning
 MAX_LEN      = 64          # truncate very long sentences
-schedule_max = 0.98
+schedule_first = 0.85      # First LR drop at 85% (was 98%)
+schedule_second = 0.90     # Second LR drop at 90%
 
 ###############################################################################
-# 2.  Tiny router model
+# 2.  Enhanced router model with more capacity
 ###############################################################################
 class DepthWiseCNNRouter(nn.Module):
-    """Token EMB → depth-wise Conv → POS logits (length preserved)."""
+    """Enhanced Token EMB → depth-wise Conv → POS logits with better capacity."""
     def __init__(self, vocab_size: int):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, EMB_DIM, padding_idx=0)
-
-        # depth-wise separable Conv:
-        self.dw = nn.Conv1d(
+        self.emb_dropout = nn.Dropout(0.1)  # Regularization
+        
+        # First depth-wise separable Conv layer
+        self.dw1 = nn.Conv1d(
             EMB_DIM, EMB_DIM, kernel_size=DW_KERNEL,
             padding=DW_KERNEL // 2,
             groups=EMB_DIM, bias=True
-        )                       # depth-wise (channel-wise) conv
-        self.pw = nn.Conv1d(EMB_DIM, EMB_DIM, kernel_size=1)  # point-wise mix
-        self.act = nn.ReLU()
+        )
+        self.pw1 = nn.Conv1d(EMB_DIM, EMB_DIM, kernel_size=1)
+        self.norm1 = nn.LayerNorm(EMB_DIM)
+        self.act1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(0.1)
+        
+        # Second depth-wise separable Conv layer for more capacity
+        self.dw2 = nn.Conv1d(
+            EMB_DIM, EMB_DIM, kernel_size=DW_KERNEL,
+            padding=DW_KERNEL // 2,
+            groups=EMB_DIM, bias=True
+        )
+        self.pw2 = nn.Conv1d(EMB_DIM, EMB_DIM, kernel_size=1)
+        self.norm2 = nn.LayerNorm(EMB_DIM)
+        self.act2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(0.1)
+        
+        # Final classification layer
         self.lin = nn.Linear(EMB_DIM, N_TAGS)
 
     def forward(self, token_ids, mask):
@@ -63,9 +81,23 @@ class DepthWiseCNNRouter(nn.Module):
         returns   : log-probs  [B, T, N_TAGS]
         """
         x = self.emb(token_ids)               # [B, T, D]
+        x = self.emb_dropout(x)
+        
+        # First conv layer
         x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
-        x = self.pw(self.act(self.dw(x)))
+        x = self.pw1(self.act1(self.dw1(x)))  # depth-wise + point-wise
         x = x.transpose(1, 2)                 # back to [B, T, D]
+        x = self.norm1(x)
+        x = self.dropout1(x)
+        
+        # Second conv layer
+        x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
+        x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
+        x = x.transpose(1, 2)                 # back to [B, T, D]
+        x = self.norm2(x)
+        x = self.dropout2(x)
+        
+        # Final classification
         logits = self.lin(x)                  # [B, T, 18]
         # Use −inf on padding positions so CE ignores them
         logits = logits.masked_fill(~mask.unsqueeze(-1), -1e4)
@@ -303,12 +335,13 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model  = DepthWiseCNNRouter(len(vocab)).to(device)
-    opt    = optim.AdamW(model.parameters(), lr=LR_HIGH)
+    opt    = optim.AdamW(model.parameters(), lr=LR_HIGH, weight_decay=1e-4)  # Added weight decay
     
     # Initialize AMP scaler for mixed precision training
     scaler = GradScaler() if device == "cuda" else None
     
-    lr_switched = False  # Track if we've already switched LR
+    lr_first_switched = False   # Track first LR drop
+    lr_second_switched = False  # Track second LR drop
     
     print(f"🚀 Starting training on {device}")
     print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
@@ -317,12 +350,18 @@ def main():
         train_ppl, train_acc = run_epoch(model, train_loader, opt, device, scaler)
         val_ppl,   val_acc   = run_epoch(model, val_loader, None, device, None)
         
-        # Switch learning rate when train accuracy hits 95%
-        if train_acc >= schedule_max and not lr_switched:
-            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_HIGH} to {LR_LOW}")
+        # Two-stage learning rate schedule
+        if train_acc >= schedule_first and not lr_first_switched:
+            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_HIGH} to {LR_MID}")
+            for param_group in opt.param_groups:
+                param_group['lr'] = LR_MID
+            lr_first_switched = True
+        
+        if train_acc >= schedule_second and not lr_second_switched:
+            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_MID} to {LR_LOW}")
             for param_group in opt.param_groups:
                 param_group['lr'] = LR_LOW
-            lr_switched = True
+            lr_second_switched = True
         
         current_lr = opt.param_groups[0]['lr']
         print(f"epoch {epoch:02d} | "
