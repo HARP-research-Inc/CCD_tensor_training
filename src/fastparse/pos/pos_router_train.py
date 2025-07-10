@@ -20,9 +20,10 @@ from tqdm import tqdm
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 256
-LR           = 2e-3
-EPOCHS       = 40
+BATCH_SIZE   = 4287 #1024
+LR_HIGH      = 4e-2  # Initial learning rate
+LR_LOW       = 2e-2  # Reduced learning rate after 95% train acc
+EPOCHS       = 50
 MAX_LEN      = 64          # truncate very long sentences
 
 ###############################################################################
@@ -152,15 +153,27 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model  = DepthWiseCNNRouter(len(vocab)).to(device)
-    opt    = optim.AdamW(model.parameters(), lr=LR)
+    opt    = optim.AdamW(model.parameters(), lr=LR_HIGH)
+    
+    lr_switched = False  # Track if we've already switched LR
 
     for epoch in range(1, EPOCHS + 1):
         train_ppl, train_acc = run_epoch(model, train_loader, opt, device)
         val_ppl,   val_acc   = run_epoch(model, val_loader, None, device)
+        
+        # Switch learning rate when train accuracy hits 95%
+        if train_acc >= 0.95 and not lr_switched:
+            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_HIGH} to {LR_LOW}")
+            for param_group in opt.param_groups:
+                param_group['lr'] = LR_LOW
+            lr_switched = True
+        
+        current_lr = opt.param_groups[0]['lr']
         print(f"epoch {epoch:02d} | "
               f"train acc {train_acc*100:5.2f}% | "
               f"val acc {val_acc*100:5.2f}% | "
-              f"val ppl {val_ppl:4.2f}")
+              f"val ppl {val_ppl:4.2f} | "
+              f"lr {current_lr:.1e}")
 
     torch.save(model.state_dict(), f"router_{args.treebank}.pt")
     print("✓ finished; weights saved.")
