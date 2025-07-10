@@ -3,6 +3,13 @@
 #
 # Train the tiny depth-wise-CNN POS tagger used as the router
 # in the MoE dependency-parser architecture.
+#
+# 🚀 GPU OPTIMIZATIONS:
+# - cuDNN benchmark mode for faster convolutions
+# - Mixed precision training (AMP) for 2x throughput
+# - Multi-worker DataLoader with prefetching
+# - Non-blocking GPU transfers
+# - Pre-tensorified datasets to avoid Python overhead
 
 # ---------------------------------------------------------------------#
 # 0.  Dependencies
@@ -11,6 +18,7 @@
 import math, argparse
 import torch, torch.nn as nn, torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 from datasets import load_dataset
 from tqdm import tqdm
 
@@ -20,11 +28,12 @@ from tqdm import tqdm
 EMB_DIM      = 64          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 2048  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
+BATCH_SIZE   = 8192  # Try 4096, 8192 for better GPU utilization (adjust based on VRAM)
 LR_HIGH      = 4e-2  # Initial learning rate
-LR_LOW       = 2e-2  # Reduced learning rate after 95% train acc
-EPOCHS       = 50
+LR_LOW       = 2e-2  # Reduced learning rate after $schedule_max train acc
+EPOCHS       = 30
 MAX_LEN      = 64          # truncate very long sentences
+schedule_max = 0.98
 
 ###############################################################################
 # 2.  Tiny router model
@@ -55,7 +64,7 @@ class DepthWiseCNNRouter(nn.Module):
         x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
         x = self.pw(self.act(self.dw(x)))
         x = x.transpose(1, 2)                 # back to [B, T, D]
-        logits = self.lin(x)                  # [B, T, 17]
+        logits = self.lin(x)                  # [B, T, 18]
         # Use −inf on padding positions so CE ignores them
         logits = logits.masked_fill(~mask.unsqueeze(-1), -1e4)
         return torch.log_softmax(logits, dim=-1)
@@ -86,31 +95,49 @@ def collate(batch):
     mask  = torch.zeros(len(batch), max_len, dtype=torch.bool)
     for i, ex in enumerate(batch):
         n = len(ex["ids"])
-        ids[i, :n]  = torch.tensor(ex["ids"])
-        upos[i, :n] = torch.tensor(ex["upos"], dtype=torch.long)
+        # Data is already tensorified, no need for torch.tensor()
+        ids[i, :n]  = ex["ids"]
+        upos[i, :n] = ex["upos"]
         mask[i, :n] = True
     return ids, upos, mask
 
 ###############################################################################
 # 4.  Training / validation loops
 ###############################################################################
-def run_epoch(model, loader, optimiser=None, device="cpu"):
+def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None):
     train = optimiser is not None
     model.train() if train else model.eval()
     total_loss, total_tok, correct = 0.0, 0, 0
 
     for ids, upos, mask in tqdm(loader, leave=False):
-        ids, upos, mask = ids.to(device), upos.to(device), mask.to(device)
-        logp = model(ids, mask)                # [B, T, 17]
-        loss = nn.functional.nll_loss(
-            logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
-        )
-
-
-        if train:
+        # Non-blocking transfers to GPU
+        ids   = ids.to(device,   non_blocking=True)
+        upos  = upos.to(device,  non_blocking=True)
+        mask  = mask.to(device,  non_blocking=True)
+        
+        if train and scaler is not None:
+            # Mixed precision training
+            with torch.cuda.amp.autocast():
+                logp = model(ids, mask)                # [B, T, 18]
+                loss = nn.functional.nll_loss(
+                    logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+                )
+            
             optimiser.zero_grad()
-            loss.backward()
-            optimiser.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
+        else:
+            # Standard training/validation
+            logp = model(ids, mask)                # [B, T, 18]
+            loss = nn.functional.nll_loss(
+                logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+            )
+            
+            if train:
+                optimiser.zero_grad()
+                loss.backward()
+                optimiser.step()
 
         total_loss  += loss.item()
         total_tok   += mask.sum().item()
@@ -131,6 +158,9 @@ def main():
     parser.add_argument("--combine", action="store_true",
                         help="Combine multiple English treebanks for more training data")
     args = parser.parse_args()
+    
+    # Enable cuDNN autotuning for faster convolutions
+    torch.backends.cudnn.benchmark = True
 
     print("Loading UD dataset …")
     if args.combine:
@@ -171,24 +201,50 @@ def main():
     
     train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
     val_enc   = ds_val  .map(lambda ex: encode_sent(ex, vocab))
+    
+    # Pre-tensorify datasets to avoid Python tensor creation overhead
+    train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+    val_enc   = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
 
-    train_loader = DataLoader(train_enc, batch_size=BATCH_SIZE,
-                              shuffle=True, collate_fn=collate)
-    val_loader   = DataLoader(val_enc, batch_size=BATCH_SIZE,
-                              shuffle=False, collate_fn=collate)
+    train_loader = DataLoader(
+        train_enc,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        collate_fn=collate,
+        num_workers=4,       # parallelize Python preprocessing
+        pin_memory=True,     # speed up host→GPU transfer
+        prefetch_factor=2,   # each worker preloads 2 batches
+        persistent_workers=True  # keep workers alive between epochs
+    )
+    val_loader = DataLoader(
+        val_enc,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=2,       # fewer workers for validation
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True
+    )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model  = DepthWiseCNNRouter(len(vocab)).to(device)
     opt    = optim.AdamW(model.parameters(), lr=LR_HIGH)
     
+    # Initialize AMP scaler for mixed precision training
+    scaler = GradScaler() if device == "cuda" else None
+    
     lr_switched = False  # Track if we've already switched LR
+    
+    print(f"🚀 Starting training on {device}")
+    print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
 
     for epoch in range(1, EPOCHS + 1):
-        train_ppl, train_acc = run_epoch(model, train_loader, opt, device)
-        val_ppl,   val_acc   = run_epoch(model, val_loader, None, device)
+        train_ppl, train_acc = run_epoch(model, train_loader, opt, device, scaler)
+        val_ppl,   val_acc   = run_epoch(model, val_loader, None, device, None)
         
         # Switch learning rate when train accuracy hits 95%
-        if train_acc >= 0.95 and not lr_switched:
+        if train_acc >= schedule_max and not lr_switched:
             print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_HIGH} to {LR_LOW}")
             for param_group in opt.param_groups:
                 param_group['lr'] = LR_LOW
