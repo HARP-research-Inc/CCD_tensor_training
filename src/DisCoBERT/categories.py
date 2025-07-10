@@ -42,7 +42,7 @@ class Category(object):
 
 	"""
 
-	model_cache: ModelBank = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training")
+	model_cache: ModelBank = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert")
 
 	def __init__(self, label):
 		self.label = label
