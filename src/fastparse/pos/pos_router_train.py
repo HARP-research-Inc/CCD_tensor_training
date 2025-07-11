@@ -821,7 +821,7 @@ class AdaptiveBatchSizer:
     """
     
     def __init__(self, 
-                 min_batch_size=32, 
+                 min_batch_size=512, 
                  max_batch_size=2048, 
                  noise_threshold=0.1, 
                  pilot_batch_size=128,
