@@ -103,12 +103,7 @@ class POSTrainer:
         if self.args.batch_size:
             batch_size = self.args.batch_size
         else:
-            batch_size = calculate_batch_size(
-                None,  # Let it auto-calculate
-                len(self.train_dataset),
-                len(self.vocab),
-                self.args.compute_node
-            )
+            batch_size = calculate_batch_size(len(self.train_dataset))
         
         # Determine worker counts
         num_workers_train = 48 if self.args.compute_node else 4
@@ -130,8 +125,8 @@ class POSTrainer:
             print(f"📦 Adaptive batch sizing: starts at {batch_size}")
             
             self.train_loader = create_adaptive_dataloader(
-                train_enc, self.vocab, self.adaptive_batch_sizer,
-                collate_fn=collate, compute_node=self.args.compute_node
+                train_enc, self.adaptive_batch_sizer, collate,
+                num_workers_train, True, prefetch_factor
             )
             val_batch_size = min(self.args.pilot_batch_size, len(val_enc) // 10) if len(val_enc) > 100 else len(val_enc)
             self.val_loader = DataLoader(
@@ -767,9 +762,11 @@ class POSTrainer:
             current_batch_size = self.adaptive_batch_sizer.get_current_batch_size()
             if current_batch_size != initial_batch_size:
                 # Recreate the dataloader with new batch size
+                num_workers_train = 48 if self.args.compute_node else 4
+                prefetch_factor = 4 if self.args.compute_node else 2
                 self.train_loader = create_adaptive_dataloader(
-                    self.train_dataset, self.vocab, self.adaptive_batch_sizer,
-                    collate_fn=collate, compute_node=self.args.compute_node
+                    self.train_dataset, self.adaptive_batch_sizer, collate,
+                    num_workers_train, True, prefetch_factor
                 )
         
         return ppl, acc, 0.0  # F1 calculation is not done during SGDR training

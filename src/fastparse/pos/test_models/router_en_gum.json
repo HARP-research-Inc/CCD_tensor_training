@@ -1,0 +1,79 @@
+{
+  "model_name": "router_en_gum",
+  "description": "Universal Dependencies EN_GUM POS Router (Fixed 100 epochs) [TempScaling, SGDR]",
+  "created_at": "2025-07-11T17:09:25.947492",
+  "architecture": {
+    "type": "DepthWiseCNNRouter",
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_two_layers": true,
+    "use_temperature_scaling": true,
+    "dropout_rate": 0.1,
+    "activation": "ReLU",
+    "normalization": "LayerNorm"
+  },
+  "vocabulary": {
+    "size": 12378,
+    "type": "single_treebank",
+    "treebanks": [
+      "en_gum"
+    ],
+    "pad_token": "<PAD>",
+    "augmented": false,
+    "penn_treebank_included": false
+  },
+  "training": {
+    "dataset_size": {
+      "train_size": 4287,
+      "val_size": 784
+    },
+    "label_smoothing": 0.1,
+    "temperature_scaling": true,
+    "lr_max": 0.07,
+    "lr_min": 0.0001,
+    "epochs": 100,
+    "warmup_epochs": 3,
+    "scheduler": "SGDR",
+    "mixed_precision": true,
+    "early_stopping": false,
+    "monitor_metric": null,
+    "patience": null
+  },
+  "pos_tags": {
+    "tagset": "Universal Dependencies",
+    "tags": [
+      "NOUN",
+      "PUNCT",
+      "ADP",
+      "NUM",
+      "SYM",
+      "SCONJ",
+      "ADJ",
+      "PART",
+      "DET",
+      "CCONJ",
+      "PROPN",
+      "PRON",
+      "X",
+      "_",
+      "ADV",
+      "INTJ",
+      "VERB",
+      "AUX"
+    ],
+    "count": 18
+  },
+  "inference": {
+    "default_batch_size": 512,
+    "enable_temperature": true,
+    "enable_amp": false
+  },
+  "files": {
+    "model_weights": "router_en_gum.pt",
+    "config": "router_en_gum.json",
+    "vocabulary": "router_en_gum_vocab.json",
+    "training_log": "router_en_gum_training.json"
+  }
+}
