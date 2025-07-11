@@ -41,6 +41,7 @@ src/embedding_caches
 tests/data
 src/DisCoBERT/dummy_weights
 results/
+/old_models
 checkpoints/checkpoint_20250501_192122.json
 checkpoints/checkpoint_20250501_191513.json
 checkpoints/checkpoint_20250501_191555.json
