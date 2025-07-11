@@ -35,7 +35,7 @@ from collections import defaultdict
 EMB_DIM      = 48          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-# BATCH_SIZE will be auto-calculated based on dataset size
+BATCH_SIZE   = 512# BATCH_SIZE will be auto-calculated based on dataset size
 LR_MAX       = 7e-2  # Lower LR for smaller Penn dataset
 LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
 EPOCHS       = 100    # Total training epochs (for --fixed-epochs mode)
