@@ -127,7 +127,7 @@ if __name__ == "__main__":
     """
     EXAMPLE USAGE:
     """
-    cache = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training")
+    cache = ModelBank("models/discobert")
 
     nlp = spacy.load("en_core_web_trf")
     cache.set_nlp(nlp)
