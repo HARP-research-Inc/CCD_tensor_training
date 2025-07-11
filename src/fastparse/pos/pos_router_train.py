@@ -36,8 +36,9 @@ LR_MID       = 2e-2  # Reduced learning rate after first threshold
 LR_LOW       = 1e-2  # Further reduced learning rate after second threshold
 EPOCHS       = 40    # Increased from 30 to allow more fine-tuning
 MAX_LEN      = 64          # truncate very long sentences
-schedule_first = 0.85      # First LR drop at 85% (was 98%)
-schedule_second = 0.90     # Second LR drop at 90%
+schedule_first = 0.80      # First LR drop at 85% (was 98%)
+schedule_second = 0.81     # Second LR drop at 90%
+schedule_third = 0
 
 ###############################################################################
 # 2.  Enhanced router model with more capacity
