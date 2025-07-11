@@ -783,13 +783,33 @@ def main():
     else:
         scaler = None
 
-    def get_lr(epoch):
-        if epoch < WARMUP_EPOCHS:
-            return LR_MIN + (LR_MAX - LR_MIN) * epoch / WARMUP_EPOCHS
-        progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
-        return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
-
-    scheduler = optim.lr_scheduler.LambdaLR(optimiser, lambda epoch: get_lr(epoch) / LR_MIN)
+    # Cosine Annealing with Warm Restarts (SGDR)
+    # Use shorter cycles for better exploration and regularization
+    T_0 = max(10, len(train_loader) // 4)  # First cycle length (adaptive to dataset size)
+    
+    # For Penn Treebank (small dataset), use more frequent restarts
+    if args.penn_treebank and len(train_loader) < 200:
+        T_0 = max(5, len(train_loader) // 6)  # Shorter cycles for small datasets
+        T_mult = 1.5  # Slower growth
+        eta_min_ratio = 0.01  # Lower minimum
+    else:
+        T_mult = 2    # Standard cycle growth
+        eta_min_ratio = 0.1   # Higher minimum for stability
+    
+    eta_min = LR_MAX * eta_min_ratio
+    
+    print(f"🔄 SGDR Scheduler:")
+    print(f"   • First cycle: {T_0} steps ({T_0 / len(train_loader):.1f} epochs)")
+    print(f"   • Cycle multiplier: {T_mult}x")
+    print(f"   • LR range: {eta_min:.1e} → {LR_MAX:.1e}")
+    
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimiser,
+        T_0=T_0,           # Steps in first cycle
+        T_mult=int(T_mult) if T_mult == int(T_mult) else 2,  # Integer multiplier
+        eta_min=eta_min,   # Minimum LR (not zero for stability)
+        last_epoch=-1
+    )
 
     print(f"🚀 Starting training on {device}")
     print(f"🔥 Compute node optimizations enabled:")
@@ -797,7 +817,7 @@ def main():
     print(f"   • DataLoader: {NUM_WORKERS_TRAIN} train workers, {NUM_WORKERS_VAL} val workers")
     print(f"   • Batch size: {BATCH_SIZE:,} samples")
     print(f"   • Prefetch factor: {PREFETCH_FACTOR}")
-    print(f"📈 Cosine annealing LR: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e} (warmup: {WARMUP_EPOCHS} epochs)")
+    print(f"📈 SGDR Learning Rate: {eta_min:.1e} → {LR_MAX:.1e} with warm restarts")
     if TEMP_SCALING:
         print(f"🌡️  Temperature scaling enabled")
     
@@ -811,10 +831,13 @@ def main():
         print(f"   • GPU memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f}GB")
     print()
 
+    # SGDR tracking variables
+    step_count = 0
+    
     for epoch in range(1, EPOCHS + 1):
-        # Training with label smoothing
-        train_ppl, train_acc, _ = run_epoch(
-            model, train_loader, optimiser, device, scaler, criterion, epoch
+        # Training with SGDR step-based scheduling
+        train_ppl, train_acc, step_count = run_epoch_with_sgdr(
+            model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
         )
         
         # Validation with detailed analysis every 10 epochs
@@ -823,12 +846,19 @@ def main():
             model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
         )
         
-        # Step the learning rate scheduler
-        scheduler.step()
-        
+        # Get current learning rate and cycle info
         current_lr = optimiser.param_groups[0]['lr']
+        
+        # Determine if we're in a restart phase (LR near maximum)
+        lr_ratio = current_lr / LR_MAX
+        if lr_ratio > 0.8:
+            phase = "restart"
+        elif lr_ratio > 0.5:
+            phase = "mid-cycle"
+        else:
+            phase = "end-cycle"
+        
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
-        phase = "warmup" if epoch <= WARMUP_EPOCHS else "cosine"
         print(f"epoch {epoch:02d} | "
               f"train acc {train_acc*100:5.2f}% | "
               f"val acc {val_acc*100:5.2f}% | "
