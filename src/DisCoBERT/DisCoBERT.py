@@ -45,7 +45,8 @@ if __name__ == "__main__":
     # example usage:
     module = DisCoBERT("en_core_web_lg")
 
-    embedding = module.encode_confident("The question is rather more complicated than it has been represented here.")
+    #embedding = module.encode_confident("This topic is more complex than it seems.")
+    embedding = module.encode_confident("He was healthy though enjoying baking.")
     print(embedding)
 
         

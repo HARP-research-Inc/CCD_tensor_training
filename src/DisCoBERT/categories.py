@@ -278,6 +278,8 @@ class Circuit(Category):
 	Circuit maps onto a DAG, edge order preserved by pregroup structure.
 
 	"""
+	breaking_POS: dict[type, int] = {}
+
 	def __init__(self, label, dimension=384):
 		super().__init__(label)
 		self.adjacency_list: dict[Box, list[Wire]] = {}
@@ -391,7 +393,6 @@ class Circuit(Category):
 
 		print("Starting with", [b.get_label() for b in queue])
 
-		explored = set()
 		last_output = None
 
 		while len(queue) > 0:
@@ -400,17 +401,14 @@ class Circuit(Category):
 				print("Breadth-first traversal queue: ", [q.get_label() for q in queue])
 
 				if v.check_packet_status():
-					#print(v.get_label())
-					last_output = v.forward()
-					#print(v.out_wires)
-					#for wire in v.out_wires:
-					#	print("Wire", wire.get_label())
-					#	if wire.get_sink() not in explored:
-					#		print("Sink", wire.get_sink_label())
-					#		explored.add(wire.get_sink())
-							#queue.append(wire.get_sink())
-				#else:
-				#	queue.append(v)
+					try:
+						last_output = v.forward()
+					except Exception as E:
+						if type(v) not in Circuit.breaking_POS:
+							Circuit.breaking_POS[type(v)] = 0
+						Circuit.breaking_POS[type(v)] += 1
+						raise
+
 			if currentLevel > 0:
 				currentLevel -= 1
 				queue = self.levels[currentLevel]

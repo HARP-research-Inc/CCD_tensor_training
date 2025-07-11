@@ -237,6 +237,14 @@ def test_auxilliary(global_model):
     assert nn.CosineSimilarity(dim=1)(embedding2a, na_2) < 0.99, "Auxilliary verb 'is' did not work as expected."
     assert nn.CosineSimilarity(dim=1)(embedding2b, na_2) < 0.99, "Auxilliary verb 'was' did not work as expected."
 
+def test_subordinating_conjunction(global_model):
+    model = global_model
+
+    _ = model.encode("The question is more complicated than has been represented.")
+    _ = model.encode("The question is more complicated than it has been represented.")
+    _ = model.encode("She was fine but angry.")
+    _ = model.encode("She was fine but she was angry.")
+
 ##################################
 ######## Edge P.O.S. tests #######
 ##################################
@@ -267,6 +275,18 @@ def test_intransitive_verb_with_object(global_model):
     _ = model.encode("Bob bites the apple")
     _ = model.encode("The name of the application was altered to magnetic resonance imaging (MRI) to avoid the loaded word nuclear.")
 
+def test_dependent_adjectives(global_model):
+    model = global_model
+
+    embedding1 = model.encode("More important topics.")
+    embedding1 = model.encode("Extremely funny jokes.")
+    embedding1 = model.encode("Early Eastern Roman Imperial legionary armor.")
+
+def test_nonpresent_implied_noun_in_subordinate_clause(global_model):
+    model = global_model
+
+    _ = model.encode("The topic was cooler than suggested.")
+    _ = model.encode("He was healthy though enjoying baking.")
 
 ##################################
 ######### Semantic tests #########
