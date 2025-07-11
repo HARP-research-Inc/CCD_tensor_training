@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import gc
 import random
 import time
 
@@ -394,8 +396,7 @@ def multi_word_regression(model_destination, word_embeddings, sentence_embedding
 					num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1, shuffle = False, device = 3):
 	"""
 	Regression function meant to handle differnt word len regressions. Produces
-	linear map between k embeddings and one ground_truth tensor. Thus far only
-	supports 1, 2, and 3 word regressions.
+	linear map between k embeddings and one ground_truth tensor.
 
 	Args: 
 		model_destination: file path of final regression model (.pt file preferred)
@@ -529,3 +530,153 @@ def multi_word_regression(model_destination, word_embeddings, sentence_embedding
 
 	print(f'>done! Test Sample Loss: {loss.item():.4f}\n\n\n')
 	print(f"Took {time.time() - tm} seconds")
+
+def batch_word_regression(model_destination, word_embeddings, sentence_embeddings, tuple_len, module: nn.Module,
+					num_epochs = 50, word_dim = 100, sentence_dim = 300, lr = 0.1, shuffle = False, device = 3, batch_size = 256):
+	"""
+	Memory-efficient regression function using batched training with indexing.
+	
+	Args: 
+		model_destination: file path of final regression model (.pt file preferred)
+		word_embeddings: list of tuples of raw dependent data embeddings
+		sentence_embeddings: tensor containing empirical contextual sentence embedding 
+		tuple_len: number of words per sample
+		module: neural network module
+		num_epochs: number of epochs to train
+		word_dim: dimension word embeddings 
+		sentence_dim: dimension of sentence embeddings
+		lr: learning rate
+		shuffle: whether to shuffle data
+		device: CUDA device number
+		batch_size: batch size for training
+	"""
+	import time
+	import torch
+	import torch.optim as optim
+	
+	tm = time.time()
+
+	device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
+	if device == f"cuda:{device}":
+		torch.cuda.empty_cache() 
+	module.to(device)
+
+	if len(word_embeddings) != len(sentence_embeddings):
+		raise Exception("Mismatched data dimensions")
+	
+	# Create indices for data instead of copying
+	indices = list(range(len(sentence_embeddings)))
+	
+	if shuffle:
+		import random
+		random.shuffle(indices)
+	
+	# Split indices for train/test
+	test_size = len(sentence_embeddings) // 10  # 10% for testing
+	train_size = len(sentence_embeddings) - test_size
+	
+	train_indices = indices[:train_size]
+	test_indices = indices[train_size:]
+	
+	print(f"Training samples: {train_size}, Test samples: {test_size}")
+	
+	# Optimizer
+	optimizer = optim.RMSprop(module.parameters(), lr=lr)
+	
+	print(">Starting batched training...")
+	
+	# Training loop
+	for epoch in range(num_epochs):
+		module.train()
+		epoch_loss = 0.0
+		num_batches = 0
+		
+		# Process training data in batches
+		for batch_start in range(0, len(train_indices), batch_size):
+			batch_end = min(batch_start + batch_size, len(train_indices))
+			batch_indices = train_indices[batch_start:batch_end]
+			current_batch_size = len(batch_indices)
+			
+			optimizer.zero_grad()
+			
+			# Create batch tensors on-the-fly
+			batch_words = []
+			for word_idx in range(tuple_len):
+				word_batch = torch.zeros((current_batch_size, word_dim), device=device)
+				for i, idx in enumerate(batch_indices):
+					word_batch[i] = torch.tensor(word_embeddings[idx][word_idx], device=device)
+				batch_words.append(word_batch)
+			
+			# Target batch
+			target_batch = torch.zeros((current_batch_size, sentence_dim), device=device)
+			for i, idx in enumerate(batch_indices):
+				target_batch[i] = torch.tensor(sentence_embeddings[idx], device=device)
+			
+			# Forward pass
+			predicted = module(*batch_words)
+			
+			# Compute loss
+			loss = torch.mean((predicted - target_batch)**2)
+			
+			# Backward pass
+			loss.backward()
+			optimizer.step()
+			
+			epoch_loss += loss.item()
+			num_batches += 1
+			
+			torch.cuda.empty_cache() if device.type == 'cuda' else None
+		
+		avg_loss = epoch_loss / num_batches
+		if epoch % 10 == 0 or epoch == num_epochs - 1:
+			print(f'Epoch [{epoch+1}/{num_epochs}], Avg Loss: {avg_loss:.6f}')
+	
+	print(f'>Training complete! Final Loss: {avg_loss:.6f}\n')
+	
+	# Save model weights
+	torch.save(module.state_dict(), model_destination)
+	print(f"Model weights saved to: {model_destination}")
+	
+	"""************************testing************************"""
+	
+	print(">************************testing************************")
+	
+	module.eval()
+	test_loss = 0.0
+	num_test_batches = 0
+	
+	with torch.no_grad():
+		# Process test data in batches
+		for batch_start in range(0, len(test_indices), batch_size):
+			batch_end = min(batch_start + batch_size, len(test_indices))
+			batch_indices = test_indices[batch_start:batch_end]
+			current_batch_size = len(batch_indices)
+			
+			# Create test batch tensors
+			batch_words = []
+			for word_idx in range(tuple_len):
+				word_batch = torch.zeros((current_batch_size, word_dim), device=device)
+				for i, idx in enumerate(batch_indices):
+					word_batch[i] = torch.tensor(word_embeddings[idx][word_idx], device=device)
+				batch_words.append(word_batch)
+			
+			# Target batch
+			target_batch = torch.zeros((current_batch_size, sentence_dim), device=device)
+			for i, idx in enumerate(batch_indices):
+				target_batch[i] = torch.tensor(sentence_embeddings[idx], device=device)
+			
+			# Forward pass
+			predicted = module(*batch_words)
+			
+			# Compute loss
+			loss = torch.mean((predicted - target_batch)**2)
+			test_loss += loss.item()
+			num_test_batches += 1
+			
+			# Clean up
+			del batch_words, target_batch, predicted
+			torch.cuda.empty_cache() if device.type == 'cuda' else None
+	
+	avg_test_loss = test_loss / num_test_batches
+	print(f'>Test Loss: {avg_test_loss:.4f}\n')
+	print(f"Total time: {time.time() - tm:.2f} seconds")
