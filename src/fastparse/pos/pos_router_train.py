@@ -436,7 +436,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0, 'loss': 0.0})
     confusion_matrix = defaultdict(lambda: defaultdict(int))  # confusion_matrix[true_class][pred_class] = count
 
-    for ids, upos, mask in tqdm(loader, leave=False):
+    for ids, upos, mask in tqdm(loader, leave=True):
         # Non-blocking transfers to GPU
         ids   = ids.to(device,   non_blocking=True)
         upos  = upos.to(device,  non_blocking=True)
@@ -563,7 +563,7 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     # Track batch size changes for reporting
     batch_size_changes = []
 
-    for batch_idx, (ids, upos, mask) in enumerate(tqdm(current_loader, leave=False)):
+    for batch_idx, (ids, upos, mask) in enumerate(tqdm(current_loader, leave=True)):
         # Update batch size with adaptive batch sizer
         if adaptive_batch_sizer is not None:
             old_batch_size = adaptive_batch_sizer.get_current_batch_size()
@@ -821,10 +821,10 @@ class AdaptiveBatchSizer:
     """
     
     def __init__(self, 
-                 min_batch_size=512, 
+                 min_batch_size=128, 
                  max_batch_size=2048, 
                  noise_threshold=0.1, 
-                 pilot_batch_size=128,
+                 pilot_batch_size=512,
                  small_batch_early=True,
                  variance_estimation_freq=5):
         self.min_batch_size = min_batch_size
@@ -1078,11 +1078,11 @@ def main():
                         help="Enable CABS (Coupled Adaptive Batch Size) for better generalization")
     parser.add_argument("--noise-threshold", type=float, default=0.1,
                         help="Noise threshold θ for adaptive batch sizing (default: 0.1)")
-    parser.add_argument("--min-batch-size", type=int, default=32,
+    parser.add_argument("--min-batch-size", type=int, default=512,
                         help="Minimum batch size for adaptive sizing (default: 32)")
     parser.add_argument("--max-batch-adaptive", type=int, default=2048,
                         help="Maximum batch size for adaptive sizing (default: 2048)")
-    parser.add_argument("--pilot-batch-size", type=int, default=128,
+    parser.add_argument("--pilot-batch-size", type=int, default=1024,
                         help="Pilot batch size for gradient variance estimation (default: 128)")
     parser.add_argument("--small-batch-early", action="store_true",
                         help="Start with small batches for better exploration (combines with adaptive)")
