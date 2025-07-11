@@ -727,9 +727,10 @@ class EarlyStopping:
 ###############################################################################
 # 7.  Temperature scaling calibration
 ###############################################################################
-def calibrate_temperature(model, val_loader, device):
+def calibrate_temperature(model, val_loader, device, verbose=True):
     """Calibrate temperature parameter using validation set."""
-    print("🌡️  Calibrating temperature for better probability calibration...")
+    if verbose:
+        print("🌡️  Calibrating temperature for better probability calibration...")
     
     model.eval()
     logits_list = []
@@ -737,7 +738,8 @@ def calibrate_temperature(model, val_loader, device):
     
     # Collect logits and targets
     with torch.no_grad():
-        for ids, upos, mask in tqdm(val_loader, desc="Collecting logits", leave=False):
+        loader_iter = tqdm(val_loader, desc="Collecting logits", leave=False) if verbose else val_loader
+        for ids, upos, mask in loader_iter:
             ids = ids.to(device, non_blocking=True)
             upos = upos.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
@@ -759,14 +761,15 @@ def calibrate_temperature(model, val_loader, device):
                 targets_list.append(upos[valid_mask])
     
     if not logits_list:
-        print("No valid data for temperature calibration")
+        if verbose:
+            print("No valid data for temperature calibration")
         return
     
     all_logits = torch.cat(logits_list)
     all_targets = torch.cat(targets_list)
     
     # Optimize temperature
-    temp_optimizer = optim.LBFGS([model.temperature], lr=0.01, max_iter=100)
+    temp_optimizer = optim.LBFGS([model.temperature], lr=0.01, max_iter=50)  # Fewer iterations for periodic calibration
     
     def temperature_loss():
         temp_optimizer.zero_grad()
@@ -777,7 +780,8 @@ def calibrate_temperature(model, val_loader, device):
     
     temp_optimizer.step(temperature_loss)
     
-    print(f"📊 Optimal temperature: {model.temperature.item():.4f}")
+    if verbose:
+        print(f"📊 Optimal temperature: {model.temperature.item():.4f}")
 
 ###############################################################################
 # 8.  Main
@@ -1197,12 +1201,13 @@ def main():
         )
 
     print(f"🚀 Starting training on {device}")
+    print(f"🏗️  Model architecture: 2-layer depth-wise CNN, {EMB_DIM}D embeddings, {N_TAGS} POS classes")
     print(f"🔥 Compute node optimizations enabled:")
     print(f"   • cuDNN benchmark, AMP, TF32")
     print(f"   • DataLoader: {NUM_WORKERS_TRAIN} train workers, {NUM_WORKERS_VAL} val workers")
     print(f"   • Prefetch factor: {PREFETCH_FACTOR}")
     if TEMP_SCALING:
-        print(f"🌡️  Temperature scaling enabled")
+        print(f"🌡️  Temperature scaling enabled (periodic calibration every 20 epochs)")
     
     # Performance monitoring for compute nodes
     print(f"\n📊 COMPUTE NODE PERFORMANCE BASELINE:")
@@ -1331,13 +1336,33 @@ def main():
             # Update previous LR for next iteration
             previous_lr = current_lr
         
-        temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
-        f1_str = f" | {F1_AVERAGE[0].upper()}F1 {f1_score_val*100:5.2f}%" if CALCULATE_F1 and f1_score_val > 0 else ""
-        print(f"epoch {epoch:02d} | "
-              f"train acc {train_acc*100:5.2f}% | "
-              f"val acc {val_acc*100:5.2f}%{f1_str} | "
-              f"val ppl {val_ppl:4.2f} | "
-              f"lr {current_lr:.1e} ({phase}){temp_str}")
+        # Temperature only shows when it's actually different from 1.0 (after calibration)
+        temp_val = model.temperature.item() if TEMP_SCALING else 1.0
+        temp_str = f" | temp {temp_val:.3f}" if TEMP_SCALING and abs(temp_val - 1.0) > 0.01 else ""
+        
+        # When monitoring F1, make it prominent; otherwise show as add-on
+        if CALCULATE_F1 and f1_score_val > 0:
+            if args.monitor in ['macro_f1', 'weighted_f1']:
+                # F1 is primary metric - show it prominently
+                print(f"epoch {epoch:02d} | "
+                      f"train acc {train_acc*100:5.2f}% | "
+                      f"{F1_AVERAGE[0].upper()}F1 {f1_score_val*100:5.2f}% (acc {val_acc*100:4.1f}%) | "
+                      f"val ppl {val_ppl:4.2f} | "
+                      f"lr {current_lr:.1e} ({phase}){temp_str}")
+            else:
+                # F1 is secondary - show as add-on
+                print(f"epoch {epoch:02d} | "
+                      f"train acc {train_acc*100:5.2f}% | "
+                      f"val acc {val_acc*100:5.2f}% ({F1_AVERAGE[0].upper()}F1 {f1_score_val*100:4.1f}%) | "
+                      f"val ppl {val_ppl:4.2f} | "
+                      f"lr {current_lr:.1e} ({phase}){temp_str}")
+        else:
+            # No F1 calculation
+            print(f"epoch {epoch:02d} | "
+                  f"train acc {train_acc*100:5.2f}% | "
+                  f"val acc {val_acc*100:5.2f}% | "
+                  f"val ppl {val_ppl:4.2f} | "
+                  f"lr {current_lr:.1e} ({phase}){temp_str}")
         
         # Check early stopping
         if early_stopping is not None:
@@ -1348,6 +1373,25 @@ def main():
                 print(f"\n🛑 Training stopped early at epoch {epoch}")
                 break
         
+        # Periodic temperature calibration (every 20 epochs when monitoring F1)
+        if TEMP_SCALING and CALCULATE_F1 and epoch % 20 == 0 and epoch > 20:
+            print(f"\n🌡️  Calibrating temperature at epoch {epoch}...")
+            old_temp = model.temperature.item()
+            calibrate_temperature(model, val_loader, device, verbose=False)  # Quiet mode
+            new_temp = model.temperature.item()
+            if abs(new_temp - old_temp) > 0.01:
+                print(f"   Temperature updated: {old_temp:.3f} → {new_temp:.3f}")
+                # Re-run validation with new temperature and update metrics for early stopping
+                print("   🔍 Re-evaluating with updated temperature...")
+                val_ppl, val_acc, f1_score_val, _ = run_epoch(
+                    model, val_loader, None, device, None, criterion, epoch, 
+                    detailed_analysis=False, calculate_f1=CALCULATE_F1, f1_average=F1_AVERAGE
+                )
+                print(f"   📊 Results with new temperature: acc {val_acc*100:.2f}%, "
+                      f"{F1_AVERAGE[0].upper()}F1 {f1_score_val*100:.2f}%")
+            else:
+                print(f"   Temperature unchanged: {old_temp:.3f}")
+
         # Print detailed analysis
         if detailed and analysis:
             print("\n📊 Detailed Per-Class Analysis:")
@@ -1499,9 +1543,10 @@ def main():
         print(f"   • Best {stats['monitor']}: {stats['best_value']:.4f}")
         print(f"   • Patience used: {stats['patience_used']}/{early_stopping.patience}")
     
-    # Apply temperature scaling calibration
+    # Apply final temperature scaling calibration
     if TEMP_SCALING:
-        calibrate_temperature(model, val_loader, device)
+        print("\n🌡️  Final temperature calibration...")
+        calibrate_temperature(model, val_loader, device, verbose=True)
         
         # Re-evaluate with calibrated temperature
         print("🔍 Re-evaluating with calibrated temperature...")
