@@ -108,6 +108,18 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temp-calibration-samples", type=int, default=1000,
                         help="Number of samples for temperature calibration (default: 1000)")
     
+    # Hash-based embedding arguments
+    parser.add_argument("--hash-embed", action="store_true",
+                        help="Use hash-based embeddings instead of vocabulary-based (spaCy-style)")
+    parser.add_argument("--hash-dim", type=int, default=96,
+                        help="Hash embedding dimension (default: 96, spaCy default)")
+    parser.add_argument("--num-buckets", type=int, default=1048576,
+                        help="Number of hash buckets (default: 1048576 = 2^20)")
+    parser.add_argument("--ngram-min", type=int, default=3,
+                        help="Minimum character n-gram length (default: 3)")
+    parser.add_argument("--ngram-max", type=int, default=5,
+                        help="Maximum character n-gram length (default: 5)")
+    
     return parser
 
 
@@ -173,6 +185,19 @@ def validate_args(args: Any) -> None:
     # Validate checkpoint settings
     if args.save_checkpoints and args.checkpoint_freq <= 0:
         raise ValueError("Checkpoint frequency must be positive")
+    
+    # Validate hash embedding parameters
+    if args.hash_embed:
+        if args.hash_dim <= 0:
+            raise ValueError("Hash dimension must be positive")
+        if args.num_buckets <= 0:
+            raise ValueError("Number of hash buckets must be positive")
+        if args.ngram_min <= 0:
+            raise ValueError("Minimum n-gram length must be positive")
+        if args.ngram_max <= 0:
+            raise ValueError("Maximum n-gram length must be positive")
+        if args.ngram_min > args.ngram_max:
+            raise ValueError("Minimum n-gram length must be less than or equal to maximum")
 
 
 def print_args_summary(args: Any) -> None:
@@ -210,6 +235,15 @@ def print_args_summary(args: Any) -> None:
         print(f"   Noise threshold: {args.noise_threshold}")
     else:
         print(f"📊 Batch Size: {args.batch_size or 'Auto'}")
+    
+    # Embeddings
+    if args.hash_embed:
+        print(f"🎯 Embeddings: Hash-based (vocabulary-free)")
+        print(f"   Hash dimension: {args.hash_dim}")
+        print(f"   Hash buckets: {args.num_buckets:,}")
+        print(f"   Character n-grams: {args.ngram_min}-{args.ngram_max}")
+    else:
+        print(f"📚 Embeddings: Vocabulary-based")
     
     # Features
     print(f"🌡️  Temperature Scaling: {'No' if args.no_temp_scaling else 'Yes'}")

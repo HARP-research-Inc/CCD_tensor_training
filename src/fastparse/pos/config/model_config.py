@@ -40,23 +40,29 @@ def create_model_config(model_name: str, args: Any, vocab: Dict, dataset_info: D
         "created_at": datetime.now().isoformat(),
         "architecture": {
             "type": "DepthWiseCNNRouter",
-            "emb_dim": EMB_DIM,
+            "emb_dim": args.hash_dim if args.hash_embed else EMB_DIM,
             "dw_kernel": DW_KERNEL,
             "n_tags": N_TAGS,
             "max_len": MAX_LEN,
             "use_two_layers": True,
             "use_temperature_scaling": not args.no_temp_scaling,
+            "use_hash_embed": args.hash_embed,
+            "hash_dim": args.hash_dim if args.hash_embed else None,
+            "num_buckets": args.num_buckets if args.hash_embed else None,
+            "ngram_min": args.ngram_min if args.hash_embed else None,
+            "ngram_max": args.ngram_max if args.hash_embed else None,
             "dropout_rate": 0.1,
             "activation": "ReLU",
             "normalization": "LayerNorm"
         },
         "vocabulary": {
-            "size": len(vocab),
-            "type": get_vocab_type(args),
+            "size": len(vocab) if not args.hash_embed else None,
+            "type": "hash_based" if args.hash_embed else get_vocab_type(args),
             "treebanks": get_treebanks_used(args),
             "pad_token": "<PAD>",
             "augmented": args.augment,
-            "penn_treebank_included": args.penn_treebank or args.combined_penn
+            "penn_treebank_included": args.penn_treebank or args.combined_penn,
+            "hash_based": args.hash_embed
         },
         "training": {
             "dataset_size": dataset_info,
@@ -103,6 +109,10 @@ def get_model_description(args: Any) -> str:
     else:
         desc = f"Universal Dependencies {args.treebank.upper()} POS Router"
     
+    # Add embedding type
+    if args.hash_embed:
+        desc += " (Hash Embeddings)"
+    
     # Add training method
     if args.fixed_epochs:
         desc += f" (Fixed {EPOCHS} epochs)"
@@ -111,6 +121,8 @@ def get_model_description(args: Any) -> str:
     
     # Add special features
     features = []
+    if args.hash_embed:
+        features.append(f"Hash-{args.hash_dim}D")
     if args.adaptive_batch:
         features.append("CABS")
     if not args.no_temp_scaling:
@@ -155,13 +167,18 @@ def get_treebanks_used(args: Any) -> List[str]:
 def generate_model_name(args: Any) -> str:
     """Generate model name based on configuration."""
     if args.model_prefix:
-        return args.model_prefix
-    
-    if args.penn_treebank:
-        return "router_penn_wsj"
+        base_name = args.model_prefix
+    elif args.penn_treebank:
+        base_name = "router_penn_wsj"
     elif args.combined_penn:
-        return "router_combined_penn"
+        base_name = "router_combined_penn"
     elif args.combine:
-        return "router_combined"
+        base_name = "router_combined"
     else:
-        return f"router_{args.treebank}" 
+        base_name = f"router_{args.treebank}"
+    
+    # Add hash embedding suffix to model name
+    if args.hash_embed:
+        base_name += "_hash"
+    
+    return base_name 

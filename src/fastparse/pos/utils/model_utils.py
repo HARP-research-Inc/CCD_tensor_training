@@ -69,10 +69,15 @@ def save_training_results(training_history: Dict, final_results: Dict, args: Any
         "training_history": training_history,
         "hyperparameters": {
             "architecture": {
-                "emb_dim": 48,
+                "emb_dim": args.hash_dim if args.hash_embed else 48,
                 "dw_kernel": 3,
                 "n_tags": 18,
-                "max_len": 64
+                "max_len": 64,
+                "hash_embed": args.hash_embed,
+                "hash_dim": args.hash_dim if args.hash_embed else None,
+                "num_buckets": args.num_buckets if args.hash_embed else None,
+                "ngram_min": args.ngram_min if args.hash_embed else None,
+                "ngram_max": args.ngram_max if args.hash_embed else None
             },
             "training": {
                 "lr_max": 7e-2,
@@ -128,8 +133,11 @@ def save_all_model_artifacts(model: torch.nn.Module, config: Dict, vocab: Dict,
     # Save configuration
     artifacts['config'] = save_model_config(config, model_dir, model_name)
     
-    # Save vocabulary
-    artifacts['vocabulary'] = save_vocabulary_json(vocab, model_dir, model_name)
+    # Save vocabulary (only for traditional embeddings)
+    if not args.hash_embed:
+        artifacts['vocabulary'] = save_vocabulary_json(vocab, model_dir, model_name)
+    else:
+        artifacts['vocabulary'] = None
     
     # Save training results
     artifacts['training_log'] = save_training_results(
@@ -155,11 +163,19 @@ def print_model_summary(model_name: str, artifacts: Dict[str, str],
     # Artifacts
     print(f"\n📁 Saved Artifacts:")
     for artifact_type, path in artifacts.items():
-        print(f"   {artifact_type}: {path}")
+        if path is not None:
+            print(f"   {artifact_type}: {path}")
     
     # Configuration
     print(f"\n⚙️  Configuration:")
-    print(f"   Architecture: 48D, 2-layer CNN")
+    if args.hash_embed:
+        print(f"   Architecture: {args.hash_dim}D Hash Embeddings, 2-layer CNN")
+        print(f"   Hash Buckets: {args.num_buckets:,}")
+        print(f"   Character N-grams: {args.ngram_min}-{args.ngram_max}")
+        print(f"   Vocabulary-free: Yes")
+    else:
+        print(f"   Architecture: 48D, 2-layer CNN")
+        print(f"   Vocabulary-based: Yes")
     print(f"   Temperature Scaling: {'Yes' if not args.no_temp_scaling else 'No'}")
     print(f"   Label Smoothing: {'Yes' if not args.no_label_smoothing else 'No'}")
     print(f"   Adaptive Batch: {'Yes' if args.adaptive_batch else 'No'}")

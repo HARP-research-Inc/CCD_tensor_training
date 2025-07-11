@@ -23,7 +23,10 @@ from training.early_stopping import EarlyStopping
 from training.adaptive_batch import AdaptiveBatchSizer, create_adaptive_dataloader
 from training.temperature import calibrate_temperature
 from data.penn_treebank import load_penn_treebank_data
-from data.preprocessing import build_vocab, encode_sent, augment_dataset, calculate_batch_size, collate
+from data.preprocessing import (
+    build_vocab, encode_sent, augment_dataset, calculate_batch_size, collate,
+    encode_sent_with_attrs, collate_with_attrs  # Hash-based embedding support
+)
 from config.model_config import *
 from utils.model_utils import save_all_model_artifacts
 
@@ -77,9 +80,17 @@ class POSTrainer:
             print(f"📚 Loading UD {self.args.treebank} data...")
             self.train_dataset, self.val_dataset = self._load_single_treebank_data()
         
-        # Build vocabulary
-        print("🏗️  Building vocabulary...")
-        self.vocab = build_vocab(self.train_dataset)
+        # Build vocabulary or setup hash embeddings
+        if self.args.hash_embed:
+            print("🎯 Setting up hash-based embeddings (vocabulary-free)...")
+            print(f"   • Hash dimension: {self.args.hash_dim}")
+            print(f"   • Hash buckets: {self.args.num_buckets:,}")
+            print(f"   • Character n-grams: {self.args.ngram_min}-{self.args.ngram_max}")
+            self.vocab = {"<PAD>": 0}  # Minimal vocab for compatibility
+        else:
+            print("🏗️  Building vocabulary...")
+            self.vocab = build_vocab(self.train_dataset)
+            print(f"   • Vocabulary size: {len(self.vocab):,} tokens")
         
         # Apply augmentation if requested
         if self.args.augment:
@@ -89,11 +100,19 @@ class POSTrainer:
             if not hasattr(self.train_dataset, 'map'):
                 self.train_dataset = Dataset.from_list(self.train_dataset)
         
-        # Encode datasets
-        train_enc = self.train_dataset.map(lambda ex: encode_sent(ex, self.vocab))
-        val_enc = self.val_dataset.map(lambda ex: encode_sent(ex, self.vocab))
-        train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
-        val_enc = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+        # Encode datasets based on embedding type
+        if self.args.hash_embed:
+            # Hash-based encoding
+            train_enc = self.train_dataset.map(lambda ex: encode_sent_with_attrs(ex, self.args.ngram_min, self.args.ngram_max))
+            val_enc = self.val_dataset.map(lambda ex: encode_sent_with_attrs(ex, self.args.ngram_min, self.args.ngram_max))
+            train_enc = train_enc.with_format("torch", columns=["attrs", "upos"], output_all_columns=True)
+            val_enc = val_enc.with_format("torch", columns=["attrs", "upos"], output_all_columns=True)
+        else:
+            # Traditional vocabulary-based encoding
+            train_enc = self.train_dataset.map(lambda ex: encode_sent(ex, self.vocab))
+            val_enc = self.val_dataset.map(lambda ex: encode_sent(ex, self.vocab))
+            train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+            val_enc = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
         
         # Store encoded datasets for adaptive batch sizing
         self.train_dataset = train_enc
@@ -110,6 +129,9 @@ class POSTrainer:
         num_workers_val = 16 if self.args.compute_node else 2
         prefetch_factor = 4 if self.args.compute_node else 2
         
+        # Choose appropriate collate function
+        collate_fn = collate_with_attrs if self.args.hash_embed else collate
+        
         # Setup data loaders
         if self.args.adaptive_batch:
             print("📈 Setting up adaptive batch sizing...")
@@ -125,26 +147,26 @@ class POSTrainer:
             print(f"📦 Adaptive batch sizing: starts at {batch_size}")
             
             self.train_loader = create_adaptive_dataloader(
-                train_enc, self.adaptive_batch_sizer, collate,
+                train_enc, self.adaptive_batch_sizer, collate_fn,
                 num_workers_train, True, prefetch_factor
             )
             val_batch_size = min(self.args.pilot_batch_size, len(val_enc) // 10) if len(val_enc) > 100 else len(val_enc)
             self.val_loader = DataLoader(
                 val_enc, batch_size=val_batch_size, shuffle=False,
-                collate_fn=collate,
+                collate_fn=collate_fn,
                 num_workers=num_workers_val, pin_memory=True,
                 prefetch_factor=prefetch_factor, persistent_workers=True
             )
         else:
             self.train_loader = DataLoader(
                 train_enc, batch_size=batch_size, shuffle=True,
-                collate_fn=collate,
+                collate_fn=collate_fn,
                 num_workers=num_workers_train, pin_memory=True,
                 prefetch_factor=prefetch_factor, persistent_workers=True, drop_last=False
             )
             self.val_loader = DataLoader(
                 val_enc, batch_size=batch_size, shuffle=False,
-                collate_fn=collate,
+                collate_fn=collate_fn,
                 num_workers=num_workers_val, pin_memory=True,
                 prefetch_factor=prefetch_factor, persistent_workers=True
             )
@@ -171,7 +193,21 @@ class POSTrainer:
         print("🏗️  Setting up model...")
         
         # Create model
-        self.model = DepthWiseCNNRouter(len(self.vocab)).to(self.device)
+        if self.args.hash_embed:
+            self.model = DepthWiseCNNRouter(
+                use_hash_embed=True,
+                hash_dim=self.args.hash_dim,
+                num_buckets=self.args.num_buckets
+            ).to(self.device)
+            print(f"🧠 Hash-based model created:")
+            print(f"   • Embedding dimension: {self.args.hash_dim}")
+            print(f"   • Hash buckets: {self.args.num_buckets:,}")
+            print(f"   • Memory usage: ~{self.args.num_buckets * self.args.hash_dim * 4 / 1024**2:.1f} MB")
+        else:
+            self.model = DepthWiseCNNRouter(len(self.vocab)).to(self.device)
+            print(f"🧠 Vocabulary-based model created:")
+            print(f"   • Vocabulary size: {len(self.vocab):,}")
+            print(f"   • Embedding dimension: {EMB_DIM}")
         
         # Setup optimizer
         self.optimizer = optim.AdamW(
@@ -267,14 +303,20 @@ class POSTrainer:
         
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch}", leave=True)
-            for ids, upos, mask in pbar:
-                ids = ids.to(self.device, non_blocking=True)
+            for batch_data in pbar:
+                inputs, upos, mask = batch_data
+                
+                # Handle both traditional (tensor) and hash-based (list) inputs
+                if isinstance(inputs, torch.Tensor):
+                    inputs = inputs.to(self.device, non_blocking=True)
+                # For hash embeddings, inputs is a list and doesn't need GPU transfer
+                
                 upos = upos.to(self.device, non_blocking=True)
                 mask = mask.to(self.device, non_blocking=True)
                 
                 # Apply temperature scaling during validation
                 use_temp = not self.args.no_temp_scaling
-                logp = self.model(ids, mask, use_temperature=use_temp)
+                logp = self.model(inputs, mask, use_temperature=use_temp)
                 
                 if self.criterion is not None:
                     loss = self.criterion(logp.transpose(1,2), upos)
@@ -614,15 +656,21 @@ class POSTrainer:
         all_targets = []
         
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch}", leave=True)
-        for ids, upos, mask in pbar:
-            ids = ids.to(self.device, non_blocking=True)
+        for batch_data in pbar:
+            inputs, upos, mask = batch_data
+            
+            # Handle both traditional (tensor) and hash-based (list) inputs
+            if isinstance(inputs, torch.Tensor):
+                inputs = inputs.to(self.device, non_blocking=True)
+            # For hash embeddings, inputs is a list and doesn't need GPU transfer
+            
             upos = upos.to(self.device, non_blocking=True)
             mask = mask.to(self.device, non_blocking=True)
             
             if self.scaler is not None:
                 # Mixed precision training
                 with torch.cuda.amp.autocast():
-                    logp = self.model(ids, mask)
+                    logp = self.model(inputs, mask)
                     if self.criterion is not None:
                         loss = self.criterion(logp.transpose(1,2), upos)
                     else:
@@ -634,7 +682,7 @@ class POSTrainer:
                 self.scaler.update()
             else:
                 # Standard training
-                logp = self.model(ids, mask)
+                logp = self.model(inputs, mask)
                 if self.criterion is not None:
                     loss = self.criterion(logp.transpose(1,2), upos)
                 else:
@@ -686,7 +734,8 @@ class POSTrainer:
         
         # Create progress bar object that we can update
         pbar = tqdm(current_loader, desc=desc, leave=True)
-        for batch_idx, (ids, upos, mask) in enumerate(pbar):
+        for batch_idx, batch_data in enumerate(pbar):
+            inputs, upos, mask = batch_data
             # Update batch size with adaptive batch sizer
             if self.adaptive_batch_sizer is not None:
                 old_batch_size = self.adaptive_batch_sizer.get_current_batch_size()
@@ -707,14 +756,18 @@ class POSTrainer:
                     pbar.set_description(f"Train Epoch {epoch} [BS={new_batch_size}]")
             
             # Non-blocking transfers to GPU
-            ids = ids.to(self.device, non_blocking=True)
+            # Handle both traditional (tensor) and hash-based (list) inputs
+            if isinstance(inputs, torch.Tensor):
+                inputs = inputs.to(self.device, non_blocking=True)
+            # For hash embeddings, inputs is a list and doesn't need GPU transfer
+            
             upos = upos.to(self.device, non_blocking=True)
             mask = mask.to(self.device, non_blocking=True)
             
             if self.scaler is not None:
                 # Mixed precision training
                 with torch.cuda.amp.autocast():
-                    logp = self.model(ids, mask)
+                    logp = self.model(inputs, mask)
                     if self.criterion is not None:
                         loss = self.criterion(logp.transpose(1,2), upos)
                     else:
@@ -726,7 +779,7 @@ class POSTrainer:
                 self.scaler.update()
             else:
                 # Standard training
-                logp = self.model(ids, mask)
+                logp = self.model(inputs, mask)
                 if self.criterion is not None:
                     loss = self.criterion(logp.transpose(1,2), upos)
                 else:

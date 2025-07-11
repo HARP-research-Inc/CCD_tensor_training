@@ -34,24 +34,49 @@ def calibrate_temperature(model, val_loader, device, verbose=True):
     # Collect logits and targets
     with torch.no_grad():
         loader_iter = tqdm(val_loader, desc="Collecting logits", leave=False) if verbose else val_loader
-        for ids, upos, mask in loader_iter:
-            ids = ids.to(device, non_blocking=True)
+        for batch_data in loader_iter:
+            inputs, upos, mask = batch_data
+            
+            # Handle both traditional (tensor) and hash-based (list) inputs
+            if isinstance(inputs, torch.Tensor):
+                inputs = inputs.to(device, non_blocking=True)
+            # For hash embeddings, inputs is a list and doesn't need GPU transfer
+            
             upos = upos.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
             
-            # Get logits before softmax (without temperature)
-            x = model.emb(ids)
+            # Get raw logits without softmax or temperature scaling
+            if hasattr(model, 'use_hash_embed') and model.use_hash_embed:
+                # Hash-based embedding forward pass
+                if isinstance(inputs, torch.Tensor):
+                    x = model.emb(inputs)
+                else:
+                    # inputs is a list of attribute lists
+                    batch_size = mask.shape[0]
+                    seq_len = mask.shape[1]
+                    x = model.emb(inputs)
+                    x = x.view(batch_size, seq_len, -1)
+            else:
+                # Traditional embedding
+                x = model.emb(inputs)
+            
             x = model.emb_dropout(x)
+            
+            # First conv layer
             x = x.transpose(1, 2)
             x = model.pw1(model.act1(model.dw1(x)))
             x = x.transpose(1, 2)
             x = model.norm1(x)
             x = model.dropout1(x)
+            
+            # Second conv layer  
             x = x.transpose(1, 2)
             x = model.pw2(model.act2(model.dw2(x)))
             x = x.transpose(1, 2)
             x = model.norm2(x)
             x = model.dropout2(x)
+            
+            # Raw logits without temperature
             logits = model.lin(x)
             
             # Collect valid positions

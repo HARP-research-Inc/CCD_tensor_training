@@ -32,7 +32,8 @@ from training.temperature import calibrate_temperature
 from data.penn_treebank import load_penn_treebank_data
 from data.preprocessing import (
     build_vocab, encode_sent, augment_dataset, 
-    calculate_batch_size, collate
+    calculate_batch_size, collate,
+    encode_sent_with_attrs, collate_with_attrs  # Hash-based embedding support
 )
 
 # Constants from original script
@@ -40,8 +41,8 @@ EMB_DIM = 48
 DW_KERNEL = 3
 N_TAGS = 18
 LR_MAX = 7e-2
-LR_MIN = 1e-4
-EPOCHS = 100
+LR_MIN = 1e-5
+EPOCHS = 30
 WARMUP_EPOCHS = 3
 MAX_LEN = 64
 LABEL_SMOOTHING = 0.1
@@ -72,23 +73,29 @@ def save_model_config(model_name, args, vocab, dataset_info, architecture_info):
         "created_at": datetime.now().isoformat(),
         "architecture": {
             "type": "DepthWiseCNNRouter",
-            "emb_dim": EMB_DIM,
+            "emb_dim": args.hash_dim if args.hash_embed else EMB_DIM,
             "dw_kernel": DW_KERNEL,
             "n_tags": N_TAGS,
             "max_len": MAX_LEN,
             "use_two_layers": True,  # Current architecture has 2 layers
             "use_temperature_scaling": not args.no_temp_scaling,
+            "use_hash_embed": args.hash_embed,
+            "hash_dim": args.hash_dim if args.hash_embed else None,
+            "num_buckets": args.num_buckets if args.hash_embed else None,
+            "ngram_min": args.ngram_min if args.hash_embed else None,
+            "ngram_max": args.ngram_max if args.hash_embed else None,
             "dropout_rate": 0.1,
             "activation": "ReLU",
             "normalization": "LayerNorm"
         },
         "vocabulary": {
-            "size": len(vocab),
-            "type": _get_vocab_type(args),
+            "size": len(vocab) if not args.hash_embed else None,
+            "type": "hash_based" if args.hash_embed else _get_vocab_type(args),
             "treebanks": _get_treebanks_used(args),
             "pad_token": "<PAD>",
             "augmented": args.augment,
-            "penn_treebank_included": args.penn_treebank or args.combined_penn
+            "penn_treebank_included": args.penn_treebank or args.combined_penn,
+            "hash_based": args.hash_embed
         },
         "training": {
             "dataset_size": dataset_info,
@@ -199,6 +206,10 @@ def _get_model_description(args):
     else:
         desc = f"Universal Dependencies {args.treebank.upper()} POS Router"
     
+    # Add embedding type
+    if args.hash_embed:
+        desc += " (Hash Embeddings)"
+    
     # Add training method
     if args.fixed_epochs:
         desc += f" (Fixed {EPOCHS} epochs)"
@@ -207,6 +218,8 @@ def _get_model_description(args):
     
     # Add special features
     features = []
+    if args.hash_embed:
+        features.append(f"Hash-{args.hash_dim}D")
     if args.adaptive_batch:
         features.append("CABS")
     if not args.no_temp_scaling:
@@ -261,16 +274,21 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     # Create progress bar with epoch info
     mode = "Train" if train else "Val"
     desc = f"{mode} Epoch {epoch}" if epoch is not None else mode
-    for ids, upos, mask in tqdm(loader, desc=desc, leave=True):
-        # Non-blocking transfers to GPU
-        ids = ids.to(device, non_blocking=True)
+    for batch_data in tqdm(loader, desc=desc, leave=True):
+        inputs, upos, mask = batch_data
+        
+        # Handle both traditional (tensor) and hash-based (list) inputs
+        if isinstance(inputs, torch.Tensor):
+            inputs = inputs.to(device, non_blocking=True)
+        # For hash embeddings, inputs is a list and doesn't need GPU transfer
+        
         upos = upos.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
         
         if train and scaler is not None:
             # Mixed precision training
             with torch.cuda.amp.autocast():
-                logp = model(ids, mask)
+                logp = model(inputs, mask)
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)
                 else:
@@ -284,7 +302,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
             # Standard training/validation
             # Apply temperature scaling during validation
             use_temp = not train and TEMP_SCALING
-            logp = model(ids, mask, use_temperature=use_temp)
+            logp = model(inputs, mask, use_temperature=use_temp)
             if criterion is not None:
                 loss = criterion(logp.transpose(1,2), upos)
             else:
@@ -388,7 +406,8 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     
     # Create progress bar object that we can update
     pbar = tqdm(current_loader, desc=desc, leave=True)
-    for batch_idx, (ids, upos, mask) in enumerate(pbar):
+    for batch_idx, batch_data in enumerate(pbar):
+        inputs, upos, mask = batch_data
         # Update batch size with adaptive batch sizer
         if adaptive_batch_sizer is not None:
             old_batch_size = adaptive_batch_sizer.get_current_batch_size()
@@ -409,14 +428,18 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
                 pbar.set_description(f"Train Epoch {epoch} [BS={new_batch_size}]")
         
         # Non-blocking transfers to GPU
-        ids = ids.to(device, non_blocking=True)
+        # Handle both traditional (tensor) and hash-based (list) inputs
+        if isinstance(inputs, torch.Tensor):
+            inputs = inputs.to(device, non_blocking=True)
+        # For hash embeddings, inputs is a list and doesn't need GPU transfer
+        
         upos = upos.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
         
         if scaler is not None:
             # Mixed precision training
             with torch.cuda.amp.autocast():
-                logp = model(ids, mask)
+                logp = model(inputs, mask)
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)
                 else:
@@ -428,7 +451,7 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
             scaler.update()
         else:
             # Standard training
-            logp = model(ids, mask)
+            logp = model(inputs, mask)
             if criterion is not None:
                 loss = criterion(logp.transpose(1,2), upos)
             else:
@@ -531,6 +554,18 @@ def main():
                         help="Start with small batches for better exploration")
     parser.add_argument("--variance-estimation-freq", type=int, default=5,
                         help="How often to re-estimate gradient variance (every N steps, default: 5)")
+    
+    # Hash-based embedding arguments
+    parser.add_argument("--hash-embed", action="store_true",
+                        help="Use hash-based embeddings instead of vocabulary-based (spaCy-style)")
+    parser.add_argument("--hash-dim", type=int, default=96,
+                        help="Hash embedding dimension (default: 96, spaCy default)")
+    parser.add_argument("--num-buckets", type=int, default=1048576,
+                        help="Number of hash buckets (default: 1048576 = 2^20)")
+    parser.add_argument("--ngram-min", type=int, default=3,
+                        help="Minimum character n-gram length (default: 3)")
+    parser.add_argument("--ngram-max", type=int, default=5,
+                        help="Maximum character n-gram length (default: 5)")
     
     args = parser.parse_args()
     
@@ -656,19 +691,40 @@ def main():
         print(f"📊 Single treebank {args.treebank}: {len(ds_train)} train, {len(ds_val)} val sentences")
 
     # Data processing
-    vocab = build_vocab(ds_train)
+    if args.hash_embed:
+        print("🎯 Using hash-based embeddings (vocabulary-free)")
+        print(f"   • Hash dimension: {args.hash_dim}")
+        print(f"   • Hash buckets: {args.num_buckets:,}")
+        print(f"   • Character n-grams: {args.ngram_min}-{args.ngram_max}")
+        vocab = {"<PAD>": 0}  # Minimal vocab for compatibility
+    else:
+        print("📚 Using vocabulary-based embeddings")
+        vocab = build_vocab(ds_train)
+        print(f"   • Vocabulary size: {len(vocab):,} tokens")
+    
     if args.augment:
         ds_train = augment_dataset(ds_train, augment_factor=1.5)
         if not hasattr(ds_train, 'map'):
             ds_train = Dataset.from_list(ds_train)
     
-    train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
-    val_enc = ds_val.map(lambda ex: encode_sent(ex, vocab))
-    train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
-    val_enc = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+    if args.hash_embed:
+        # Hash-based encoding
+        train_enc = ds_train.map(lambda ex: encode_sent_with_attrs(ex, args.ngram_min, args.ngram_max))
+        val_enc = ds_val.map(lambda ex: encode_sent_with_attrs(ex, args.ngram_min, args.ngram_max))
+        train_enc = train_enc.with_format("torch", columns=["attrs", "upos"], output_all_columns=True)
+        val_enc = val_enc.with_format("torch", columns=["attrs", "upos"], output_all_columns=True)
+    else:
+        # Traditional vocabulary-based encoding
+        train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
+        val_enc = ds_val.map(lambda ex: encode_sent(ex, vocab))
+        train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+        val_enc = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
 
     # Batch sizing strategy (restored from original)
     adaptive_batch_sizer = None
+    
+    # Choose appropriate collate function
+    collate_fn = collate_with_attrs if args.hash_embed else collate
     
     if args.adaptive_batch:
         adaptive_batch_sizer = AdaptiveBatchSizer(
@@ -683,12 +739,12 @@ def main():
         print(f"📦 Adaptive batch sizing: starts at {BATCH_SIZE}")
         
         train_loader = create_adaptive_dataloader(
-            train_enc, adaptive_batch_sizer, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+            train_enc, adaptive_batch_sizer, collate_fn, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
         )
         val_batch_size = min(args.pilot_batch_size, len(ds_val) // 10) if len(ds_val) > 100 else len(ds_val)
         val_loader = DataLoader(
             val_enc, batch_size=val_batch_size, shuffle=False,
-            collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+            collate_fn=collate_fn, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
             prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
         )
     else:
@@ -699,12 +755,12 @@ def main():
         
         train_loader = DataLoader(
             train_enc, batch_size=BATCH_SIZE, shuffle=True,
-            collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
+            collate_fn=collate_fn, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
             prefetch_factor=PREFETCH_FACTOR, persistent_workers=True, drop_last=False
         )
         val_loader = DataLoader(
             val_enc, batch_size=BATCH_SIZE, shuffle=False,
-            collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+            collate_fn=collate_fn, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
             prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
         )
 
@@ -746,7 +802,23 @@ def main():
         print("⚠️  CUDA not available, falling back to CPU")
 
     # Model setup
-    model = DepthWiseCNNRouter(len(vocab)).to(device)
+    if args.hash_embed:
+        model = DepthWiseCNNRouter(
+            use_hash_embed=True,
+            hash_dim=args.hash_dim,
+            num_buckets=args.num_buckets
+        ).to(device)
+        print(f"🧠 Hash-based model created:")
+        print(f"   • Embedding dimension: {args.hash_dim}")
+        print(f"   • Hash buckets: {args.num_buckets:,}")
+        print(f"   • Memory usage: ~{args.num_buckets * args.hash_dim * 4 / 1024**2:.1f} MB")
+    else:
+        model = DepthWiseCNNRouter(len(vocab)).to(device)
+        print(f"🧠 Vocabulary-based model created:")
+        print(f"   • Vocabulary size: {len(vocab):,}")
+        print(f"   • Embedding dimension: {EMB_DIM}")
+    
+    print(f"   • Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     optimiser = optim.AdamW(model.parameters(), lr=LR_MIN, weight_decay=1e-4)
 
     criterion = None
@@ -804,7 +876,11 @@ def main():
     # Performance monitoring (restored from original)
     print(f"\n📊 COMPUTE NODE PERFORMANCE BASELINE:")
     print(f"   • Dataset size: {len(ds_train):,} train, {len(ds_val):,} val sentences")
-    print(f"   • Vocabulary size: {len(vocab):,} tokens")
+    if args.hash_embed:
+        print(f"   • Embedding type: Hash-based (vocabulary-free)")
+        print(f"   • Hash buckets: {args.num_buckets:,}")
+    else:
+        print(f"   • Vocabulary size: {len(vocab):,} tokens")
     print(f"   • Steps per epoch: {len(train_loader):,}")
     
     # Check which POS classes are present (restored from original)
@@ -879,7 +955,7 @@ def main():
             if adaptive_batch_sizer is not None:
                 train_ppl, train_acc, _, step_count, batch_changes = run_epoch_with_sgdr(
                     model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch,
-                    adaptive_batch_sizer, train_enc, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+                    adaptive_batch_sizer, train_enc, collate_fn, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
                 )
                 
                 if batch_changes:
@@ -892,7 +968,7 @@ def main():
                 if current_batch_size != BATCH_SIZE:
                     BATCH_SIZE = current_batch_size
                     train_loader = create_adaptive_dataloader(
-                        train_enc, adaptive_batch_sizer, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+                        train_enc, adaptive_batch_sizer, collate_fn, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
                     )
             else:
                 train_ppl, train_acc, _, step_count, _ = run_epoch_with_sgdr(
@@ -1189,6 +1265,10 @@ def main():
     else:
         model_base_name = f"router_{args.treebank}"
     
+    # Add hash embedding suffix to model name
+    if args.hash_embed:
+        model_base_name += "_hash"
+    
     # Add timestamp for uniqueness if desired
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # model_base_name = f"{model_base_name}_{timestamp}"
@@ -1219,9 +1299,12 @@ def main():
         json.dump(config, f, indent=2)
     print(f"📋 Model config saved: {config_path}")
     
-    # Save vocabulary JSON
-    vocab_path = save_vocabulary_json(vocab, model_dir, model_base_name)
-    print(f"📚 Vocabulary saved: {vocab_path}")
+    # Save vocabulary JSON (only for traditional embeddings)
+    if not args.hash_embed:
+        vocab_path = save_vocabulary_json(vocab, model_dir, model_base_name)
+        print(f"📚 Vocabulary saved: {vocab_path}")
+    else:
+        print(f"📚 Hash-based embedding: No vocabulary file needed")
     
     # Save training results JSON
     training_path = save_training_results(model_dir, model_base_name, training_history, final_results, args)
@@ -1243,7 +1326,13 @@ def main():
     print(f"\n📋 Model Summary:")
     print(f"   • Name: {config['model_name']}")
     print(f"   • Description: {config['description']}")
-    print(f"   • Vocabulary size: {len(vocab):,} tokens")
+    if args.hash_embed:
+        print(f"   • Embedding type: Hash-based (vocabulary-free)")
+        print(f"   • Hash buckets: {args.num_buckets:,}")
+        print(f"   • Hash dimension: {args.hash_dim}")
+    else:
+        print(f"   • Vocabulary size: {len(vocab):,} tokens")
+        print(f"   • Embedding dimension: {EMB_DIM}")
     print(f"   • Final accuracy: {final_results.get('final_val_acc', 0)*100:.2f}%")
     if final_results.get('final_f1_score'):
         print(f"   • Final F1 score: {final_results['final_f1_score']*100:.2f}%")

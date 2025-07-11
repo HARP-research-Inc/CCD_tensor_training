@@ -22,6 +22,9 @@ import os
 from collections import defaultdict
 from tqdm import tqdm
 
+# Import hash embedding support
+from data.preprocessing import token_attrs
+
 def load_model_config(config_path):
     """Load model configuration from JSON file."""
     if not os.path.exists(config_path):
@@ -54,21 +57,41 @@ POS_TAGS = []
 
 class DepthWiseCNNRouter(nn.Module):
     """Configurable POS router with depth-wise convolutions and optional second layer."""
-    def __init__(self, vocab_size: int, config: dict):
+    def __init__(self, vocab_size: int = None, config: dict = None, 
+                 use_hash_embed: bool = False, hash_dim: int = 96, num_buckets: int = 1048576):
         super().__init__()
         
-        # Extract architecture parameters from config
-        arch = config['architecture']
-        self.emb_dim = arch['emb_dim']
-        self.dw_kernel = arch['dw_kernel']
-        self.n_tags = arch['n_tags']
-        self.use_second_conv = arch.get('use_second_conv_layer', False) or arch.get('use_two_layers', False)
-        self.use_temp_scaling = arch.get('use_temperature_scaling', True)
-        dropout_rate = arch.get('dropout_rate', 0.1)
+        # Handle hash embedding parameters
+        self.use_hash_embed = use_hash_embed
         
-        # Embedding layer
-        self.emb = nn.Embedding(vocab_size, self.emb_dim, padding_idx=0)
-        self.emb_dropout = nn.Dropout(dropout_rate)
+        if use_hash_embed:
+            # Hash-based embedding setup
+            self.emb_dim = hash_dim
+            self.num_buckets = num_buckets
+            self.dw_kernel = 3
+            self.n_tags = 18
+            self.use_second_conv = True
+            self.use_temp_scaling = True
+            dropout_rate = 0.1
+            
+            # Hash embedding layer
+            from models.hash_embed import HashEmbed
+            self.emb = HashEmbed(hash_dim, num_buckets)
+            self.emb_dropout = nn.Dropout(dropout_rate)
+        else:
+            # Traditional vocabulary-based setup
+            # Extract architecture parameters from config
+            arch = config['architecture']
+            self.emb_dim = arch['emb_dim']
+            self.dw_kernel = arch['dw_kernel']
+            self.n_tags = arch['n_tags']
+            self.use_second_conv = arch.get('use_second_conv_layer', False) or arch.get('use_two_layers', False)
+            self.use_temp_scaling = arch.get('use_temperature_scaling', True)
+            dropout_rate = arch.get('dropout_rate', 0.1)
+            
+            # Embedding layer
+            self.emb = nn.Embedding(vocab_size, self.emb_dim, padding_idx=0)
+            self.emb_dropout = nn.Dropout(dropout_rate)
         
         # First depth-wise separable Conv layer
         self.dw1 = nn.Conv1d(
@@ -102,14 +125,25 @@ class DepthWiseCNNRouter(nn.Module):
         else:
             self.register_parameter('temperature', None)
 
-    def forward(self, token_ids, mask, use_temperature=False):
+    def forward(self, inputs, mask, use_temperature=False):
         """
-        token_ids : [B, T] int64
-        mask      : [B, T] bool  (True on real tokens, False on padding)
+        inputs : [B, T] int64 (for vocab) or list of attribute lists (for hash)
+        mask   : [B, T] bool  (True on real tokens, False on padding)
         use_temperature : bool - whether to apply temperature scaling
         returns   : log-probs  [B, T, N_TAGS]
         """
-        x = self.emb(token_ids)               # [B, T, D]
+        if self.use_hash_embed:
+            # Hash-based embeddings: inputs is a list of attribute lists
+            x = self.emb(inputs)              # [B * T, D]
+            
+            # Reshape to [B, T, D]
+            batch_size = mask.shape[0]
+            seq_len = mask.shape[1]
+            x = x.view(batch_size, seq_len, -1)
+        else:
+            # Traditional embeddings: inputs is token IDs
+            x = self.emb(inputs)              # [B, T, D]
+        
         x = self.emb_dropout(x)
         
         # First conv layer
@@ -314,8 +348,13 @@ def build_vocab_from_config(config, model_path=None):
         print(f"📊 Vocabulary size: {len(vocab)}")
         return vocab
     
+    elif vocab_config['type'] == 'hash_based':
+        # For hash-based embeddings, return minimal vocab for compatibility
+        print("🎯 Hash-based embeddings detected - using minimal vocabulary")
+        return {"<PAD>": 0}
+    
     else:
-        raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}. Supported types: 'single', 'combined', 'penn_treebank', 'single_treebank', 'combined_ud', 'combined_ud_penn', 'combined_penn'")
+        raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}. Supported types: 'single', 'combined', 'penn_treebank', 'single_treebank', 'combined_ud', 'combined_ud_penn', 'combined_penn', 'hash_based'")
 
 class POSPredictor:
     def __init__(self, model_path, config_path=None):
@@ -351,8 +390,31 @@ class POSPredictor:
         # Build vocabulary from config (preferring saved vocab JSON)
         self.vocab = build_vocab_from_config(self.config, model_path)
         
+        # Check if this is a hash-based model
+        self.is_hash_model = arch.get('use_hash_embed', False) or self.config['vocabulary'].get('hash_based', False)
+        
         # Load model with config
-        self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
+        if self.is_hash_model:
+            # Hash-based model
+            hash_dim = arch.get('hash_dim', 96)
+            num_buckets = arch.get('num_buckets', 1048576)
+            self.model = DepthWiseCNNRouter(
+                use_hash_embed=True,
+                hash_dim=hash_dim,
+                num_buckets=num_buckets
+            ).to(self.device)
+            print(f"🎯 Hash-based model loaded:")
+            print(f"   • Hash dimension: {hash_dim}")
+            print(f"   • Hash buckets: {num_buckets:,}")
+            
+            # Store hash parameters for inference
+            self.hash_dim = hash_dim
+            self.num_buckets = num_buckets
+            self.ngram_min = arch.get('ngram_min', 3)
+            self.ngram_max = arch.get('ngram_max', 5)
+        else:
+            # Traditional vocabulary-based model
+            self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
         
         # Load model weights with vocabulary size handling
         checkpoint = torch.load(model_path, map_location=self.device)
@@ -530,23 +592,39 @@ class POSPredictor:
         if not tokens:
             return []
         
-        # Convert to token IDs
-        token_ids = [self.vocab.get(tok, 0) for tok in tokens][:self.max_len]
-        
-        # Create tensors
-        ids = torch.tensor([token_ids]).to(self.device)
-        mask = torch.ones_like(ids, dtype=torch.bool)
-        
-        # Get predictions (ensure model is in eval mode for dropout/normalization)
-        self.model.eval()
-        with torch.no_grad():
-            logp = self.model(ids, mask, use_temperature=True)  # Use calibrated temperature
-            pred_ids = logp.argmax(-1).squeeze(0).cpu().numpy()
+        if self.is_hash_model:
+            # Hash-based embeddings: generate attributes for each token
+            attrs_list = []
+            for token in tokens[:self.max_len]:
+                attrs = token_attrs(token, self.ngram_min, self.ngram_max)
+                attrs_list.append(attrs)
+            
+            # Create mask for actual tokens
+            mask = torch.ones(1, len(attrs_list), dtype=torch.bool).to(self.device)
+            
+            # Get predictions
+            self.model.eval()
+            with torch.no_grad():
+                logp = self.model(attrs_list, mask, use_temperature=True)
+                pred_ids = logp.argmax(-1).squeeze(0).cpu().numpy()
+        else:
+            # Traditional vocabulary-based embeddings
+            token_ids = [self.vocab.get(tok, 0) for tok in tokens][:self.max_len]
+            
+            # Create tensors
+            ids = torch.tensor([token_ids]).to(self.device)
+            mask = torch.ones_like(ids, dtype=torch.bool)
+            
+            # Get predictions
+            self.model.eval()
+            with torch.no_grad():
+                logp = self.model(ids, mask, use_temperature=True)
+                pred_ids = logp.argmax(-1).squeeze(0).cpu().numpy()
         
         # Convert to POS tags
         predictions = []
         for i, (token, pred_id) in enumerate(zip(tokens, pred_ids)):
-            if i < len(token_ids):  # Only for actual tokens
+            if i < len(tokens):  # Only for actual tokens
                 pred_id = int(pred_id)  # Convert numpy int64 to Python int
                 pos_tag = self.pos_tags[pred_id] if pred_id < len(self.pos_tags) else "X"
                 predictions.append((token, pos_tag))
@@ -574,25 +652,52 @@ class POSPredictor:
             max_len = max(len(tokens) for tokens in batch_tokens) if batch_tokens else 0
             max_len = min(max_len, self.max_len)  # Respect model's max length
             
-            # Create batch tensors
-            batch_ids = torch.zeros(len(batch_tokens), max_len, dtype=torch.long)
-            batch_mask = torch.zeros(len(batch_tokens), max_len, dtype=torch.bool)
-            
-            for j, tokens in enumerate(batch_tokens):
-                token_ids = [self.vocab.get(tok, 0) for tok in tokens[:max_len]]
-                n = len(token_ids)
-                batch_ids[j, :n] = torch.tensor(token_ids)
-                batch_mask[j, :n] = True
-            
-            # Move to device
-            batch_ids = batch_ids.to(self.device)
-            batch_mask = batch_mask.to(self.device)
-            
-            # Get predictions (ensure model is in eval mode)
-            self.model.eval()
-            with torch.no_grad():
-                logp = self.model(batch_ids, batch_mask, use_temperature=True)
-                pred_ids = logp.argmax(-1).cpu().numpy()
+            if self.is_hash_model:
+                # Hash-based embeddings: generate attributes for each token
+                batch_attrs = []
+                batch_mask = torch.zeros(len(batch_tokens), max_len, dtype=torch.bool)
+                
+                for j, tokens in enumerate(batch_tokens):
+                    sentence_attrs = []
+                    for k, token in enumerate(tokens[:max_len]):
+                        attrs = token_attrs(token, self.ngram_min, self.ngram_max)
+                        sentence_attrs.append(attrs)
+                        batch_mask[j, k] = True
+                    
+                    # Pad sentence to max_len if needed
+                    while len(sentence_attrs) < max_len:
+                        sentence_attrs.append([])  # Empty attributes for padding
+                    
+                    batch_attrs.append(sentence_attrs)
+                
+                # Move mask to device
+                batch_mask = batch_mask.to(self.device)
+                
+                # Get predictions
+                self.model.eval()
+                with torch.no_grad():
+                    logp = self.model(batch_attrs, batch_mask, use_temperature=True)
+                    pred_ids = logp.argmax(-1).cpu().numpy()
+            else:
+                # Traditional vocabulary-based embeddings
+                batch_ids = torch.zeros(len(batch_tokens), max_len, dtype=torch.long)
+                batch_mask = torch.zeros(len(batch_tokens), max_len, dtype=torch.bool)
+                
+                for j, tokens in enumerate(batch_tokens):
+                    token_ids = [self.vocab.get(tok, 0) for tok in tokens[:max_len]]
+                    n = len(token_ids)
+                    batch_ids[j, :n] = torch.tensor(token_ids)
+                    batch_mask[j, :n] = True
+                
+                # Move to device
+                batch_ids = batch_ids.to(self.device)
+                batch_mask = batch_mask.to(self.device)
+                
+                # Get predictions
+                self.model.eval()
+                with torch.no_grad():
+                    logp = self.model(batch_ids, batch_mask, use_temperature=True)
+                    pred_ids = logp.argmax(-1).cpu().numpy()
             
             # Convert to POS tags
             for j, (tokens, preds) in enumerate(zip(batch_tokens, pred_ids)):
