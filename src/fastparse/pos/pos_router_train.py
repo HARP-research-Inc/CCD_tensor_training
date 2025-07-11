@@ -436,7 +436,10 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0, 'loss': 0.0})
     confusion_matrix = defaultdict(lambda: defaultdict(int))  # confusion_matrix[true_class][pred_class] = count
 
-    for ids, upos, mask in tqdm(loader, leave=True):
+    # Create progress bar with epoch info
+    mode = "Train" if train else "Val"
+    desc = f"{mode} Epoch {epoch}" if epoch is not None else mode
+    for ids, upos, mask in tqdm(loader, desc=desc, leave=True):
         # Non-blocking transfers to GPU
         ids   = ids.to(device,   non_blocking=True)
         upos  = upos.to(device,  non_blocking=True)
@@ -562,8 +565,14 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     
     # Track batch size changes for reporting
     batch_size_changes = []
-
-    for batch_idx, (ids, upos, mask) in enumerate(tqdm(current_loader, leave=True)):
+    
+    # Create progress bar with epoch and batch size info
+    initial_batch_size = adaptive_batch_sizer.get_current_batch_size() if adaptive_batch_sizer else BATCH_SIZE
+    desc = f"Train Epoch {epoch} [BS={initial_batch_size}]" if adaptive_batch_sizer else f"Train Epoch {epoch}"
+    
+    # Create progress bar object that we can update
+    pbar = tqdm(current_loader, desc=desc, leave=True)
+    for batch_idx, (ids, upos, mask) in enumerate(pbar):
         # Update batch size with adaptive batch sizer
         if adaptive_batch_sizer is not None:
             old_batch_size = adaptive_batch_sizer.get_current_batch_size()
@@ -579,6 +588,9 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
                     'new_size': new_batch_size,
                     'stats': adaptive_batch_sizer.get_statistics()
                 })
+                
+                # Update progress bar description with new batch size
+                pbar.set_description(f"Train Epoch {epoch} [BS={new_batch_size}]")
                 
                 # Create new DataLoader with updated batch size (for next epoch)
                 # Current batch processing continues normally
@@ -1083,7 +1095,7 @@ def main():
     parser.add_argument("--max-batch-adaptive", type=int, default=2048,
                         help="Maximum batch size for adaptive sizing (default: 2048)")
     parser.add_argument("--pilot-batch-size", type=int, default=1024,
-                        help="Pilot batch size for gradient variance estimation (default: 128)")
+                        help="Pilot batch size for gradient variance estimation (default: 1024)")
     parser.add_argument("--small-batch-early", action="store_true",
                         help="Start with small batches for better exploration (combines with adaptive)")
     parser.add_argument("--variance-estimation-freq", type=int, default=5,
@@ -1357,17 +1369,17 @@ def main():
             expected_batches = len(ds_train) // BATCH_SIZE
             print(f"📦 Auto-calculated batch size: {BATCH_SIZE} ({expected_batches} batches/epoch)")
 
-    train_loader = DataLoader(
-            train_enc, batch_size=BATCH_SIZE, shuffle=True,
-            collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
-            prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
-            drop_last=False  # Don't drop last batch for small datasets
-    )
-    val_loader = DataLoader(
-            val_enc, batch_size=BATCH_SIZE, shuffle=False,
-            collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
-            prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
+        train_loader = DataLoader(
+                train_enc, batch_size=BATCH_SIZE, shuffle=True,
+                collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
+                prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
+                drop_last=False  # Don't drop last batch for small datasets
         )
+        val_loader = DataLoader(
+                val_enc, batch_size=BATCH_SIZE, shuffle=False,
+                collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+                prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
+            )
 
     # —— Compute node GPU selection logic ——
     if torch.cuda.is_available():
@@ -1608,7 +1620,7 @@ def main():
             else:
                 train_ppl, train_acc, _, step_count, _ = run_epoch_with_sgdr(
                     model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
-        )
+                )
         
         # Validation with detailed analysis every 10 epochs
         detailed = (epoch % 10 == 0) or (epoch == MAX_EPOCHS)
