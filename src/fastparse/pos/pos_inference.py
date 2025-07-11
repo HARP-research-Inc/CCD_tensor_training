@@ -1033,7 +1033,7 @@ def main():
                     break
                 if not text:
                     continue
-                
+                    
                 if args.benchmark:
                     # Run benchmark comparison
                     results = predictor.compare_with_baselines(text)

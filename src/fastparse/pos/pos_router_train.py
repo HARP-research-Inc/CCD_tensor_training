@@ -92,11 +92,11 @@ class DepthWiseCNNRouter(nn.Module):
         x = self.dropout1(x)
         
         # Second conv layer
-        x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
-        x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
-        x = x.transpose(1, 2)                 # back to [B, T, D]
-        x = self.norm2(x)
-        x = self.dropout2(x)
+        #x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
+        #x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
+        #x = x.transpose(1, 2)                 # back to [B, T, D]
+        #x = self.norm2(x)
+        #x = self.dropout2(x)
         
         # Final classification
         logits = self.lin(x)                  # [B, T, 18]
