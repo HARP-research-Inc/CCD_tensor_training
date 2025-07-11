@@ -38,7 +38,7 @@ from data.preprocessing import (
 
 # Constants from original script
 EMB_DIM = 48
-DW_KERNEL = 3
+DW_KERNEL = 5
 N_TAGS = 18
 LR_MAX = 7e-2
 LR_MIN = 1e-5
