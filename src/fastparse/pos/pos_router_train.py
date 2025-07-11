@@ -38,7 +38,7 @@ N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
 # BATCH_SIZE will be auto-calculated based on dataset size
 LR_MAX       = 7e-2  # Lower LR for smaller Penn dataset
 LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
-EPOCHS       = 80    # Total training epochs
+EPOCHS       = 100    # Total training epochs (for --fixed-epochs mode)
 WARMUP_EPOCHS = 3    # Warm-up epochs (gradual LR increase)
 MAX_LEN      = 64    # truncate very long sentences
 LABEL_SMOOTHING = 0.1      # Label smoothing factor for better calibration
@@ -598,7 +598,121 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     return ppl, acc, step_count
 
 ###############################################################################
-# 6.  Temperature scaling calibration
+# 6.  Early stopping implementation
+###############################################################################
+class EarlyStopping:
+    """
+    Early stopping to stop training when a monitored metric has stopped improving.
+    
+    Args:
+        patience: Number of epochs with no improvement to wait before stopping
+        min_delta: Minimum change to qualify as an improvement
+        monitor: Metric to monitor ('val_loss', 'val_acc', 'val_ppl')
+        mode: 'min' for metrics that should decrease, 'max' for metrics that should increase
+        restore_best_weights: Whether to restore model weights from the best epoch
+        verbose: Whether to print early stopping messages
+    """
+    
+    def __init__(self, patience=5, min_delta=1e-4, monitor='val_loss', mode='auto', 
+                 restore_best_weights=True, verbose=True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.monitor = monitor
+        self.restore_best_weights = restore_best_weights
+        self.verbose = verbose
+        
+        # Auto-determine mode based on metric name
+        if mode == 'auto':
+            if 'acc' in monitor:
+                self.mode = 'max'  # Accuracy should increase
+            else:
+                self.mode = 'min'  # Loss/perplexity should decrease
+        else:
+            self.mode = mode
+            
+        self.best = float('inf') if self.mode == 'min' else float('-inf')
+        self.best_epoch = 0
+        self.wait = 0
+        self.stopped_epoch = 0
+        self.best_weights = None
+        
+        if self.verbose:
+            print(f"🛑 Early stopping enabled:")
+            print(f"   • Monitor: {self.monitor} ({'minimize' if self.mode == 'min' else 'maximize'})")
+            print(f"   • Patience: {self.patience} epochs")
+            print(f"   • Min delta: {self.min_delta}")
+            print(f"   • Restore best weights: {self.restore_best_weights}")
+    
+    def __call__(self, epoch, val_loss, val_acc, val_ppl, model):
+        """
+        Check if training should stop and update best weights.
+        
+        Returns:
+            bool: True if training should stop, False otherwise
+        """
+        # Get current metric value
+        if self.monitor == 'val_loss':
+            current = val_loss
+        elif self.monitor == 'val_acc':
+            current = val_acc
+        elif self.monitor == 'val_ppl':
+            current = val_ppl
+        else:
+            raise ValueError(f"Unknown monitor metric: {self.monitor}")
+        
+        # Check if current metric is better than best
+        if self.mode == 'min':
+            improved = current < (self.best - self.min_delta)
+        else:
+            improved = current > (self.best + self.min_delta)
+        
+        if improved:
+            self.best = current
+            self.best_epoch = epoch
+            self.wait = 0
+            
+            # Save best weights
+            if self.restore_best_weights:
+                self.best_weights = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            
+            if self.verbose:
+                direction = "↓" if self.mode == 'min' else "↑"
+                print(f"   🎯 New best {self.monitor}: {current:.4f} {direction} (epoch {epoch})")
+        else:
+            self.wait += 1
+            
+        # Check if we should stop
+        if self.wait >= self.patience:
+            self.stopped_epoch = epoch
+            if self.verbose:
+                print(f"   ⏹️  Early stopping triggered!")
+                print(f"   📊 Best {self.monitor}: {self.best:.4f} at epoch {self.best_epoch}")
+                print(f"   ⏱️  No improvement for {self.patience} epochs")
+            return True
+            
+        return False
+    
+    def restore_best(self, model, device):
+        """Restore the best weights to the model."""
+        if self.best_weights is not None:
+            # Move weights back to device
+            best_weights_device = {k: v.to(device) for k, v in self.best_weights.items()}
+            model.load_state_dict(best_weights_device)
+            if self.verbose:
+                print(f"   🔄 Restored best weights from epoch {self.best_epoch}")
+        
+    def get_stats(self):
+        """Get early stopping statistics."""
+        return {
+            'stopped_epoch': self.stopped_epoch,
+            'best_epoch': self.best_epoch,
+            'best_value': self.best,
+            'patience_used': self.wait,
+            'monitor': self.monitor
+        }
+
+###############################################################################
+# 7.  Temperature scaling calibration
 ###############################################################################
 def calibrate_temperature(model, val_loader, device):
     """Calibrate temperature parameter using validation set."""
@@ -653,10 +767,12 @@ def calibrate_temperature(model, val_loader, device):
     print(f"📊 Optimal temperature: {model.temperature.item():.4f}")
 
 ###############################################################################
-# 7.  Main
+# 8.  Main
 ###############################################################################
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Train POS tagger with auto-scaling batch size and intelligent early stopping (default)"
+    )
     parser.add_argument("--treebank", default="en_ewt",
                         help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
     parser.add_argument("--combine", action="store_true",
@@ -689,6 +805,20 @@ def main():
                         help="SGDR: Steps in first cycle (auto-detected if not provided)")
     parser.add_argument("--sgdr-mult", type=float, default=2.0,
                         help="SGDR: Cycle length multiplier (default: 2.0)")
+    
+    # Early stopping arguments (now default behavior)
+    parser.add_argument("--fixed-epochs", action="store_true",
+                        help="Use fixed epoch training instead of early stopping")
+    parser.add_argument("--patience", type=int, default=15,
+                        help="Early stopping patience (epochs without improvement, default: 15)")
+    parser.add_argument("--min-delta", type=float, default=1e-4,
+                        help="Minimum improvement to count as progress (default: 1e-4)")
+    parser.add_argument("--monitor", type=str, default="val_acc", 
+                        choices=["val_loss", "val_acc", "val_ppl"],
+                        help="Metric to monitor for early stopping (default: val_acc)")
+    parser.add_argument("--max-epochs", type=int, default=500,
+                        help="Maximum epochs for early stopping (default: 500)")
+    
     args = parser.parse_args()
 
     # Validate argument combinations
@@ -726,6 +856,17 @@ def main():
     # Memory optimization for compute nodes
     import os
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'  # Reduce memory fragmentation
+
+    # Configure training strategy (early stopping is now default)
+    if args.fixed_epochs:
+        MAX_EPOCHS = EPOCHS
+        USE_EARLY_STOPPING = False
+        print(f"📅 Fixed epochs mode: training for exactly {MAX_EPOCHS} epochs")
+    else:
+        MAX_EPOCHS = args.max_epochs
+        USE_EARLY_STOPPING = True
+        print(f"🛑 Early stopping mode (default): max {MAX_EPOCHS} epochs, patience {args.patience}")
+        print(f"   📊 Monitoring: {args.monitor} ({'maximize' if 'acc' in args.monitor else 'minimize'})")
 
     # Configure label smoothing and temperature scaling
     global LABEL_SMOOTHING, TEMP_SCALING, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
@@ -1031,7 +1172,7 @@ def main():
     print(f"   • Dataset size: {len(ds_train):,} train, {len(ds_val):,} val sentences")
     print(f"   • Vocabulary size: {len(vocab):,} tokens")
     print(f"   • Steps per epoch: {len(train_loader):,}")
-    print(f"   • Total training steps: {len(train_loader) * EPOCHS:,}")
+    print(f"   • Total training steps: {len(train_loader) * MAX_EPOCHS:,} (max)")
     
     # Check which POS classes are present in the dataset
     print(f"   • POS tag analysis:")
@@ -1067,6 +1208,17 @@ def main():
     # Training loop variables
     step_count = 0
     
+    # Initialize early stopping (now default)
+    early_stopping = None
+    if USE_EARLY_STOPPING:
+        early_stopping = EarlyStopping(
+            patience=args.patience,
+            min_delta=args.min_delta,
+            monitor=args.monitor,
+            restore_best_weights=True,
+            verbose=False  # Less verbose since it's default behavior now
+        )
+    
     # SGDR cycle tracking variables
     if not use_cosine:
         sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
@@ -1083,7 +1235,7 @@ def main():
         sgdr_eta_min = LR_MAX * (0.01 if args.penn_treebank and len(train_loader) < 200 else 0.1)
         previous_lr = LR_MIN  # Initialize for SGDR tracking
     
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, MAX_EPOCHS + 1):
         if use_cosine:
             # Standard training with epoch-based scheduling
             train_ppl, train_acc, _ = run_epoch(
@@ -1146,6 +1298,15 @@ def main():
               f"val acc {val_acc*100:5.2f}% | "
               f"val ppl {val_ppl:4.2f} | "
               f"lr {current_lr:.1e} ({phase}){temp_str}")
+        
+        # Check early stopping
+        if early_stopping is not None:
+            # Convert metrics to appropriate format for early stopping
+            val_loss_for_es = val_ppl  # Use perplexity as loss proxy (lower is better)
+            
+            if early_stopping(epoch, val_loss_for_es, val_acc, val_ppl, model):
+                print(f"\n🛑 Training stopped early at epoch {epoch}")
+                break
         
         # Print detailed analysis
         if detailed and analysis:
@@ -1279,6 +1440,19 @@ def main():
                 print(f"   Weighted F1: {analysis['classification_report']['weighted avg']['f1-score']*100:.2f}%")
             print()
 
+    # Handle early stopping restoration and stats
+    if early_stopping is not None:
+        if early_stopping.best_weights is not None:
+            early_stopping.restore_best(model, device)
+            
+        # Print early stopping statistics
+        stats = early_stopping.get_stats()
+        print(f"\n📊 Early Stopping Summary:")
+        print(f"   • Training stopped at epoch: {stats['stopped_epoch']}")
+        print(f"   • Best epoch: {stats['best_epoch']}")
+        print(f"   • Best {stats['monitor']}: {stats['best_value']:.4f}")
+        print(f"   • Patience used: {stats['patience_used']}/{early_stopping.patience}")
+    
     # Apply temperature scaling calibration
     if TEMP_SCALING:
         calibrate_temperature(model, val_loader, device)
@@ -1287,11 +1461,11 @@ def main():
         print("🔍 Re-evaluating with calibrated temperature...")
         cal_ppl, cal_acc, cal_analysis = run_epoch(
             model, val_loader, None, device, None, criterion, 
-            epoch=EPOCHS, detailed_analysis=True
+            epoch=MAX_EPOCHS, detailed_analysis=True
         )
         print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%, ppl {cal_ppl:.2f}")
 
-    # Save model with dataset info
+    # Save final model with dataset info
     if args.penn_treebank:
         model_name = "router_penn_wsj.pt"
     elif args.combined_penn:
@@ -1302,7 +1476,13 @@ def main():
         model_name = f"router_{args.treebank}.pt"
     
     torch.save(model.state_dict(), model_name)
-    print(f"✓ finished; weights saved to {model_name}")
+    
+    # Add training method to the finish message
+    training_method = "early stopping" if USE_EARLY_STOPPING else "fixed epochs"
+    print(f"✓ finished; weights saved to {model_name} (trained with {training_method})")
+    
+    if early_stopping and early_stopping.best_weights:
+        print(f"💡 Model contains best weights from epoch {early_stopping.best_epoch}")
 
 if __name__ == "__main__":
     main()
