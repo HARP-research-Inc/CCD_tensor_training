@@ -10,19 +10,24 @@
 # - Multi-worker DataLoader with prefetching
 # - Non-blocking GPU transfers
 # - Pre-tensorified datasets to avoid Python overhead
+# - Label smoothing for better calibration
+# - Temperature scaling for probability calibration
 
 # Run: python .\pos_router_train.py --combine
 
 # ---------------------------------------------------------------------#
 # 0.  Dependencies
 # ---------------------------------------------------------------------#
-# pip install torch datasets tqdm sentencepiece
+# pip install torch datasets tqdm sentencepiece scikit-learn
 import math, argparse
-import torch, torch.nn as nn, torch.optim as optim
+import torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from datasets import load_dataset
 from tqdm import tqdm
+import numpy as np
+from sklearn.metrics import classification_report
+from collections import defaultdict
 
 ###############################################################################
 # 1.  Hyper-parameters
@@ -39,12 +44,20 @@ MAX_LEN      = 64          # truncate very long sentences
 schedule_first = 0.80      # First LR drop at 85% (was 98%)
 schedule_second = 0.81     # Second LR drop at 90%
 schedule_third = 0
+LABEL_SMOOTHING = 0.1      # Label smoothing factor for better calibration
+TEMP_SCALING = True        # Enable temperature scaling
+
+# Universal POS tag names for better reporting
+UPOS_TAGS = [
+    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", "DET", "CCONJ", 
+    "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+]
 
 ###############################################################################
-# 2.  Enhanced router model with more capacity
+# 2.  Enhanced router model with more capacity and temperature scaling
 ###############################################################################
 class DepthWiseCNNRouter(nn.Module):
-    """Enhanced Token EMB → depth-wise Conv → POS logits with better capacity."""
+    """Enhanced Token EMB → depth-wise Conv → POS logits with temperature scaling."""
     def __init__(self, vocab_size: int):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, EMB_DIM, padding_idx=0)
@@ -74,11 +87,15 @@ class DepthWiseCNNRouter(nn.Module):
         
         # Final classification layer
         self.lin = nn.Linear(EMB_DIM, N_TAGS)
+        
+        # Temperature parameter for calibration
+        self.temperature = nn.Parameter(torch.ones(1))
 
-    def forward(self, token_ids, mask):
+    def forward(self, token_ids, mask, use_temperature=False):
         """
         token_ids : [B, T] int64
         mask      : [B, T] bool  (True on real tokens, False on padding)
+        use_temperature : bool - whether to apply temperature scaling
         returns   : log-probs  [B, T, N_TAGS]
         """
         x = self.emb(token_ids)               # [B, T, D]
@@ -100,13 +117,52 @@ class DepthWiseCNNRouter(nn.Module):
         
         # Final classification
         logits = self.lin(x)                  # [B, T, 18]
+        
+        # Apply temperature scaling if requested
+        if use_temperature:
+            logits = logits / self.temperature
+        
         # Use −inf on padding positions so CE ignores them
         logits = logits.masked_fill(~mask.unsqueeze(-1), -1e4)
-        return torch.log_softmax(logits, dim=-1)
-
+        return F.log_softmax(logits, dim=-1)
 
 ###############################################################################
-# 3.  UD data → tensors
+# 3.  Label smoothing loss function
+###############################################################################
+class LabelSmoothingLoss(nn.Module):
+    """Label smoothing loss for better calibration."""
+    def __init__(self, smoothing=0.1, ignore_index=-100):
+        super().__init__()
+        self.smoothing = smoothing
+        self.ignore_index = ignore_index
+        
+    def forward(self, pred, target):
+        """
+        pred: [B, C, T] log probabilities
+        target: [B, T] target labels
+        """
+        B, C, T = pred.shape
+        pred = pred.transpose(1, 2).contiguous().view(-1, C)  # [B*T, C]
+        target = target.view(-1)  # [B*T]
+        
+        # Create one-hot with label smoothing
+        true_dist = torch.zeros_like(pred)
+        true_dist.fill_(self.smoothing / (C - 1))
+        
+        # Only apply to non-ignored indices
+        mask = target != self.ignore_index
+        if mask.any():
+            true_dist[mask] = true_dist[mask].scatter_(1, target[mask].unsqueeze(1), 1.0 - self.smoothing)
+        
+        # Compute loss only on non-ignored tokens
+        loss = -true_dist * pred
+        loss = loss.sum(dim=1)
+        loss = loss[mask].mean() if mask.any() else torch.tensor(0.0, device=pred.device)
+        
+        return loss
+
+###############################################################################
+# 4.  UD data → tensors
 ###############################################################################
 def build_vocab(train):
     """Map every token form to a unique integer id (0 = PAD)."""
@@ -188,12 +244,18 @@ def collate(batch):
     return ids, upos, mask
 
 ###############################################################################
-# 4.  Training / validation loops
+# 5.  Training / validation loops with per-class analysis
 ###############################################################################
-def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None):
+def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterion=None, 
+              epoch=None, detailed_analysis=False):
     train = optimiser is not None
     model.train() if train else model.eval()
     total_loss, total_tok, correct = 0.0, 0, 0
+    
+    # For detailed analysis
+    all_preds = []
+    all_targets = []
+    per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0, 'loss': 0.0})
 
     for ids, upos, mask in tqdm(loader, leave=False):
         # Non-blocking transfers to GPU
@@ -205,9 +267,12 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None):
             # Mixed precision training
             with torch.cuda.amp.autocast():
                 logp = model(ids, mask)                # [B, T, 18]
-                loss = nn.functional.nll_loss(
-                    logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
-                )
+                if criterion is not None:
+                    loss = criterion(logp.transpose(1,2), upos)
+                else:
+                    loss = F.nll_loss(
+                        logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+                    )
             
             optimiser.zero_grad()
             scaler.scale(loss).backward()
@@ -215,10 +280,15 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None):
             scaler.update()
         else:
             # Standard training/validation
-            logp = model(ids, mask)                # [B, T, 18]
-            loss = nn.functional.nll_loss(
-                logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
-            )
+            # Apply temperature scaling during validation
+            use_temp = not train and TEMP_SCALING
+            logp = model(ids, mask, use_temperature=use_temp)    # [B, T, 18]
+            if criterion is not None:
+                loss = criterion(logp.transpose(1,2), upos)
+            else:
+                loss = F.nll_loss(
+                    logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+                )
             
             if train:
                 optimiser.zero_grad()
@@ -229,13 +299,108 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None):
         total_tok   += mask.sum().item()
         pred        = logp.argmax(-1)
         correct     += ((pred == upos) & mask).sum().item()
+        
+        # Collect predictions for detailed analysis
+        if detailed_analysis:
+            valid_mask = mask & (upos != -100)
+            if valid_mask.any():
+                all_preds.extend(pred[valid_mask].cpu().numpy())
+                all_targets.extend(upos[valid_mask].cpu().numpy())
+                
+                # Per-class statistics
+                for i in range(N_TAGS):
+                    class_mask = valid_mask & (upos == i)
+                    if class_mask.any():
+                        class_correct = ((pred == upos) & class_mask).sum().item()
+                        class_total = class_mask.sum().item()
+                        per_class_stats[i]['correct'] += class_correct
+                        per_class_stats[i]['total'] += class_total
 
-    ppl = math.exp(total_loss / total_tok)
-    acc = correct / total_tok
-    return ppl, acc
+    ppl = math.exp(total_loss / total_tok) if total_tok > 0 else float('inf')
+    acc = correct / total_tok if total_tok > 0 else 0.0
+    
+    # Generate detailed analysis
+    analysis = {}
+    if detailed_analysis and all_preds:
+        try:
+            # Classification report
+            report = classification_report(
+                all_targets, all_preds, 
+                target_names=UPOS_TAGS[:N_TAGS], 
+                output_dict=True, 
+                zero_division=0
+            )
+            analysis['classification_report'] = report
+            
+            # Per-class accuracy
+            per_class_acc = {}
+            for i, stats in per_class_stats.items():
+                if stats['total'] > 0:
+                    per_class_acc[UPOS_TAGS[i]] = stats['correct'] / stats['total']
+            analysis['per_class_accuracy'] = per_class_acc
+            
+        except Exception as e:
+            print(f"Warning: Could not generate detailed analysis: {e}")
+    
+    return ppl, acc, analysis
 
 ###############################################################################
-# 5.  Main
+# 6.  Temperature scaling calibration
+###############################################################################
+def calibrate_temperature(model, val_loader, device):
+    """Calibrate temperature parameter using validation set."""
+    print("🌡️  Calibrating temperature for better probability calibration...")
+    
+    model.eval()
+    logits_list = []
+    targets_list = []
+    
+    # Collect logits and targets
+    with torch.no_grad():
+        for ids, upos, mask in tqdm(val_loader, desc="Collecting logits", leave=False):
+            ids = ids.to(device, non_blocking=True)
+            upos = upos.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            
+            # Get logits before softmax (without temperature)
+            x = model.emb(ids)
+            x = model.emb_dropout(x)
+            x = x.transpose(1, 2)
+            x = model.pw1(model.act1(model.dw1(x)))
+            x = x.transpose(1, 2)
+            x = model.norm1(x)
+            x = model.dropout1(x)
+            logits = model.lin(x)
+            
+            # Collect valid positions
+            valid_mask = mask & (upos != -100)
+            if valid_mask.any():
+                logits_list.append(logits[valid_mask])
+                targets_list.append(upos[valid_mask])
+    
+    if not logits_list:
+        print("No valid data for temperature calibration")
+        return
+    
+    all_logits = torch.cat(logits_list)
+    all_targets = torch.cat(targets_list)
+    
+    # Optimize temperature
+    temp_optimizer = optim.LBFGS([model.temperature], lr=0.01, max_iter=100)
+    
+    def temperature_loss():
+        temp_optimizer.zero_grad()
+        scaled_logits = all_logits / model.temperature
+        loss = F.cross_entropy(scaled_logits, all_targets)
+        loss.backward()
+        return loss
+    
+    temp_optimizer.step(temperature_loss)
+    
+    print(f"📊 Optimal temperature: {model.temperature.item():.4f}")
+
+###############################################################################
+# 7.  Main
 ###############################################################################
 def main():
     parser = argparse.ArgumentParser()
@@ -245,10 +410,21 @@ def main():
                         help="Combine multiple English treebanks for more training data")
     parser.add_argument("--augment", action="store_true",
                         help="Apply data augmentation techniques")
+    parser.add_argument("--no-label-smoothing", action="store_true",
+                        help="Disable label smoothing")
+    parser.add_argument("--no-temp-scaling", action="store_true",
+                        help="Disable temperature scaling")
     args = parser.parse_args()
     
     # Enable cuDNN autotuning for faster convolutions
     torch.backends.cudnn.benchmark = True
+    
+    # Configure label smoothing and temperature scaling
+    global LABEL_SMOOTHING, TEMP_SCALING
+    if args.no_label_smoothing:
+        LABEL_SMOOTHING = 0.0
+    if args.no_temp_scaling:
+        TEMP_SCALING = False
 
     print("Loading UD dataset …")
     
@@ -338,6 +514,12 @@ def main():
     model  = DepthWiseCNNRouter(len(vocab)).to(device)
     opt    = optim.AdamW(model.parameters(), lr=LR_HIGH, weight_decay=1e-4)  # Added weight decay
     
+    # Initialize loss function with label smoothing
+    criterion = None
+    if LABEL_SMOOTHING > 0:
+        criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
+        print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
+    
     # Initialize AMP scaler for mixed precision training
     scaler = GradScaler() if device == "cuda" else None
     
@@ -346,10 +528,20 @@ def main():
     
     print(f"🚀 Starting training on {device}")
     print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
+    if TEMP_SCALING:
+        print(f"🌡️  Temperature scaling enabled")
 
     for epoch in range(1, EPOCHS + 1):
-        train_ppl, train_acc = run_epoch(model, train_loader, opt, device, scaler)
-        val_ppl,   val_acc   = run_epoch(model, val_loader, None, device, None)
+        # Training with label smoothing
+        train_ppl, train_acc, _ = run_epoch(
+            model, train_loader, opt, device, scaler, criterion, epoch
+        )
+        
+        # Validation with detailed analysis every 10 epochs
+        detailed = (epoch % 10 == 0) or (epoch == EPOCHS)
+        val_ppl, val_acc, analysis = run_epoch(
+            model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
+        )
         
         # Two-stage learning rate schedule
         if train_acc >= schedule_first and not lr_first_switched:
@@ -365,11 +557,38 @@ def main():
             lr_second_switched = True
         
         current_lr = opt.param_groups[0]['lr']
+        temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
         print(f"epoch {epoch:02d} | "
               f"train acc {train_acc*100:5.2f}% | "
               f"val acc {val_acc*100:5.2f}% | "
               f"val ppl {val_ppl:4.2f} | "
-              f"lr {current_lr:.1e}")
+              f"lr {current_lr:.1e}{temp_str}")
+        
+        # Print detailed analysis
+        if detailed and analysis:
+            print("\n📊 Detailed Per-Class Analysis:")
+            if 'per_class_accuracy' in analysis:
+                sorted_classes = sorted(analysis['per_class_accuracy'].items(), 
+                                      key=lambda x: x[1], reverse=True)
+                for class_name, acc in sorted_classes:
+                    print(f"  {class_name:8s}: {acc*100:5.2f}%")
+            
+            if 'classification_report' in analysis:
+                print(f"\n📋 Macro avg F1: {analysis['classification_report']['macro avg']['f1-score']*100:.2f}%")
+                print(f"   Weighted F1: {analysis['classification_report']['weighted avg']['f1-score']*100:.2f}%")
+            print()
+
+    # Apply temperature scaling calibration
+    if TEMP_SCALING:
+        calibrate_temperature(model, val_loader, device)
+        
+        # Re-evaluate with calibrated temperature
+        print("🔍 Re-evaluating with calibrated temperature...")
+        cal_ppl, cal_acc, cal_analysis = run_epoch(
+            model, val_loader, None, device, None, criterion, 
+            epoch=EPOCHS, detailed_analysis=True
+        )
+        print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%, ppl {cal_ppl:.2f}")
 
     # Save model with dataset info
     if args.combine:
