@@ -36,14 +36,11 @@ EMB_DIM      = 32          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
 BATCH_SIZE   = 4096  # Optimal for GPU utilization - NOT full dataset size!
-LR_HIGH      = 4e-2  # Initial learning rate
-LR_MID       = 2e-2  # Reduced learning rate after first threshold
-LR_LOW       = 1e-2  # Further reduced learning rate after second threshold
-EPOCHS       = 40    # Increased from 30 to allow more fine-tuning
-MAX_LEN      = 64          # truncate very long sentences
-schedule_first = 0.80      # First LR drop at 85% (was 98%)
-schedule_second = 0.81     # Second LR drop at 90%
-schedule_third = 0
+LR_MAX       = 4e-2  # Peak learning rate after warm-up
+LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
+EPOCHS       = 40    # Total training epochs
+WARMUP_EPOCHS = 3    # Warm-up epochs (gradual LR increase)
+MAX_LEN      = 64    # truncate very long sentences
 LABEL_SMOOTHING = 0.1      # Label smoothing factor for better calibration
 TEMP_SCALING = True        # Enable temperature scaling
 
@@ -512,7 +509,7 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model  = DepthWiseCNNRouter(len(vocab)).to(device)
-    opt    = optim.AdamW(model.parameters(), lr=LR_HIGH, weight_decay=1e-4)  # Added weight decay
+    opt    = optim.AdamW(model.parameters(), lr=LR_MIN, weight_decay=1e-4)  # Start with min LR for warm-up
     
     # Initialize loss function with label smoothing
     criterion = None
@@ -523,11 +520,21 @@ def main():
     # Initialize AMP scaler for mixed precision training
     scaler = GradScaler() if device == "cuda" else None
     
-    lr_first_switched = False   # Track first LR drop
-    lr_second_switched = False  # Track second LR drop
+    # Cosine annealing scheduler with warm-up
+    def get_lr(epoch):
+        if epoch < WARMUP_EPOCHS:
+            # Linear warm-up from LR_MIN to LR_MAX
+            return LR_MIN + (LR_MAX - LR_MIN) * epoch / WARMUP_EPOCHS
+        else:
+            # Cosine decay from LR_MAX to LR_MIN
+            progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
+            return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
+    
+    scheduler = optim.lr_scheduler.LambdaLR(opt, lambda epoch: get_lr(epoch) / LR_MIN)
     
     print(f"🚀 Starting training on {device}")
     print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
+    print(f"📈 Cosine annealing LR: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e} (warmup: {WARMUP_EPOCHS} epochs)")
     if TEMP_SCALING:
         print(f"🌡️  Temperature scaling enabled")
 
@@ -543,26 +550,17 @@ def main():
             model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
         )
         
-        # Two-stage learning rate schedule
-        if train_acc >= schedule_first and not lr_first_switched:
-            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_HIGH} to {LR_MID}")
-            for param_group in opt.param_groups:
-                param_group['lr'] = LR_MID
-            lr_first_switched = True
-        
-        if train_acc >= schedule_second and not lr_second_switched:
-            print(f"🎯 Train accuracy reached {train_acc*100:.2f}% - switching LR from {LR_MID} to {LR_LOW}")
-            for param_group in opt.param_groups:
-                param_group['lr'] = LR_LOW
-            lr_second_switched = True
+        # Step the learning rate scheduler
+        scheduler.step()
         
         current_lr = opt.param_groups[0]['lr']
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
+        phase = "warmup" if epoch <= WARMUP_EPOCHS else "cosine"
         print(f"epoch {epoch:02d} | "
               f"train acc {train_acc*100:5.2f}% | "
               f"val acc {val_acc*100:5.2f}% | "
               f"val ppl {val_ppl:4.2f} | "
-              f"lr {current_lr:.1e}{temp_str}")
+              f"lr {current_lr:.1e} ({phase}){temp_str}")
         
         # Print detailed analysis
         if detailed and analysis:
