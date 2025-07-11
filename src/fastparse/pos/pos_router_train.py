@@ -552,12 +552,37 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     
     return ppl, acc, f1_score_val, analysis
 
-def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch):
-    """Training epoch with SGDR step-based learning rate scheduling."""
+def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch, 
+                        adaptive_batch_sizer=None, train_dataset=None, collate_fn=None, 
+                        num_workers=None, pin_memory=None, prefetch_factor=None):
+    """Training epoch with SGDR step-based learning rate scheduling and optional adaptive batch sizing."""
     model.train()
     total_loss, total_tok, correct = 0.0, 0, 0
+    current_loader = loader
+    
+    # Track batch size changes for reporting
+    batch_size_changes = []
 
-    for ids, upos, mask in tqdm(loader, leave=False):
+    for batch_idx, (ids, upos, mask) in enumerate(tqdm(current_loader, leave=False)):
+        # Update batch size with adaptive batch sizer
+        if adaptive_batch_sizer is not None:
+            old_batch_size = adaptive_batch_sizer.get_current_batch_size()
+            new_batch_size = adaptive_batch_sizer.update_batch_size(
+                model, current_loader, device, criterion, epoch
+            )
+            
+            # Recreate DataLoader if batch size changed significantly
+            if abs(new_batch_size - old_batch_size) > 0.1 * old_batch_size and batch_idx < len(current_loader) - 1:
+                batch_size_changes.append({
+                    'batch_idx': batch_idx,
+                    'old_size': old_batch_size,
+                    'new_size': new_batch_size,
+                    'stats': adaptive_batch_sizer.get_statistics()
+                })
+                
+                # Create new DataLoader with updated batch size (for next epoch)
+                # Current batch processing continues normally
+        
         # Non-blocking transfers to GPU
         ids   = ids.to(device,   non_blocking=True)
         upos  = upos.to(device,  non_blocking=True)
@@ -606,7 +631,8 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     ppl = math.exp(avg_loss_per_token) if avg_loss_per_token < 100 else float('inf')  # Avoid overflow
     acc = correct / total_tok if total_tok > 0 else 0.0
     
-    return ppl, acc, 0.0, step_count  # Add f1_score=0.0 for consistency
+    # Return batch size changes for reporting
+    return ppl, acc, 0.0, step_count, batch_size_changes  # Add f1_score=0.0 for consistency
 
 ###############################################################################
 # 6.  Early stopping implementation
@@ -763,7 +789,7 @@ def calibrate_temperature(model, val_loader, device, verbose=True):
     if not logits_list:
         if verbose:
             print("No valid data for temperature calibration")
-        return
+            return
     
     all_logits = torch.cat(logits_list)
     all_targets = torch.cat(targets_list)
@@ -784,11 +810,218 @@ def calibrate_temperature(model, val_loader, device, verbose=True):
         print(f"📊 Optimal temperature: {model.temperature.item():.4f}")
 
 ###############################################################################
-# 8.  Main
+# 8.  Adaptive Batch Sizing (CABS & Small-B-Early)
+###############################################################################
+
+class AdaptiveBatchSizer:
+    """
+    Implements CABS (Coupled Adaptive Batch Size) and Small-B-Early strategies.
+    
+    Based on Friedlander & Schmidt (2012) and generalization theory from Hardt et al. (2016).
+    """
+    
+    def __init__(self, 
+                 min_batch_size=32, 
+                 max_batch_size=2048, 
+                 noise_threshold=0.1, 
+                 pilot_batch_size=128,
+                 small_batch_early=True,
+                 variance_estimation_freq=5):
+        self.min_batch_size = min_batch_size
+        self.max_batch_size = max_batch_size
+        self.noise_threshold = noise_threshold  # θ in the paper
+        self.pilot_batch_size = pilot_batch_size
+        self.small_batch_early = small_batch_early
+        self.variance_estimation_freq = variance_estimation_freq
+        
+        # State tracking
+        self.current_batch_size = min_batch_size if small_batch_early else pilot_batch_size
+        self.step_count = 0
+        self.gradient_variance = None
+        self.gradient_norm = None
+        self.batch_size_history = []
+        
+        print(f"🎯 Adaptive Batch Sizing (CABS) enabled:")
+        print(f"   • Range: {min_batch_size} → {max_batch_size}")
+        print(f"   • Noise threshold θ: {noise_threshold}")
+        print(f"   • Small-batch-early: {small_batch_early}")
+        print(f"   • Variance estimation freq: every {variance_estimation_freq} steps")
+    
+    def estimate_gradient_statistics(self, model, data_loader, device, criterion=None, max_samples=None):
+        """
+        Estimate gradient variance Σ(w) and gradient norm ||∇F(w)|| using a pilot batch.
+        
+        Returns:
+            gradient_variance: Sample variance of gradients
+            gradient_norm: Norm of mean gradient
+        """
+        model.train()
+        gradients = []
+        
+        # Use limited samples for efficiency
+        sample_count = 0
+        max_samples = max_samples or min(self.pilot_batch_size * 4, 512)
+        
+        for ids, upos, mask in data_loader:
+            if sample_count >= max_samples:
+                break
+                
+            ids = ids.to(device, non_blocking=True)
+            upos = upos.to(device, non_blocking=True) 
+            mask = mask.to(device, non_blocking=True)
+            
+            # Get gradients for each sample in the batch
+            batch_size = ids.size(0)
+            for i in range(min(batch_size, max_samples - sample_count)):
+                model.zero_grad()
+                
+                # Single sample forward pass
+                single_ids = ids[i:i+1]
+                single_upos = upos[i:i+1]
+                single_mask = mask[i:i+1]
+                
+                logp = model(single_ids, single_mask)
+                if criterion is not None:
+                    loss = criterion(logp.transpose(1,2), single_upos)
+                else:
+                    loss = F.nll_loss(logp.transpose(1,2), single_upos, 
+                                    reduction="sum", ignore_index=-100)
+                
+                loss.backward()
+                
+                # Collect gradient vector
+                grad_vector = []
+                for param in model.parameters():
+                    if param.grad is not None:
+                        grad_vector.append(param.grad.view(-1))
+                
+                if grad_vector:
+                    grad_flat = torch.cat(grad_vector)
+                    gradients.append(grad_flat.detach())
+                
+                sample_count += 1
+                if sample_count >= max_samples:
+                    break
+        
+        if not gradients:
+            return None, None
+        
+        # Stack gradients and compute statistics
+        gradients = torch.stack(gradients)  # [N, D]
+        mean_gradient = gradients.mean(dim=0)  # [D]
+        
+        # Compute sample variance: (1/N) * sum_i ||g_i - mean_g||^2
+        centered_gradients = gradients - mean_gradient.unsqueeze(0)
+        gradient_variance = (centered_gradients.norm(dim=1) ** 2).mean().item()
+        gradient_norm = mean_gradient.norm().item()
+        
+        return gradient_variance, gradient_norm
+    
+    def compute_cabs_batch_size(self):
+        """
+        Compute CABS batch size: B = ceil(Σ(w) / (θ * ||∇F(w)||^2))
+        """
+        if self.gradient_variance is None or self.gradient_norm is None:
+            return self.current_batch_size
+        
+        if self.gradient_norm < 1e-8:  # Avoid division by zero
+            return self.current_batch_size
+        
+        # B_CABS = ceil(Σ(w) / (θ * ||∇F(w)||^2))
+        optimal_batch_size = math.ceil(
+            self.gradient_variance / (self.noise_threshold * self.gradient_norm ** 2)
+        )
+        
+        # Clamp to valid range
+        optimal_batch_size = max(self.min_batch_size, 
+                               min(optimal_batch_size, self.max_batch_size))
+        
+        return optimal_batch_size
+    
+    def update_batch_size(self, model, data_loader, device, criterion=None, epoch=None):
+        """
+        Update batch size based on CABS algorithm.
+        """
+        self.step_count += 1
+        
+        # Re-estimate gradient statistics periodically
+        if (self.step_count - 1) % self.variance_estimation_freq == 0:
+            grad_var, grad_norm = self.estimate_gradient_statistics(
+                model, data_loader, device, criterion, max_samples=256
+            )
+            
+            if grad_var is not None and grad_norm is not None:
+                self.gradient_variance = grad_var
+                self.gradient_norm = grad_norm
+        
+        # Compute new batch size
+        new_batch_size = self.compute_cabs_batch_size()
+        
+        # Apply Small-B-Early strategy: grow batch size gradually over epochs
+        if self.small_batch_early and epoch is not None:
+            # Gradually increase minimum batch size over epochs
+            early_epochs = 20  # First 20 epochs use small batches
+            if epoch <= early_epochs:
+                growth_factor = epoch / early_epochs
+                min_size_adjusted = int(self.min_batch_size + 
+                                       growth_factor * (self.pilot_batch_size - self.min_batch_size))
+                new_batch_size = max(min_size_adjusted, min(new_batch_size, self.pilot_batch_size))
+        
+        # Track batch size changes
+        if new_batch_size != self.current_batch_size:
+            self.batch_size_history.append({
+                'step': self.step_count,
+                'epoch': epoch,
+                'old_size': self.current_batch_size,
+                'new_size': new_batch_size,
+                'grad_var': self.gradient_variance,
+                'grad_norm': self.gradient_norm,
+                'noise_ratio': (self.gradient_variance / (self.gradient_norm ** 2)) if self.gradient_norm > 1e-8 else None
+            })
+            
+            self.current_batch_size = new_batch_size
+        
+        return self.current_batch_size
+    
+    def get_current_batch_size(self):
+        """Get current batch size."""
+        return self.current_batch_size
+    
+    def get_statistics(self):
+        """Get current gradient statistics."""
+        return {
+            'batch_size': self.current_batch_size,
+            'gradient_variance': self.gradient_variance,
+            'gradient_norm': self.gradient_norm,
+            'noise_ratio': (self.gradient_variance / (self.gradient_norm ** 2)) if 
+                          (self.gradient_norm and self.gradient_norm > 1e-8) else None,
+            'step_count': self.step_count,
+            'batch_size_changes': len(self.batch_size_history)
+        }
+
+def create_adaptive_dataloader(dataset, batch_sizer, collate_fn, num_workers, pin_memory, prefetch_factor):
+    """
+    Create a DataLoader that can be recreated with different batch sizes.
+    """
+    return DataLoader(
+        dataset, 
+        batch_size=batch_sizer.get_current_batch_size(),
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=True,
+        drop_last=False
+    )
+
+###############################################################################
+# 9.  Main
 ###############################################################################
 def main():
     parser = argparse.ArgumentParser(
-        description="Train POS tagger with auto-scaling batch size and intelligent early stopping using Macro F1 (default)"
+        description="Train POS tagger with intelligent batch sizing, early stopping, and advanced optimization techniques. "
+                   "Supports traditional auto-scaling or advanced CABS (Coupled Adaptive Batch Size) for better generalization."
     )
     parser.add_argument("--treebank", default="en_ewt",
                         help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
@@ -840,7 +1073,37 @@ def main():
     parser.add_argument("--max-epochs", type=int, default=500,
                         help="Maximum epochs for early stopping (default: 500)")
     
+    # Advanced batch sizing arguments
+    parser.add_argument("--adaptive-batch", action="store_true",
+                        help="Enable CABS (Coupled Adaptive Batch Size) for better generalization")
+    parser.add_argument("--noise-threshold", type=float, default=0.1,
+                        help="Noise threshold θ for adaptive batch sizing (default: 0.1)")
+    parser.add_argument("--min-batch-size", type=int, default=32,
+                        help="Minimum batch size for adaptive sizing (default: 32)")
+    parser.add_argument("--max-batch-adaptive", type=int, default=2048,
+                        help="Maximum batch size for adaptive sizing (default: 2048)")
+    parser.add_argument("--pilot-batch-size", type=int, default=128,
+                        help="Pilot batch size for gradient variance estimation (default: 128)")
+    parser.add_argument("--small-batch-early", action="store_true",
+                        help="Start with small batches for better exploration (combines with adaptive)")
+    parser.add_argument("--variance-estimation-freq", type=int, default=5,
+                        help="How often to re-estimate gradient variance (every N steps, default: 5)")
+    
     args = parser.parse_args()
+    
+    # Validate adaptive batch sizing arguments
+    if args.adaptive_batch:
+        if args.min_batch_size >= args.max_batch_adaptive:
+            print("❌ ERROR: --min-batch-size must be less than --max-batch-adaptive")
+            exit(1)
+        if args.pilot_batch_size < args.min_batch_size or args.pilot_batch_size > args.max_batch_adaptive:
+            print("❌ ERROR: --pilot-batch-size must be between --min-batch-size and --max-batch-adaptive")
+            exit(1)
+        if args.noise_threshold <= 0:
+            print("❌ ERROR: --noise-threshold must be positive")
+            exit(1)
+        if args.batch_size is not None:
+            print("⚠️  Warning: --batch-size ignored when using --adaptive-batch")
 
     # Validate argument combinations
     if args.penn_treebank and args.combine:
@@ -908,14 +1171,14 @@ def main():
         print(f"   📊 Monitoring: {args.monitor} ({'maximize' if 'acc' in args.monitor or 'f1' in args.monitor else 'minimize'})")
         if CALCULATE_F1:
             print(f"   🎯 {F1_AVERAGE.title()} F1 calculation enabled for better multi-class evaluation")
-
+    
     # Configure label smoothing and temperature scaling
     global LABEL_SMOOTHING, TEMP_SCALING, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
     if args.no_label_smoothing:
         LABEL_SMOOTHING = 0.0
     if args.no_temp_scaling:
         TEMP_SCALING = False
-    
+
     # Apply compute node overrides
     global PREFETCH_FACTOR
     if args.compute_node:
@@ -1050,33 +1313,61 @@ def main():
         from datasets import Dataset
         if not hasattr(ds_train, 'map'):
             ds_train = Dataset.from_list(ds_train)
-
+    
     # Pre-tensorify and DataLoader setup with auto-scaling batch size
     train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
     val_enc   = ds_val  .map(lambda ex: encode_sent(ex, vocab))
     train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
     val_enc   = val_enc  .with_format("torch", columns=["ids", "upos"], output_all_columns=True)
 
-    # Auto-calculate optimal batch size unless manually overridden
-    if args.batch_size:
-        BATCH_SIZE = args.batch_size
-        print(f"📦 Manual batch size: {BATCH_SIZE}")
+    # Initialize batch sizing strategy
+    adaptive_batch_sizer = None
+    
+    if args.adaptive_batch:
+        # Adaptive batch sizing (CABS + Small-B-Early)
+        adaptive_batch_sizer = AdaptiveBatchSizer(
+            min_batch_size=args.min_batch_size,
+            max_batch_size=args.max_batch_adaptive,
+            noise_threshold=args.noise_threshold,
+            pilot_batch_size=args.pilot_batch_size,
+            small_batch_early=args.small_batch_early,
+            variance_estimation_freq=args.variance_estimation_freq
+        )
+        BATCH_SIZE = adaptive_batch_sizer.get_current_batch_size()
+        print(f"📦 Adaptive batch sizing: starts at {BATCH_SIZE}")
+        
+        # Create adaptive DataLoaders
+        train_loader = create_adaptive_dataloader(
+            train_enc, adaptive_batch_sizer, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+        )
+        # Validation loader uses fixed batch size for consistency
+        val_batch_size = min(args.pilot_batch_size, len(ds_val) // 10) if len(ds_val) > 100 else len(ds_val)
+        val_loader = DataLoader(
+            val_enc, batch_size=val_batch_size, shuffle=False,
+            collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+            prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
+        )
     else:
-        BATCH_SIZE = calculate_batch_size(len(ds_train))
-        expected_batches = len(ds_train) // BATCH_SIZE
-        print(f"📦 Auto-calculated batch size: {BATCH_SIZE} ({expected_batches} batches/epoch)")
+        # Traditional fixed or auto-calculated batch size
+        if args.batch_size:
+            BATCH_SIZE = args.batch_size
+            print(f"📦 Manual batch size: {BATCH_SIZE}")
+        else:
+            BATCH_SIZE = calculate_batch_size(len(ds_train))
+            expected_batches = len(ds_train) // BATCH_SIZE
+            print(f"📦 Auto-calculated batch size: {BATCH_SIZE} ({expected_batches} batches/epoch)")
 
     train_loader = DataLoader(
-        train_enc, batch_size=BATCH_SIZE, shuffle=True,
-        collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
-        prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
-        drop_last=False  # Don't drop last batch for small datasets
+            train_enc, batch_size=BATCH_SIZE, shuffle=True,
+            collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
+            prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
+            drop_last=False  # Don't drop last batch for small datasets
     )
     val_loader = DataLoader(
-        val_enc, batch_size=BATCH_SIZE, shuffle=False,
-        collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
-        prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
-    )
+            val_enc, batch_size=BATCH_SIZE, shuffle=False,
+            collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+            prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
+        )
 
     # —— Compute node GPU selection logic ——
     if torch.cuda.is_available():
@@ -1145,7 +1436,7 @@ def main():
     if LABEL_SMOOTHING > 0:
         criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
         print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
-
+    
     # Updated GradScaler for compute nodes (PyTorch 2.7+)
     if device.type.startswith("cuda"):
         try:
@@ -1166,9 +1457,9 @@ def main():
         def get_lr(epoch):
             if epoch < WARMUP_EPOCHS:
                 return LR_MIN + (LR_MAX - LR_MIN) * epoch / WARMUP_EPOCHS
-            progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
-            return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
-
+                progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
+                return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
+        
         scheduler = optim.lr_scheduler.LambdaLR(optimiser, lambda epoch: get_lr(epoch) / LR_MIN)
         print(f"📈 Standard Cosine Annealing: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e}")
     else:
@@ -1199,7 +1490,7 @@ def main():
             eta_min=eta_min,   # Minimum LR (not zero for stability)
             last_epoch=-1
         )
-
+    
     print(f"🚀 Starting training on {device}")
     print(f"🏗️  Model architecture: 2-layer depth-wise CNN, {EMB_DIM}D embeddings, {N_TAGS} POS classes")
     print(f"🔥 Compute node optimizations enabled:")
@@ -1213,8 +1504,14 @@ def main():
     print(f"\n📊 COMPUTE NODE PERFORMANCE BASELINE:")
     print(f"   • Dataset size: {len(ds_train):,} train, {len(ds_val):,} val sentences")
     print(f"   • Vocabulary size: {len(vocab):,} tokens")
-    print(f"   • Steps per epoch: {len(train_loader):,}")
-    print(f"   • Total training steps: {len(train_loader) * MAX_EPOCHS:,} (max)")
+    if adaptive_batch_sizer:
+        initial_steps = len(ds_train) // adaptive_batch_sizer.get_current_batch_size()
+        print(f"   • Initial steps per epoch: ~{initial_steps:,} (batch size will adapt)")
+        print(f"   • Adaptive batch range: {adaptive_batch_sizer.min_batch_size} → {adaptive_batch_sizer.max_batch_size}")
+        print(f"   • Noise threshold θ: {adaptive_batch_sizer.noise_threshold}")
+    else:
+        print(f"   • Steps per epoch: {len(train_loader):,}")
+        print(f"   • Total training steps: {len(train_loader) * MAX_EPOCHS:,} (max)")
     
     # Check which POS classes are present in the dataset
     print(f"   • POS tag analysis:")
@@ -1288,9 +1585,30 @@ def main():
             scheduler.step()
         else:
             # Training with SGDR step-based scheduling (default)
-            train_ppl, train_acc, _, step_count = run_epoch_with_sgdr(
-                model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
-            )
+            if adaptive_batch_sizer is not None:
+                train_ppl, train_acc, _, step_count, batch_changes = run_epoch_with_sgdr(
+                    model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch,
+                    adaptive_batch_sizer, train_enc, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+                )
+                
+                # Report batch size changes
+                if batch_changes:
+                    for change in batch_changes[-1:]:  # Show only the most recent change
+                        stats = change['stats']
+                        noise_str = f"(noise ratio: {stats['noise_ratio']:.3f})" if stats.get('noise_ratio') else ""
+                        print(f"   📦 Batch size: {change['old_size']} → {change['new_size']} {noise_str}")
+                
+                # Recreate train_loader if batch size changed for next epoch
+                current_batch_size = adaptive_batch_sizer.get_current_batch_size()
+                if current_batch_size != BATCH_SIZE:
+                    BATCH_SIZE = current_batch_size
+                    train_loader = create_adaptive_dataloader(
+                        train_enc, adaptive_batch_sizer, collate, NUM_WORKERS_TRAIN, PIN_MEMORY, PREFETCH_FACTOR
+                    )
+            else:
+                train_ppl, train_acc, _, step_count, _ = run_epoch_with_sgdr(
+                    model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
+        )
         
         # Validation with detailed analysis every 10 epochs
         detailed = (epoch % 10 == 0) or (epoch == MAX_EPOCHS)
@@ -1359,10 +1677,10 @@ def main():
         else:
             # No F1 calculation
             print(f"epoch {epoch:02d} | "
-                  f"train acc {train_acc*100:5.2f}% | "
-                  f"val acc {val_acc*100:5.2f}% | "
-                  f"val ppl {val_ppl:4.2f} | "
-                  f"lr {current_lr:.1e} ({phase}){temp_str}")
+                f"train acc {train_acc*100:5.2f}% | "
+                f"val acc {val_acc*100:5.2f}% | "
+                f"val ppl {val_ppl:4.2f} | "
+                f"lr {current_lr:.1e} ({phase}){temp_str}")
         
         # Check early stopping
         if early_stopping is not None:
@@ -1391,7 +1709,7 @@ def main():
                       f"{F1_AVERAGE[0].upper()}F1 {f1_score_val*100:.2f}%")
             else:
                 print(f"   Temperature unchanged: {old_temp:.3f}")
-
+        
         # Print detailed analysis
         if detailed and analysis:
             print("\n📊 Detailed Per-Class Analysis:")
@@ -1542,6 +1860,35 @@ def main():
         print(f"   • Best epoch: {stats['best_epoch']}")
         print(f"   • Best {stats['monitor']}: {stats['best_value']:.4f}")
         print(f"   • Patience used: {stats['patience_used']}/{early_stopping.patience}")
+    
+    # Adaptive batch sizing summary
+    if adaptive_batch_sizer is not None:
+        final_stats = adaptive_batch_sizer.get_statistics()
+        print(f"\n🎯 Adaptive Batch Sizing Summary:")
+        print(f"   • Final batch size: {final_stats['batch_size']}")
+        print(f"   • Total batch size changes: {final_stats['batch_size_changes']}")
+        print(f"   • Final gradient variance: {final_stats['gradient_variance']:.2e}" if final_stats['gradient_variance'] else "   • Gradient variance: not computed")
+        print(f"   • Final gradient norm: {final_stats['gradient_norm']:.2e}" if final_stats['gradient_norm'] else "   • Gradient norm: not computed")
+        print(f"   • Final noise ratio: {final_stats['noise_ratio']:.3f}" if final_stats['noise_ratio'] else "   • Noise ratio: not computed")
+        
+        # Show batch size evolution
+        if adaptive_batch_sizer.batch_size_history:
+            print(f"   • Batch size evolution:")
+            for i, change in enumerate(adaptive_batch_sizer.batch_size_history[-5:]):  # Show last 5 changes
+                epoch_str = f"E{change['epoch']}" if change['epoch'] else f"S{change['step']}"
+                noise_str = f" (noise: {change['noise_ratio']:.3f})" if change['noise_ratio'] else ""
+                print(f"     {epoch_str}: {change['old_size']} → {change['new_size']}{noise_str}")
+            
+            if len(adaptive_batch_sizer.batch_size_history) > 5:
+                print(f"     ... ({len(adaptive_batch_sizer.batch_size_history) - 5} earlier changes)")
+        
+        # Calculate efficiency metrics
+        initial_batch = adaptive_batch_sizer.min_batch_size if adaptive_batch_sizer.small_batch_early else adaptive_batch_sizer.pilot_batch_size
+        final_batch = final_stats['batch_size']
+        growth_factor = final_batch / initial_batch
+        print(f"   • Batch size growth: {growth_factor:.1f}x ({initial_batch} → {final_batch})")
+        print(f"   • Exploration benefit: {'High' if growth_factor > 2.0 else 'Moderate' if growth_factor > 1.5 else 'Low'}")
+        print(f"   • Convergence efficiency: {'High' if final_batch > 512 else 'Moderate' if final_batch > 128 else 'Conservative'}")
     
     # Apply final temperature scaling calibration
     if TEMP_SCALING:
