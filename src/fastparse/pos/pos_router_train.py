@@ -27,7 +27,7 @@ from tqdm import tqdm
 ###############################################################################
 # 1.  Hyper-parameters
 ###############################################################################
-EMB_DIM      = 64          # token embedding size
+EMB_DIM      = 32          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
 BATCH_SIZE   = 4096  # Optimal for GPU utilization - NOT full dataset size!
