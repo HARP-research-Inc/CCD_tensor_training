@@ -32,13 +32,13 @@ from collections import defaultdict
 ###############################################################################
 # 1.  Hyper-parameters
 ###############################################################################
-EMB_DIM      = 32          # token embedding size
+EMB_DIM      = 48          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 4096  # Optimal for GPU utilization - NOT full dataset size!
-LR_MAX       = 4e-2  # Peak learning rate after warm-up
+BATCH_SIZE   = 25911  # Optimal for GPU utilization - NOT full dataset size!
+LR_MAX       = 7e-2  # Peak learning rate after warm-up
 LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
-EPOCHS       = 40    # Total training epochs
+EPOCHS       = 80    # Total training epochs
 WARMUP_EPOCHS = 3    # Warm-up epochs (gradual LR increase)
 MAX_LEN      = 64    # truncate very long sentences
 LABEL_SMOOTHING = 0.1      # Label smoothing factor for better calibration
