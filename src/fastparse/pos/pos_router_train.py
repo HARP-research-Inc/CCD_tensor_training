@@ -26,7 +26,7 @@ from torch.cuda.amp import autocast, GradScaler
 from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, f1_score
 from collections import defaultdict
 
 ###############################################################################
@@ -425,7 +425,7 @@ def collate(batch):
 # 5.  Training / validation loops with per-class analysis
 ###############################################################################
 def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterion=None, 
-              epoch=None, detailed_analysis=False):
+              epoch=None, detailed_analysis=False, calculate_weighted_f1=True):
     train = optimiser is not None
     model.train() if train else model.eval()
     total_loss, total_tok, correct = 0.0, 0, 0
@@ -507,6 +507,17 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     ppl = math.exp(avg_loss_per_token) if avg_loss_per_token < 100 else float('inf')  # Avoid overflow
     acc = correct / total_tok if total_tok > 0 else 0.0
     
+    # Calculate weighted F1 if requested
+    weighted_f1 = 0.0
+    if calculate_weighted_f1 and all_preds and all_targets:
+        try:
+            # Calculate weighted F1 (accounts for class imbalance)
+            weighted_f1 = f1_score(all_targets, all_preds, average='weighted', zero_division=0)
+        except Exception as e:
+            print(f"Warning: Could not calculate weighted F1: {e}")
+            weighted_f1 = 0.0
+
+    
     # Generate detailed analysis
     analysis = {}
     if detailed_analysis and all_preds:
@@ -539,7 +550,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
         except Exception as e:
             print(f"Warning: Could not generate detailed analysis: {e}")
     
-    return ppl, acc, analysis
+    return ppl, acc, weighted_f1, analysis
 
 def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch):
     """Training epoch with SGDR step-based learning rate scheduling."""
@@ -595,7 +606,7 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
     ppl = math.exp(avg_loss_per_token) if avg_loss_per_token < 100 else float('inf')  # Avoid overflow
     acc = correct / total_tok if total_tok > 0 else 0.0
     
-    return ppl, acc, step_count
+    return ppl, acc, 0.0, step_count  # Add weighted_f1=0.0 for consistency
 
 ###############################################################################
 # 6.  Early stopping implementation
@@ -623,8 +634,8 @@ class EarlyStopping:
         
         # Auto-determine mode based on metric name
         if mode == 'auto':
-            if 'acc' in monitor:
-                self.mode = 'max'  # Accuracy should increase
+            if 'acc' in monitor or 'f1' in monitor:
+                self.mode = 'max'  # Accuracy and F1 should increase
             else:
                 self.mode = 'min'  # Loss/perplexity should decrease
         else:
@@ -643,7 +654,7 @@ class EarlyStopping:
             print(f"   • Min delta: {self.min_delta}")
             print(f"   • Restore best weights: {self.restore_best_weights}")
     
-    def __call__(self, epoch, val_loss, val_acc, val_ppl, model):
+    def __call__(self, epoch, val_loss, val_acc, val_ppl, weighted_f1, model):
         """
         Check if training should stop and update best weights.
         
@@ -657,6 +668,8 @@ class EarlyStopping:
             current = val_acc
         elif self.monitor == 'val_ppl':
             current = val_ppl
+        elif self.monitor == 'weighted_f1':
+            current = weighted_f1
         else:
             raise ValueError(f"Unknown monitor metric: {self.monitor}")
         
@@ -771,7 +784,7 @@ def calibrate_temperature(model, val_loader, device):
 ###############################################################################
 def main():
     parser = argparse.ArgumentParser(
-        description="Train POS tagger with auto-scaling batch size and intelligent early stopping (default)"
+        description="Train POS tagger with auto-scaling batch size and intelligent early stopping using Weighted F1 (default)"
     )
     parser.add_argument("--treebank", default="en_ewt",
                         help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
@@ -813,9 +826,11 @@ def main():
                         help="Early stopping patience (epochs without improvement, default: 15)")
     parser.add_argument("--min-delta", type=float, default=1e-4,
                         help="Minimum improvement to count as progress (default: 1e-4)")
-    parser.add_argument("--monitor", type=str, default="val_acc", 
-                        choices=["val_loss", "val_acc", "val_ppl"],
-                        help="Metric to monitor for early stopping (default: val_acc)")
+    parser.add_argument("--monitor", type=str, default="weighted_f1", 
+                        choices=["val_loss", "val_acc", "val_ppl", "weighted_f1"],
+                        help="Metric to monitor for early stopping (default: weighted_f1)")
+    parser.add_argument("--no-weighted-f1", action="store_true",
+                        help="Disable weighted F1 calculation and monitoring (faster but less accurate)")
     parser.add_argument("--max-epochs", type=int, default=500,
                         help="Maximum epochs for early stopping (default: 500)")
     
@@ -861,12 +876,24 @@ def main():
     if args.fixed_epochs:
         MAX_EPOCHS = EPOCHS
         USE_EARLY_STOPPING = False
+        CALCULATE_WEIGHTED_F1 = False  # No early stopping, so no need for weighted F1
         print(f"📅 Fixed epochs mode: training for exactly {MAX_EPOCHS} epochs")
     else:
         MAX_EPOCHS = args.max_epochs
         USE_EARLY_STOPPING = True
+        
+        # Handle weighted F1 monitoring
+        if args.monitor == 'weighted_f1' and args.no_weighted_f1:
+            print("⚠️  Warning: --monitor weighted_f1 conflicts with --no-weighted-f1")
+            print("   Falling back to val_acc monitoring")
+            args.monitor = 'val_acc'
+        
+        CALCULATE_WEIGHTED_F1 = (args.monitor == 'weighted_f1') and not args.no_weighted_f1
+        
         print(f"🛑 Early stopping mode (default): max {MAX_EPOCHS} epochs, patience {args.patience}")
-        print(f"   📊 Monitoring: {args.monitor} ({'maximize' if 'acc' in args.monitor else 'minimize'})")
+        print(f"   📊 Monitoring: {args.monitor} ({'maximize' if 'acc' in args.monitor or 'f1' in args.monitor else 'minimize'})")
+        if CALCULATE_WEIGHTED_F1:
+            print(f"   🎯 Weighted F1 calculation enabled for better class balance handling")
 
     # Configure label smoothing and temperature scaling
     global LABEL_SMOOTHING, TEMP_SCALING, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
@@ -1238,21 +1265,23 @@ def main():
     for epoch in range(1, MAX_EPOCHS + 1):
         if use_cosine:
             # Standard training with epoch-based scheduling
-            train_ppl, train_acc, _ = run_epoch(
-                model, train_loader, optimiser, device, scaler, criterion, epoch
+            train_ppl, train_acc, _, _ = run_epoch(
+                model, train_loader, optimiser, device, scaler, criterion, epoch, 
+                detailed_analysis=False, calculate_weighted_f1=False  # Don't need F1 for training
             )
             # Step the scheduler after each epoch
             scheduler.step()
         else:
             # Training with SGDR step-based scheduling (default)
-            train_ppl, train_acc, step_count = run_epoch_with_sgdr(
+            train_ppl, train_acc, _, step_count = run_epoch_with_sgdr(
                 model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
             )
         
         # Validation with detailed analysis every 10 epochs
-        detailed = (epoch % 10 == 0) or (epoch == EPOCHS)
-        val_ppl, val_acc, analysis = run_epoch(
-            model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
+        detailed = (epoch % 10 == 0) or (epoch == MAX_EPOCHS)
+        val_ppl, val_acc, weighted_f1, analysis = run_epoch(
+            model, val_loader, None, device, None, criterion, epoch, 
+            detailed_analysis=detailed, calculate_weighted_f1=CALCULATE_WEIGHTED_F1
         )
         
         # Get current learning rate once
@@ -1293,9 +1322,10 @@ def main():
             previous_lr = current_lr
         
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
+        f1_str = f" | wF1 {weighted_f1*100:5.2f}%" if CALCULATE_WEIGHTED_F1 and weighted_f1 > 0 else ""
         print(f"epoch {epoch:02d} | "
               f"train acc {train_acc*100:5.2f}% | "
-              f"val acc {val_acc*100:5.2f}% | "
+              f"val acc {val_acc*100:5.2f}%{f1_str} | "
               f"val ppl {val_ppl:4.2f} | "
               f"lr {current_lr:.1e} ({phase}){temp_str}")
         
@@ -1304,7 +1334,7 @@ def main():
             # Convert metrics to appropriate format for early stopping
             val_loss_for_es = val_ppl  # Use perplexity as loss proxy (lower is better)
             
-            if early_stopping(epoch, val_loss_for_es, val_acc, val_ppl, model):
+            if early_stopping(epoch, val_loss_for_es, val_acc, val_ppl, weighted_f1, model):
                 print(f"\n🛑 Training stopped early at epoch {epoch}")
                 break
         
@@ -1437,7 +1467,10 @@ def main():
                                     print(f"      {marker} #{rank:2d}: {class_name:8s} - {total:4d} instances ({pct_of_dataset:5.1f}%)")
             if 'classification_report' in analysis:
                 print(f"\n📋 Macro avg F1: {analysis['classification_report']['macro avg']['f1-score']*100:.2f}%")
-                print(f"   Weighted F1: {analysis['classification_report']['weighted avg']['f1-score']*100:.2f}%")
+                weighted_f1_from_report = analysis['classification_report']['weighted avg']['f1-score']
+                print(f"   Weighted F1: {weighted_f1_from_report*100:.2f}%")
+                if CALCULATE_WEIGHTED_F1 and abs(weighted_f1 - weighted_f1_from_report) < 0.01:
+                    print(f"   ✓ Weighted F1 calculation verified")
             print()
 
     # Handle early stopping restoration and stats
@@ -1459,11 +1492,12 @@ def main():
         
         # Re-evaluate with calibrated temperature
         print("🔍 Re-evaluating with calibrated temperature...")
-        cal_ppl, cal_acc, cal_analysis = run_epoch(
+        cal_ppl, cal_acc, cal_weighted_f1, cal_analysis = run_epoch(
             model, val_loader, None, device, None, criterion, 
-            epoch=MAX_EPOCHS, detailed_analysis=True
+            epoch=MAX_EPOCHS, detailed_analysis=True, calculate_weighted_f1=CALCULATE_WEIGHTED_F1
         )
-        print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%, ppl {cal_ppl:.2f}")
+        cal_f1_str = f", wF1 {cal_weighted_f1*100:.2f}%" if CALCULATE_WEIGHTED_F1 and cal_weighted_f1 > 0 else ""
+        print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%{cal_f1_str}, ppl {cal_ppl:.2f}")
 
     # Save final model with dataset info
     if args.penn_treebank:
