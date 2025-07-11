@@ -401,6 +401,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
     all_preds = []
     all_targets = []
     per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0, 'loss': 0.0})
+    confusion_matrix = defaultdict(lambda: defaultdict(int))  # confusion_matrix[true_class][pred_class] = count
 
     for ids, upos, mask in tqdm(loader, leave=False):
         # Non-blocking transfers to GPU
@@ -449,8 +450,15 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
         if detailed_analysis:
             valid_mask = mask & (upos != -100)
             if valid_mask.any():
-                all_preds.extend(pred[valid_mask].cpu().numpy())
-                all_targets.extend(upos[valid_mask].cpu().numpy())
+                valid_preds = pred[valid_mask].cpu().numpy()
+                valid_targets = upos[valid_mask].cpu().numpy()
+                
+                all_preds.extend(valid_preds)
+                all_targets.extend(valid_targets)
+                
+                # Build confusion matrix
+                for true_label, pred_label in zip(valid_targets, valid_preds):
+                    confusion_matrix[true_label][pred_label] += 1
                 
                 # Per-class statistics
                 for i in range(N_TAGS):
@@ -484,10 +492,67 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
                     per_class_acc[UPOS_TAGS[i]] = stats['correct'] / stats['total']
             analysis['per_class_accuracy'] = per_class_acc
             
+            # Confusion matrix analysis
+            analysis['confusion_matrix'] = confusion_matrix
+            
         except Exception as e:
             print(f"Warning: Could not generate detailed analysis: {e}")
     
     return ppl, acc, analysis
+
+def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch):
+    """Training epoch with SGDR step-based learning rate scheduling."""
+    model.train()
+    total_loss, total_tok, correct = 0.0, 0, 0
+
+    for ids, upos, mask in tqdm(loader, leave=False):
+        # Non-blocking transfers to GPU
+        ids   = ids.to(device,   non_blocking=True)
+        upos  = upos.to(device,  non_blocking=True)
+        mask  = mask.to(device,  non_blocking=True)
+        
+        if scaler is not None:
+            # Mixed precision training
+            with torch.cuda.amp.autocast():
+                logp = model(ids, mask)                # [B, T, 18]
+                if criterion is not None:
+                    loss = criterion(logp.transpose(1,2), upos)
+                else:
+                    loss = F.nll_loss(
+                        logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+                    )
+            
+            optimiser.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
+        else:
+            # Standard training
+            logp = model(ids, mask)    # [B, T, 18]
+            if criterion is not None:
+                loss = criterion(logp.transpose(1,2), upos)
+            else:
+                loss = F.nll_loss(
+                    logp.transpose(1,2), upos, reduction="sum", ignore_index=-100
+                )
+            
+            optimiser.zero_grad()
+            loss.backward()
+            optimiser.step()
+
+        # SGDR: Step the scheduler after each batch
+        scheduler.step()
+        step_count += 1
+
+        total_loss  += loss.item()
+        total_tok   += mask.sum().item()
+        pred        = logp.argmax(-1)
+        correct     += ((pred == upos) & mask).sum().item()
+
+    ppl = math.exp(total_loss / total_tok) if total_tok > 0 else float('inf')
+    acc = correct / total_tok if total_tok > 0 else 0.0
+    
+    return ppl, acc, step_count
 
 ###############################################################################
 # 6.  Temperature scaling calibration
@@ -552,7 +617,7 @@ def main():
     parser.add_argument("--treebank", default="en_ewt",
                         help="Any UD code accepted by datasets (e.g. en_ewt, en_gum, fr_sequoia)")
     parser.add_argument("--combine", action="store_true",
-                        help="Combine multiple English treebanks for more training data")
+                        help="Combine multiple UD English treebanks ONLY (no Penn Treebank)")
     parser.add_argument("--augment", action="store_true",
                         help="Apply data augmentation techniques")
     parser.add_argument("--no-label-smoothing", action="store_true",
@@ -570,10 +635,38 @@ def main():
     parser.add_argument("--compute-node", action="store_true",
                         help="Enable all compute node optimizations")
     parser.add_argument("--penn-treebank", action="store_true",
-                        help="Train on Penn Treebank WSJ (requires full LDC Penn Treebank)")
+                        help="Train on Penn Treebank WSJ ONLY (pure Penn Treebank training)")
     parser.add_argument("--penn-path", type=str, default=None,
                         help="Path to full Penn Treebank directory")
+    parser.add_argument("--combined-penn", action="store_true",
+                        help="Combine UD treebanks WITH Penn Treebank (experimental)")
+    parser.add_argument("--cosine", action="store_true",
+                        help="Use standard Cosine Annealing scheduler (default: SGDR)")
+    parser.add_argument("--sgdr-t0", type=int, default=None,
+                        help="SGDR: Steps in first cycle (auto-detected if not provided)")
+    parser.add_argument("--sgdr-mult", type=float, default=2.0,
+                        help="SGDR: Cycle length multiplier (default: 2.0)")
     args = parser.parse_args()
+
+    # Validate argument combinations
+    if args.penn_treebank and args.combine:
+        print("❌ ERROR: Cannot use --penn-treebank and --combine together!")
+        print("   💡 Use --penn-treebank for PURE Penn Treebank training")
+        print("   💡 Use --combine for PURE UD treebank training")
+        print("   💡 Use --combined-penn to combine UD + Penn Treebank (experimental)")
+        exit(1)
+        
+    if args.penn_treebank and args.combined_penn:
+        print("❌ ERROR: Cannot use --penn-treebank and --combined-penn together!")
+        print("   💡 Use --penn-treebank for PURE Penn Treebank training")
+        print("   💡 Use --combined-penn to combine UD + Penn Treebank")
+        exit(1)
+        
+    if args.combine and args.combined_penn:
+        print("❌ ERROR: Cannot use --combine and --combined-penn together!")
+        print("   💡 Use --combine for PURE UD treebank training")
+        print("   💡 Use --combined-penn to combine UD + Penn Treebank")
+        exit(1)
 
     # Enable cuDNN autotuning for faster convolutions
     torch.backends.cudnn.benchmark = True
@@ -618,8 +711,8 @@ def main():
     print("Loading dataset …")
     
     if args.penn_treebank:
-        # Load Penn Treebank WSJ data
-        print("🏛️  Penn Treebank WSJ Training Mode")
+        # Load Penn Treebank WSJ data ONLY
+        print("🏛️  Penn Treebank WSJ Training Mode (PURE)")
         train_data, val_data, test_data = load_penn_treebank_data(args.penn_path)
         
         # Convert to datasets format
@@ -629,8 +722,12 @@ def main():
         
         print(f"📊 Penn Treebank: {len(ds_train)} train, {len(ds_val)} val sentences")
         
-    elif args.combine:
-        # Load multiple English treebanks for maximum training data
+    elif args.combined_penn:
+        # Load UD treebanks AND Penn Treebank (experimental)
+        print("🔬 EXPERIMENTAL: Combined UD + Penn Treebank Training")
+        print("⚠️  Warning: Mixing different data sources - monitor for domain mismatch!")
+        
+        # First load UD treebanks
         english_treebanks = [
             "en_ewt",      # English Web Treebank (12,543 sentences)
             "en_gum",      # Georgetown University Multilayer (8,551 sentences) 
@@ -638,7 +735,55 @@ def main():
             "en_partut",   # English ParTUT (1,781 sentences)
         ]
         
-        print(f"🔥 Loading combined English treebanks: {english_treebanks}")
+        print(f"🔥 Loading UD treebanks: {english_treebanks}")
+        
+        # Combine UD training sets
+        combined_train = []
+        combined_val = []
+        
+        for tb in english_treebanks:
+            try:
+                ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
+                ds_val_tb = load_dataset("universal_dependencies", tb, split="validation", trust_remote_code=True)
+                
+                # Convert to list and extend
+                combined_train.extend(list(ds_train_tb))
+                combined_val.extend(list(ds_val_tb))
+                
+                print(f"  ✓ Loaded UD {tb}: {len(ds_train_tb)} train, {len(ds_val_tb)} val sentences")
+                
+            except Exception as e:
+                print(f"  ❌ Failed to load UD {tb}: {e}")
+                continue
+        
+        # Then add Penn Treebank data
+        print("🏛️  Adding Penn Treebank data...")
+        penn_train, penn_val, penn_test = load_penn_treebank_data(args.penn_path)
+        
+        combined_train.extend(penn_train)
+        combined_val.extend(penn_val)
+        
+        print(f"  ✓ Added Penn Treebank: {len(penn_train)} train, {len(penn_val)} val sentences")
+        
+        # Convert back to datasets
+        from datasets import Dataset
+        ds_train = Dataset.from_list(combined_train)
+        ds_val = Dataset.from_list(combined_val)
+        
+        print(f"🎯 Combined UD+Penn dataset: {len(ds_train)} train, {len(ds_val)} val sentences")
+        print(f"📊 Data sources: UD={len(combined_train)-len(penn_train)}, Penn={len(penn_train)}")
+        
+    elif args.combine:
+        # Load multiple UD English treebanks ONLY (no Penn Treebank)
+        print("🔥 Combined UD Training Mode (NO Penn Treebank)")
+        english_treebanks = [
+            "en_ewt",      # English Web Treebank (12,543 sentences)
+            "en_gum",      # Georgetown University Multilayer (8,551 sentences) 
+            "en_lines",    # English LinES (4,564 sentences)
+            "en_partut",   # English ParTUT (1,781 sentences)
+        ]
+        
+        print(f"📚 Loading UD-only treebanks: {english_treebanks}")
         
         # Combine training sets
         combined_train = []
@@ -783,33 +928,47 @@ def main():
     else:
         scaler = None
 
-    # Cosine Annealing with Warm Restarts (SGDR)
-    # Use shorter cycles for better exploration and regularization
-    T_0 = max(10, len(train_loader) // 4)  # First cycle length (adaptive to dataset size)
+    # Choose scheduler type (SGDR is default, standard cosine only when requested)
+    use_cosine = args.cosine  # Only use standard cosine when explicitly requested
     
-    # For Penn Treebank (small dataset), use more frequent restarts
-    if args.penn_treebank and len(train_loader) < 200:
-        T_0 = max(5, len(train_loader) // 6)  # Shorter cycles for small datasets
-        T_mult = 1.5  # Slower growth
-        eta_min_ratio = 0.01  # Lower minimum
+    if use_cosine:
+        # Standard cosine annealing with warmup
+        def get_lr(epoch):
+            if epoch < WARMUP_EPOCHS:
+                return LR_MIN + (LR_MAX - LR_MIN) * epoch / WARMUP_EPOCHS
+            progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
+            return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
+
+        scheduler = optim.lr_scheduler.LambdaLR(optimiser, lambda epoch: get_lr(epoch) / LR_MIN)
+        print(f"📈 Standard Cosine Annealing: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e}")
     else:
-        T_mult = 2    # Standard cycle growth
-        eta_min_ratio = 0.1   # Higher minimum for stability
-    
-    eta_min = LR_MAX * eta_min_ratio
-    
-    print(f"🔄 SGDR Scheduler:")
-    print(f"   • First cycle: {T_0} steps ({T_0 / len(train_loader):.1f} epochs)")
-    print(f"   • Cycle multiplier: {T_mult}x")
-    print(f"   • LR range: {eta_min:.1e} → {LR_MAX:.1e}")
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimiser,
-        T_0=T_0,           # Steps in first cycle
-        T_mult=int(T_mult) if T_mult == int(T_mult) else 2,  # Integer multiplier
-        eta_min=eta_min,   # Minimum LR (not zero for stability)
-        last_epoch=-1
-    )
+        # Cosine Annealing with Warm Restarts (SGDR) - DEFAULT
+        # Use shorter cycles for better exploration and regularization
+        T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
+        
+        # For Penn Treebank (small dataset), use more frequent restarts
+        if args.penn_treebank and len(train_loader) < 200:
+            T_0 = args.sgdr_t0 if args.sgdr_t0 else max(5, len(train_loader) // 6)
+            T_mult = args.sgdr_mult if hasattr(args, 'sgdr_mult') else 1.5
+            eta_min_ratio = 0.01  # Lower minimum
+        else:
+            T_mult = args.sgdr_mult
+            eta_min_ratio = 0.1   # Higher minimum for stability
+        
+        eta_min = LR_MAX * eta_min_ratio
+        
+        print(f"🔄 SGDR Scheduler (default):")
+        print(f"   • First cycle: {T_0} steps ({T_0 / len(train_loader):.1f} epochs)")
+        print(f"   • Cycle multiplier: {T_mult}x")
+        print(f"   • LR range: {eta_min:.1e} → {LR_MAX:.1e}")
+        
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimiser,
+            T_0=T_0,           # Steps in first cycle
+            T_mult=int(T_mult) if T_mult == int(T_mult) else 2,  # Integer multiplier
+            eta_min=eta_min,   # Minimum LR (not zero for stability)
+            last_epoch=-1
+        )
 
     print(f"🚀 Starting training on {device}")
     print(f"🔥 Compute node optimizations enabled:")
@@ -817,7 +976,6 @@ def main():
     print(f"   • DataLoader: {NUM_WORKERS_TRAIN} train workers, {NUM_WORKERS_VAL} val workers")
     print(f"   • Batch size: {BATCH_SIZE:,} samples")
     print(f"   • Prefetch factor: {PREFETCH_FACTOR}")
-    print(f"📈 SGDR Learning Rate: {eta_min:.1e} → {LR_MAX:.1e} with warm restarts")
     if TEMP_SCALING:
         print(f"🌡️  Temperature scaling enabled")
     
@@ -831,14 +989,35 @@ def main():
         print(f"   • GPU memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f}GB")
     print()
 
-    # SGDR tracking variables
+    # Training loop variables
     step_count = 0
     
+    # SGDR cycle tracking variables
+    if not use_cosine:
+        sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
+        if args.penn_treebank and len(train_loader) < 200:
+            sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(5, len(train_loader) // 6)
+        sgdr_cycle_length = sgdr_T_0
+        sgdr_cycle_step = 0
+        sgdr_eta_min = LR_MAX * (0.01 if args.penn_treebank and len(train_loader) < 200 else 0.1)
+    
     for epoch in range(1, EPOCHS + 1):
-        # Training with SGDR step-based scheduling
-        train_ppl, train_acc, step_count = run_epoch_with_sgdr(
-            model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
-        )
+        if use_cosine:
+            # Standard training with epoch-based scheduling
+            train_ppl, train_acc, _ = run_epoch(
+                model, train_loader, optimiser, device, scaler, criterion, epoch
+            )
+            # Step the scheduler after each epoch
+            scheduler.step()
+        else:
+            # Training with SGDR step-based scheduling (default)
+            train_ppl, train_acc, step_count = run_epoch_with_sgdr(
+                model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
+            )
+            
+            # Update SGDR cycle tracking
+            steps_this_epoch = len(train_loader)
+            sgdr_cycle_step = step_count % sgdr_cycle_length
         
         # Validation with detailed analysis every 10 epochs
         detailed = (epoch % 10 == 0) or (epoch == EPOCHS)
@@ -846,17 +1025,28 @@ def main():
             model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
         )
         
-        # Get current learning rate and cycle info
+        # Get current learning rate and determine phase
         current_lr = optimiser.param_groups[0]['lr']
         
-        # Determine if we're in a restart phase (LR near maximum)
-        lr_ratio = current_lr / LR_MAX
-        if lr_ratio > 0.8:
-            phase = "restart"
-        elif lr_ratio > 0.5:
-            phase = "mid-cycle"
+        if use_cosine:
+            # Standard cosine annealing phases
+            phase = "warmup" if epoch <= WARMUP_EPOCHS else "cosine"
         else:
-            phase = "end-cycle"
+            # SGDR phase detection based on cycle position
+            cycle_progress = sgdr_cycle_step / sgdr_cycle_length
+            
+            if cycle_progress < 0.1:
+                phase = "restart"  # Just restarted, LR climbing from minimum
+            elif cycle_progress < 0.3:
+                phase = "early"    # Early in cycle, LR still climbing
+            elif cycle_progress < 0.7:
+                phase = "mid"      # Middle of cycle, near maximum LR
+            else:
+                phase = "late"     # Late in cycle, LR falling toward minimum
+                
+            # Add cycle info to phase
+            cycle_num = (step_count // sgdr_cycle_length) + 1
+            phase = f"{phase}-C{cycle_num}"
         
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
         print(f"epoch {epoch:02d} | "
@@ -874,6 +1064,124 @@ def main():
                 for class_name, acc in sorted_classes:
                     print(f"  {class_name:8s}: {acc*100:5.2f}%")
             
+            # Show confusion for problematic classes (accuracy < 20%)
+            if 'confusion_matrix' in analysis and 'per_class_accuracy' in analysis:
+                print("\n🔍 Confusion Analysis for Low-Accuracy Classes:")
+                
+                problematic_classes = [
+                    (class_name, acc) for class_name, acc in analysis['per_class_accuracy'].items() 
+                    if acc < 0.20  # Less than 20% accuracy
+                ]
+                
+                for class_name, acc in sorted(problematic_classes, key=lambda x: x[1]):
+                    class_idx = UPOS_TAGS.index(class_name)
+                    confusion_data = analysis['confusion_matrix'][class_idx]
+                    
+                    if confusion_data:  # Only show if there were instances of this class
+                        total_instances = sum(confusion_data.values())
+                        print(f"\n  📋 True={class_name} ({total_instances} instances, {acc*100:.1f}% correct):")
+                        
+                        # Show top 5 predictions for this true class
+                        top_predictions = sorted(confusion_data.items(), key=lambda x: x[1], reverse=True)[:5]
+                        for pred_idx, count in top_predictions:
+                            if pred_idx < len(UPOS_TAGS):
+                                pred_name = UPOS_TAGS[pred_idx]
+                                percentage = (count / total_instances) * 100
+                                marker = "✓" if pred_idx == class_idx else "✗"
+                                print(f"    {marker} Predicted as {pred_name:8s}: {count:4d} ({percentage:5.1f}%)")
+                
+                # Also show precision analysis for the most confused predicted classes
+                print("\n🎯 Precision Analysis for Most Confused Predictions:")
+                
+                # Calculate predictions totals (how many times each class was predicted)
+                predicted_totals = defaultdict(int)
+                for true_idx in analysis['confusion_matrix']:
+                    for pred_idx, count in analysis['confusion_matrix'][true_idx].items():
+                        predicted_totals[pred_idx] += count
+                
+                # For problematic true classes, show what makes up their main predicted classes
+                for class_name, acc in sorted(problematic_classes, key=lambda x: x[1])[:3]:  # Top 3 worst
+                    class_idx = UPOS_TAGS.index(class_name)
+                    confusion_data = analysis['confusion_matrix'][class_idx]
+                    
+                    if confusion_data:
+                        # Get the top 2 most common wrong predictions
+                        wrong_predictions = [(pred_idx, count) for pred_idx, count in confusion_data.items() 
+                                           if pred_idx != class_idx]
+                        top_wrong = sorted(wrong_predictions, key=lambda x: x[1], reverse=True)[:2]
+                        
+                        for pred_idx, count in top_wrong:
+                            if pred_idx < len(UPOS_TAGS) and predicted_totals[pred_idx] > 0:
+                                pred_name = UPOS_TAGS[pred_idx]
+                                
+                                # Calculate what makes up this predicted class
+                                pred_breakdown = defaultdict(int)
+                                for true_idx in analysis['confusion_matrix']:
+                                    if pred_idx in analysis['confusion_matrix'][true_idx]:
+                                        pred_breakdown[true_idx] += analysis['confusion_matrix'][true_idx][pred_idx]
+                                
+                                total_pred = predicted_totals[pred_idx]
+                                correct_pred = pred_breakdown.get(pred_idx, 0)
+                                false_positive = total_pred - correct_pred
+                                
+                                precision = (correct_pred / total_pred) * 100 if total_pred > 0 else 0
+                                false_pos_rate = (false_positive / total_pred) * 100 if total_pred > 0 else 0
+                                
+                                print(f"\n    🎯 Predicted as {pred_name} ({total_pred} total predictions):")
+                                print(f"      ✓ Correct {pred_name}: {correct_pred:4d} ({precision:5.1f}% - True Positives)")
+                                print(f"      ✗ Wrong {pred_name}:   {false_positive:4d} ({false_pos_rate:5.1f}% - False Positives)")
+                                
+                                # Show top contributors to false positives
+                                false_contributors = [(true_idx, cnt) for true_idx, cnt in pred_breakdown.items() 
+                                                    if true_idx != pred_idx]
+                                top_contributors = sorted(false_contributors, key=lambda x: x[1], reverse=True)[:3]
+                                
+                                if top_contributors:
+                                    print(f"      📊 Main false positive sources:")
+                                    for true_idx, contrib_count in top_contributors:
+                                        if true_idx < len(UPOS_TAGS):
+                                            true_name = UPOS_TAGS[true_idx]
+                                            contrib_pct = (contrib_count / total_pred) * 100
+                                            print(f"         • True {true_name} → Pred {pred_name}: {contrib_count:3d} ({contrib_pct:4.1f}%)")
+                
+                # Special diagnostic for VERB class failure
+                if 'VERB' in [UPOS_TAGS[i] for i, _ in problematic_classes]:
+                    print("\n🚨 VERB Diagnostic Analysis:")
+                    verb_idx = UPOS_TAGS.index('VERB')
+                    if verb_idx in analysis['confusion_matrix']:
+                        verb_confusion = analysis['confusion_matrix'][verb_idx]
+                        total_verbs = sum(verb_confusion.values())
+                        
+                        if total_verbs > 0:
+                            print(f"   📊 VERB instances: {total_verbs}")
+                            print(f"   🎯 Top VERB → ? confusions:")
+                            
+                            sorted_confusions = sorted(verb_confusion.items(), key=lambda x: x[1], reverse=True)
+                            for pred_idx, count in sorted_confusions[:8]:  # Top 8
+                                if pred_idx < len(UPOS_TAGS):
+                                    pred_name = UPOS_TAGS[pred_idx]
+                                    pct = (count / total_verbs) * 100
+                                    status = "CORRECT" if pred_idx == verb_idx else "WRONG"
+                                    print(f"      VERB → {pred_name:8s}: {count:3d} ({pct:5.1f}%) [{status}]")
+                            
+                            # Check if this is data imbalance
+                            verb_acc = analysis['per_class_accuracy'].get('VERB', 0)
+                            aux_acc = analysis['per_class_accuracy'].get('AUX', 0)
+                            print(f"   ⚖️  VERB accuracy: {verb_acc*100:.1f}% vs AUX accuracy: {aux_acc*100:.1f}%")
+                            
+                            # Check if VERBs are being overwhelmed by other classes
+                            all_class_totals = {}
+                            for class_idx in range(len(UPOS_TAGS)):
+                                if class_idx in analysis['confusion_matrix']:
+                                    all_class_totals[UPOS_TAGS[class_idx]] = sum(analysis['confusion_matrix'][class_idx].values())
+                            
+                            if all_class_totals:
+                                sorted_totals = sorted(all_class_totals.items(), key=lambda x: x[1], reverse=True)
+                                print(f"   📈 Class frequency ranking:")
+                                for rank, (class_name, total) in enumerate(sorted_totals[:10], 1):
+                                    pct_of_dataset = (total / sum(all_class_totals.values())) * 100
+                                    marker = "🎯" if class_name == 'VERB' else "  "
+                                    print(f"      {marker} #{rank:2d}: {class_name:8s} - {total:4d} instances ({pct_of_dataset:5.1f}%)")
             if 'classification_report' in analysis:
                 print(f"\n📋 Macro avg F1: {analysis['classification_report']['macro avg']['f1-score']*100:.2f}%")
                 print(f"   Weighted F1: {analysis['classification_report']['weighted avg']['f1-score']*100:.2f}%")
@@ -894,6 +1202,8 @@ def main():
     # Save model with dataset info
     if args.penn_treebank:
         model_name = "router_penn_wsj.pt"
+    elif args.combined_penn:
+        model_name = "router_combined_penn.pt"
     elif args.combine:
         model_name = "router_combined.pt"
     else:

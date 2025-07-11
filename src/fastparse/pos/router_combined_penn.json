@@ -1,0 +1,57 @@
+{
+  "model_name": "router_combined_penn", 
+  "description": "EXPERIMENTAL: Combined UD treebanks + Penn Treebank POS router",
+  "architecture": {
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_second_conv_layer": true,
+    "use_temperature_scaling": true,
+    "dropout_rate": 0.1
+  },
+  "vocabulary": {
+    "type": "combined_penn",
+    "treebanks": ["en_ewt", "en_gum", "en_lines", "en_partut", "penn_wsj"],
+    "expected_vocab_size": 35000,
+    "pad_token": "<PAD>",
+    "description": "Combined UD + Penn Treebank vocabulary (experimental)"
+  },
+  "pos_tags": [
+    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", 
+    "DET", "CCONJ", "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+  ],
+  "training_info": {
+    "epochs": 80,
+    "batch_size": "auto",
+    "lr_max": 0.07,
+    "lr_min": 0.001,
+    "warmup_epochs": 3,
+    "label_smoothing": 0.1,
+    "mixed_precision": true,
+    "dataset": "Combined UD + Penn Treebank",
+    "domain": "Mixed: formal UD text + WSJ financial news",
+    "experimental_warning": "Mixing different data sources may cause domain mismatch issues"
+  },
+  "inference": {
+    "default_batch_size": 512,
+    "supports_penn_eval": true,
+    "expected_performance": {
+      "combined_accuracy": "Unknown - experimental",
+      "domain_note": "Performance may vary due to mixed data sources"
+    }
+  },
+  "experimental_notes": {
+    "motivation": "Combine large UD dataset with high-quality Penn Treebank",
+    "risks": [
+      "Domain mismatch between UD formal text and WSJ news",
+      "Different annotation guidelines may conflict",
+      "Penn Treebank data may be overwhelmed by larger UD datasets"
+    ],
+    "monitoring": [
+      "Watch for reduced Penn Treebank evaluation performance",
+      "Monitor verb/auxiliary classification quality",
+      "Check for overfitting to UD patterns"
+    ]
+  }
+} 
