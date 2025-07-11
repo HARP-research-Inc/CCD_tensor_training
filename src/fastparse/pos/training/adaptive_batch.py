@@ -71,25 +71,42 @@ class AdaptiveBatchSizer:
         sample_count = 0
         max_samples = max_samples or min(self.pilot_batch_size * 4, 512)
         
-        for ids, upos, mask in data_loader:
+        for batch_data in data_loader:
             if sample_count >= max_samples:
                 break
+            
+            inputs, upos, mask = batch_data
+            
+            # Handle both traditional (tensor) and hash-based (list) inputs
+            if isinstance(inputs, torch.Tensor):
+                inputs = inputs.to(device, non_blocking=True)
+                batch_size = inputs.size(0)
+            else:
+                # For hash embeddings, inputs is a list - no GPU transfer needed
+                batch_size = len(inputs)
                 
-            ids = ids.to(device, non_blocking=True)
             upos = upos.to(device, non_blocking=True) 
             mask = mask.to(device, non_blocking=True)
             
             # Get gradients for each sample in the batch
-            batch_size = ids.size(0)
             for i in range(min(batch_size, max_samples - sample_count)):
                 model.zero_grad()
                 
                 # Single sample forward pass
-                single_ids = ids[i:i+1]
+                if isinstance(inputs, torch.Tensor):
+                    single_inputs = inputs[i:i+1]
+                else:
+                    # For hash embeddings, inputs is already flattened across batch dimension
+                    # We need to reconstruct the batch structure for single sample
+                    seq_len = mask.shape[1]
+                    start_idx = i * seq_len
+                    end_idx = (i + 1) * seq_len
+                    single_inputs = inputs[start_idx:end_idx]
+                    
                 single_upos = upos[i:i+1]
                 single_mask = mask[i:i+1]
                 
-                logp = model(single_ids, single_mask)
+                logp = model(single_inputs, single_mask)
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), single_upos)
                 else:

@@ -26,6 +26,7 @@ from datetime import datetime
 # Import our modular components
 from models.router import DepthWiseCNNRouter
 from losses.label_smoothing import LabelSmoothingLoss
+from losses.class_balanced import create_class_balanced_loss
 from training.early_stopping import EarlyStopping
 from training.adaptive_batch import AdaptiveBatchSizer, create_adaptive_dataloader
 from training.temperature import calibrate_temperature
@@ -287,7 +288,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
         
         if train and scaler is not None:
             # Mixed precision training
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logp = model(inputs, mask)
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)
@@ -438,7 +439,7 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
         
         if scaler is not None:
             # Mixed precision training
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logp = model(inputs, mask)
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)
@@ -566,6 +567,8 @@ def main():
                         help="Minimum character n-gram length (default: 3)")
     parser.add_argument("--ngram-max", type=int, default=5,
                         help="Maximum character n-gram length (default: 5)")
+    parser.add_argument("--class-balanced", action="store_true",
+                        help="Use class-balanced loss with inverse log frequency weighting")
     
     args = parser.parse_args()
     
@@ -726,7 +729,7 @@ def main():
     # Choose appropriate collate function
     collate_fn = collate_with_attrs if args.hash_embed else collate
     
-    if args.adaptive_batch:
+    if args.adaptive_batch and not args.hash_embed:
         adaptive_batch_sizer = AdaptiveBatchSizer(
             min_batch_size=args.min_batch_size,
             max_batch_size=args.max_batch_adaptive,
@@ -747,6 +750,8 @@ def main():
             collate_fn=collate_fn, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
             prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
         )
+    elif args.adaptive_batch and args.hash_embed:
+        print("⚠️  Adaptive batch sizing disabled with hash embeddings (not yet supported)")
     else:
         if args.batch_size:
             BATCH_SIZE = args.batch_size
@@ -822,7 +827,22 @@ def main():
     optimiser = optim.AdamW(model.parameters(), lr=LR_MIN, weight_decay=1e-4)
 
     criterion = None
-    if LABEL_SMOOTHING > 0:
+    if args.class_balanced:
+        # Class-balanced loss with optional label smoothing
+        smoothing = 0.0 if args.no_label_smoothing else LABEL_SMOOTHING
+        criterion = create_class_balanced_loss(
+            ds_train, 
+            num_classes=N_TAGS, 
+            smoothing=smoothing
+        )
+        print(f"⚖️  Using class-balanced loss (inverse log frequency)")
+        if smoothing > 0:
+            print(f"   • With label smoothing α={smoothing}")
+        
+        # Print class weights for debugging
+        criterion.print_class_weights(UPOS_TAGS)
+        
+    elif LABEL_SMOOTHING > 0:
         criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
         print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
     

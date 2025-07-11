@@ -19,6 +19,7 @@ from typing import Dict, Any, Tuple, Optional, List
 
 from models.router import DepthWiseCNNRouter
 from losses.label_smoothing import LabelSmoothingLoss
+from losses.class_balanced import create_class_balanced_loss
 from training.early_stopping import EarlyStopping
 from training.adaptive_batch import AdaptiveBatchSizer, create_adaptive_dataloader
 from training.temperature import calibrate_temperature
@@ -133,7 +134,7 @@ class POSTrainer:
         collate_fn = collate_with_attrs if self.args.hash_embed else collate
         
         # Setup data loaders
-        if self.args.adaptive_batch:
+        if self.args.adaptive_batch and not self.args.hash_embed:
             print("📈 Setting up adaptive batch sizing...")
             self.adaptive_batch_sizer = AdaptiveBatchSizer(
                 min_batch_size=self.args.min_batch_size,
@@ -158,6 +159,12 @@ class POSTrainer:
                 prefetch_factor=prefetch_factor, persistent_workers=True
             )
         else:
+            # Handle adaptive batch + hash embed case
+            if self.args.adaptive_batch and self.args.hash_embed:
+                print("⚠️  Adaptive batch sizing disabled with hash embeddings (not yet supported)")
+                self.args.adaptive_batch = False  # Disable for this run
+            
+            # Create regular data loaders
             self.train_loader = DataLoader(
                 train_enc, batch_size=batch_size, shuffle=True,
                 collate_fn=collate_fn,
@@ -260,7 +267,23 @@ class POSTrainer:
         self.scaler = GradScaler()
         
         # Setup loss function
-        if not self.args.no_label_smoothing:
+        if self.args.class_balanced:
+            # Class-balanced loss with optional label smoothing
+            smoothing = 0.0 if self.args.no_label_smoothing else LABEL_SMOOTHING
+            self.criterion = create_class_balanced_loss(
+                self.train_dataset, 
+                num_classes=N_TAGS, 
+                smoothing=smoothing
+            )
+            print(f"⚖️  Using class-balanced loss (inverse log frequency)")
+            if smoothing > 0:
+                print(f"   • With label smoothing α={smoothing}")
+            
+            # Print class weights for debugging
+            from config.model_config import UPOS_TAGS
+            self.criterion.print_class_weights(UPOS_TAGS)
+            
+        elif not self.args.no_label_smoothing:
             self.criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
             print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
         else:
@@ -669,7 +692,7 @@ class POSTrainer:
             
             if self.scaler is not None:
                 # Mixed precision training
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     logp = self.model(inputs, mask)
                     if self.criterion is not None:
                         loss = self.criterion(logp.transpose(1,2), upos)
@@ -766,7 +789,7 @@ class POSTrainer:
             
             if self.scaler is not None:
                 # Mixed precision training
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     logp = self.model(inputs, mask)
                     if self.criterion is not None:
                         loss = self.criterion(logp.transpose(1,2), upos)

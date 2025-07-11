@@ -75,6 +75,8 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Disable label smoothing")
     parser.add_argument("--no-temp-scaling", action="store_true",
                         help="Disable temperature scaling")
+    parser.add_argument("--class-balanced", action="store_true",
+                        help="Use class-balanced loss with inverse log frequency weighting")
     parser.add_argument("--cosine", action="store_true",
                         help="Use cosine annealing instead of SGDR")
     parser.add_argument("--share", action="store_true",
@@ -248,6 +250,7 @@ def print_args_summary(args: Any) -> None:
     # Features
     print(f"🌡️  Temperature Scaling: {'No' if args.no_temp_scaling else 'Yes'}")
     print(f"🎯 Label Smoothing: {'No' if args.no_label_smoothing else 'Yes'}")
+    print(f"⚖️  Class-Balanced Loss: {'Yes' if args.class_balanced else 'No'}")
     print(f"📈 Scheduler: {'Cosine' if args.cosine else 'SGDR'}")
     print(f"🖥️  Compute Node: {'Yes' if args.compute_node else 'No'}")
     

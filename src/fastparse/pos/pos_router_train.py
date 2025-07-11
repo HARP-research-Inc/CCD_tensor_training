@@ -447,7 +447,7 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
         
         if train and scaler is not None:
             # Mixed precision training
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logp = model(ids, mask)                # [B, T, 18]
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)
@@ -602,7 +602,7 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
         
         if scaler is not None:
             # Mixed precision training
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logp = model(ids, mask)                # [B, T, 18]
                 if criterion is not None:
                     loss = criterion(logp.transpose(1,2), upos)

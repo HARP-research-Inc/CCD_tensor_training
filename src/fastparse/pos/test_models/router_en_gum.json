@@ -1,7 +1,7 @@
 {
   "model_name": "router_en_gum",
-  "description": "Universal Dependencies EN_GUM POS Router (Fixed 100 epochs) [TempScaling, SGDR]",
-  "created_at": "2025-07-11T17:09:25.947492",
+  "description": "Universal Dependencies EN_GUM POS Router (Fixed 100 epochs) [ClassBalanced, TempScaling, SGDR]",
+  "created_at": "2025-07-11T19:46:25.844144",
   "architecture": {
     "type": "DepthWiseCNNRouter",
     "emb_dim": 48,
@@ -10,6 +10,11 @@
     "max_len": 64,
     "use_two_layers": true,
     "use_temperature_scaling": true,
+    "use_hash_embed": false,
+    "hash_dim": null,
+    "num_buckets": null,
+    "ngram_min": null,
+    "ngram_max": null,
     "dropout_rate": 0.1,
     "activation": "ReLU",
     "normalization": "LayerNorm"
@@ -22,7 +27,8 @@
     ],
     "pad_token": "<PAD>",
     "augmented": false,
-    "penn_treebank_included": false
+    "penn_treebank_included": false,
+    "hash_based": false
   },
   "training": {
     "dataset_size": {

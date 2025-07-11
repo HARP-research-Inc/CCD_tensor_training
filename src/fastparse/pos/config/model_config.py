@@ -125,6 +125,8 @@ def get_model_description(args: Any) -> str:
         features.append(f"Hash-{args.hash_dim}D")
     if args.adaptive_batch:
         features.append("CABS")
+    if args.class_balanced:
+        features.append("ClassBalanced")
     if not args.no_temp_scaling:
         features.append("TempScaling")
     if args.augment:
