@@ -98,7 +98,7 @@ class Adverb(Box):
 		super().__init__(label, model_path)
 		self.type = "ADV"
 		self.grammar = ['SELF', 'VERB', '|', "SELF", "ADJ"]
-		self.model = Box.model_cache.load_ann((label, "adv_model"), n=1)
+		self.model = Box.model_cache.load_ann((label, "general_adv_model"), n=1)
 	
 	def forward_helper(self):
 		"""
@@ -420,12 +420,16 @@ class SubordinatingConjunction(Box):
 	def forward_helper(self):
 		word_packets = [packet[1] for packet in self.packets]
 
-		print("packet length", len(self.packets))
+		print("packet length:", len(self.packets))
+		print("incoming words:", [wire.label for wire in self.in_wires] )
+		print("packet info:", [packet[0] for packet in self.packets])
 		if len(word_packets) not in (1, 2):
 			raise ValueError(f"Subordinating conjunction {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
 		
 		if len(word_packets) == 1 and isinstance(word_packets[0], torch.nn.Module):
 			return NestedNetwork(self.models[len(word_packets) - 1], word_packets[0])
+
+		
 
 		output = self.models[len(word_packets) - 1](*word_packets)
 	
