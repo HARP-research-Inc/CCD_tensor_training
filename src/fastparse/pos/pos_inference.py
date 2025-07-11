@@ -2,6 +2,13 @@
 # pos_inference.py
 #
 # Inference script for the trained POS router model
+# 
+# COMPATIBILITY: Updated to match pos_router_train.py architecture:
+# - EMB_DIM=48 (not 64)
+# - Enhanced model with layer normalization, dropout, and temperature scaling
+# - Updated POS tag mapping to include "SPACE" instead of "_"
+# - Default model is router_combined.pt (trained with --combine flag)
+# - Penn Treebank WSJ evaluation support added
 
 import torch
 import torch.nn as nn
@@ -15,67 +22,204 @@ import os
 from collections import defaultdict
 from tqdm import tqdm
 
-# Same hyperparameters as training
-EMB_DIM = 64
-DW_KERNEL = 3
-N_TAGS = 18  # Model trained with 18 classes (0-17) to match dataset
-MAX_LEN = 64
+def load_model_config(config_path):
+    """Load model configuration from JSON file."""
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    
+    print(f"📋 Loaded config: {config['model_name']} - {config['description']}")
+    return config
 
-# Correct POS tag mapping from dataset (18 tags: 0-17)
-POS_TAGS = [
-    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", 
-    "DET", "CCONJ", "PROPN", "PRON", "X", "_", "ADV", "INTJ", "VERB", "AUX"
-]
+def get_config_path(model_path):
+    """Get corresponding config path for a model file."""
+    # Replace .pt extension with .json
+    config_path = model_path.replace('.pt', '.json')
+    if not os.path.exists(config_path):
+        # Try same directory
+        model_dir = os.path.dirname(model_path)
+        model_name = os.path.basename(model_path).replace('.pt', '')
+        config_path = os.path.join(model_dir, f"{model_name}.json")
+    
+    return config_path
+
+# These will be set from config
+EMB_DIM = 48
+DW_KERNEL = 3  
+N_TAGS = 18
+MAX_LEN = 64
+POS_TAGS = []
 
 class DepthWiseCNNRouter(nn.Module):
-    """Same model architecture as training."""
-    def __init__(self, vocab_size: int):
+    """Configurable POS router with depth-wise convolutions and optional second layer."""
+    def __init__(self, vocab_size: int, config: dict):
         super().__init__()
-        self.emb = nn.Embedding(vocab_size, EMB_DIM, padding_idx=0)
-        self.dw = nn.Conv1d(
-            EMB_DIM, EMB_DIM, kernel_size=DW_KERNEL,
-            padding=DW_KERNEL // 2,
-            groups=EMB_DIM, bias=True
+        
+        # Extract architecture parameters from config
+        arch = config['architecture']
+        self.emb_dim = arch['emb_dim']
+        self.dw_kernel = arch['dw_kernel']
+        self.n_tags = arch['n_tags']
+        self.use_second_conv = arch.get('use_second_conv_layer', False)
+        self.use_temp_scaling = arch.get('use_temperature_scaling', True)
+        dropout_rate = arch.get('dropout_rate', 0.1)
+        
+        # Embedding layer
+        self.emb = nn.Embedding(vocab_size, self.emb_dim, padding_idx=0)
+        self.emb_dropout = nn.Dropout(dropout_rate)
+        
+        # First depth-wise separable Conv layer
+        self.dw1 = nn.Conv1d(
+            self.emb_dim, self.emb_dim, kernel_size=self.dw_kernel,
+            padding=self.dw_kernel // 2,
+            groups=self.emb_dim, bias=True
         )
-        self.pw = nn.Conv1d(EMB_DIM, EMB_DIM, kernel_size=1)
-        self.act = nn.ReLU()
-        self.lin = nn.Linear(EMB_DIM, N_TAGS)
+        self.pw1 = nn.Conv1d(self.emb_dim, self.emb_dim, kernel_size=1)
+        self.norm1 = nn.LayerNorm(self.emb_dim)
+        self.act1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout_rate)
+        
+        # Optional second depth-wise separable Conv layer
+        if self.use_second_conv:
+            self.dw2 = nn.Conv1d(
+                self.emb_dim, self.emb_dim, kernel_size=self.dw_kernel,
+                padding=self.dw_kernel // 2,
+                groups=self.emb_dim, bias=True
+            )
+            self.pw2 = nn.Conv1d(self.emb_dim, self.emb_dim, kernel_size=1)
+            self.norm2 = nn.LayerNorm(self.emb_dim)
+            self.act2 = nn.ReLU()
+            self.dropout2 = nn.Dropout(dropout_rate)
+        
+        # Final classification layer
+        self.lin = nn.Linear(self.emb_dim, self.n_tags)
+        
+        # Temperature parameter for calibration
+        if self.use_temp_scaling:
+            self.temperature = nn.Parameter(torch.ones(1))
+        else:
+            self.register_parameter('temperature', None)
 
-    def forward(self, token_ids, mask):
-        x = self.emb(token_ids)
-        x = x.transpose(1, 2)
-        x = self.pw(self.act(self.dw(x)))
-        x = x.transpose(1, 2)
-        logits = self.lin(x)
+    def forward(self, token_ids, mask, use_temperature=False):
+        """
+        token_ids : [B, T] int64
+        mask      : [B, T] bool  (True on real tokens, False on padding)
+        use_temperature : bool - whether to apply temperature scaling
+        returns   : log-probs  [B, T, N_TAGS]
+        """
+        x = self.emb(token_ids)               # [B, T, D]
+        x = self.emb_dropout(x)
+        
+        # First conv layer
+        x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
+        x = self.pw1(self.act1(self.dw1(x)))  # depth-wise + point-wise
+        x = x.transpose(1, 2)                 # back to [B, T, D]
+        x = self.norm1(x)
+        x = self.dropout1(x)
+        
+        # Optional second conv layer
+        if self.use_second_conv:
+            x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
+            x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
+            x = x.transpose(1, 2)                 # back to [B, T, D]
+            x = self.norm2(x)
+            x = self.dropout2(x)
+        
+        # Final classification
+        logits = self.lin(x)                  # [B, T, n_tags]
+        
+        # Apply temperature scaling if requested and available
+        if use_temperature and self.use_temp_scaling and self.temperature is not None:
+            logits = logits / self.temperature
+        
+        # Use −inf on padding positions so CE ignores them
         logits = logits.masked_fill(~mask.unsqueeze(-1), -1e4)
         return torch.log_softmax(logits, dim=-1)
 
-def build_vocab_from_dataset(treebank="en_gum"):
-    """Build the same vocabulary as used in training."""
-    print(f"Loading {treebank} dataset to rebuild vocabulary...")
-    ds_train = load_dataset("universal_dependencies", treebank, split="train", trust_remote_code=True)
+def build_vocab_from_config(config):
+    """Build vocabulary based on configuration."""
+    vocab_config = config['vocabulary']
+    treebanks = vocab_config['treebanks']
+    pad_token = vocab_config.get('pad_token', '<PAD>')
     
-    vocab = {"<PAD>": 0}
-    for ex in ds_train:
-        for tok in ex["tokens"]:
-            if tok not in vocab:
-                vocab[tok] = len(vocab)
-    return vocab
+    if vocab_config['type'] == 'combined':
+        print(f"🔥 Loading combined treebanks to rebuild vocabulary: {treebanks}")
+        vocab = {pad_token: 0}
+        
+        for tb in treebanks:
+            try:
+                ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
+                for ex in ds_train_tb:
+                    for tok in ex["tokens"]:
+                        if tok not in vocab:
+                            vocab[tok] = len(vocab)
+                print(f"  ✓ Processed {tb}: vocab size now {len(vocab)}")
+            except Exception as e:
+                print(f"  ❌ Failed to load {tb}: {e}")
+        
+        print(f"🎯 Final vocabulary size: {len(vocab)}")
+        
+        # Validate vocab size if expected size is provided
+        expected_size = vocab_config.get('expected_vocab_size')
+        if expected_size and abs(len(vocab) - expected_size) > 100:  # Allow some tolerance
+            print(f"⚠️  Warning: Vocab size mismatch! Expected ~{expected_size}, got {len(vocab)}")
+        
+        return vocab
+    
+    elif vocab_config['type'] == 'single':
+        print(f"📚 Loading single treebank vocabulary: {treebanks[0]}")
+        ds_train = load_dataset("universal_dependencies", treebanks[0], split="train", trust_remote_code=True)
+        
+        vocab = {pad_token: 0}
+        for ex in ds_train:
+            for tok in ex["tokens"]:
+                if tok not in vocab:
+                    vocab[tok] = len(vocab)
+        
+        print(f"📊 Vocabulary size: {len(vocab)}")
+        return vocab
+    
+    else:
+        raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}")
 
 class POSPredictor:
-    def __init__(self, model_path, treebank="en_gum"):
+    def __init__(self, model_path, config_path=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Rebuild vocabulary (same as training)
-        self.vocab = build_vocab_from_dataset(treebank)
+        # Load configuration
+        if config_path is None:
+            config_path = get_config_path(model_path)
         
-        # Load model
-        self.model = DepthWiseCNNRouter(len(self.vocab)).to(self.device)
+        self.config = load_model_config(config_path)
+        
+        # Set global variables from config for backwards compatibility
+        global EMB_DIM, DW_KERNEL, N_TAGS, MAX_LEN, POS_TAGS
+        arch = self.config['architecture']
+        EMB_DIM = arch['emb_dim']
+        DW_KERNEL = arch['dw_kernel']
+        N_TAGS = arch['n_tags']
+        MAX_LEN = arch['max_len']
+        POS_TAGS = self.config['pos_tags']
+        
+        # Store config values as instance variables
+        self.pos_tags = self.config['pos_tags']
+        self.max_len = arch['max_len']
+        
+        # Build vocabulary from config
+        self.vocab = build_vocab_from_config(self.config)
+        
+        # Load model with config
+        self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
         self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.model.eval()
         
         print(f"✓ Model loaded on {self.device}")
         print(f"✓ Vocabulary size: {len(self.vocab)}")
+        print(f"✓ Architecture: {arch['emb_dim']}D, " +
+              f"{'2-layer' if arch.get('use_second_conv_layer', False) else '1-layer'} CNN, " +
+              f"{'with' if arch.get('use_temperature_scaling', True) else 'no'} temp scaling")
 
     def tokenize(self, text):
         """Lightweight tokenization that separates punctuation properly."""
@@ -198,22 +342,23 @@ class POSPredictor:
             return []
         
         # Convert to token IDs
-        token_ids = [self.vocab.get(tok, 0) for tok in tokens][:MAX_LEN]
+        token_ids = [self.vocab.get(tok, 0) for tok in tokens][:self.max_len]
         
         # Create tensors
         ids = torch.tensor([token_ids]).to(self.device)
         mask = torch.ones_like(ids, dtype=torch.bool)
         
-        # Get predictions
+        # Get predictions (ensure model is in eval mode for dropout/normalization)
+        self.model.eval()
         with torch.no_grad():
-            logp = self.model(ids, mask)
+            logp = self.model(ids, mask, use_temperature=True)  # Use calibrated temperature
             pred_ids = logp.argmax(-1).squeeze(0).cpu().numpy()
         
         # Convert to POS tags
         predictions = []
         for i, (token, pred_id) in enumerate(zip(tokens, pred_ids)):
             if i < len(token_ids):  # Only for actual tokens
-                pos_tag = POS_TAGS[pred_id] if pred_id < len(POS_TAGS) else "X"
+                pos_tag = self.pos_tags[pred_id] if pred_id < len(self.pos_tags) else "X"
                 predictions.append((token, pos_tag))
         
         return predictions
@@ -237,7 +382,7 @@ class POSPredictor:
             
             # Find max length for padding
             max_len = max(len(tokens) for tokens in batch_tokens) if batch_tokens else 0
-            max_len = min(max_len, MAX_LEN)  # Respect model's max length
+            max_len = min(max_len, self.max_len)  # Respect model's max length
             
             # Create batch tensors
             batch_ids = torch.zeros(len(batch_tokens), max_len, dtype=torch.long)
@@ -253,9 +398,10 @@ class POSPredictor:
             batch_ids = batch_ids.to(self.device)
             batch_mask = batch_mask.to(self.device)
             
-            # Get predictions
+            # Get predictions (ensure model is in eval mode)
+            self.model.eval()
             with torch.no_grad():
-                logp = self.model(batch_ids, batch_mask)
+                logp = self.model(batch_ids, batch_mask, use_temperature=True)
                 pred_ids = logp.argmax(-1).cpu().numpy()
             
             # Convert to POS tags
@@ -263,7 +409,7 @@ class POSPredictor:
                 predictions = []
                 for k, (token, pred_id) in enumerate(zip(tokens, preds)):
                     if k < len(tokens) and batch_mask[j, k].item():
-                        pos_tag = POS_TAGS[pred_id] if pred_id < len(POS_TAGS) else "X"
+                        pos_tag = self.pos_tags[pred_id] if pred_id < len(self.pos_tags) else "X"
                         predictions.append((token, pos_tag))
                 batch_predictions.append(predictions)
             
@@ -910,12 +1056,448 @@ def print_comparison_results(results):
             for token, pos in predictions:
                 print(f"  {token:15} -> {pos}")
 
+# ============================================================================
+# PENN TREEBANK EVALUATION FUNCTIONS
+# ============================================================================
+
+def penn_to_universal_mapping():
+    """
+    Comprehensive mapping from Penn Treebank POS tags to Universal POS tags.
+    Based on the Universal Dependencies mapping.
+    """
+    return {
+        # Nouns
+        'NN': 'NOUN', 'NNS': 'NOUN', 'NNP': 'PROPN', 'NNPS': 'PROPN',
+        
+        # Verbs  
+        'VB': 'VERB', 'VBD': 'VERB', 'VBG': 'VERB', 'VBN': 'VERB', 'VBP': 'VERB', 'VBZ': 'VERB',
+        
+        # Auxiliaries (context-dependent, but these are common aux verbs)
+        'MD': 'AUX',  # Modal auxiliaries
+        
+        # Adjectives
+        'JJ': 'ADJ', 'JJR': 'ADJ', 'JJS': 'ADJ',
+        
+        # Adverbs
+        'RB': 'ADV', 'RBR': 'ADV', 'RBS': 'ADV', 'WRB': 'ADV',
+        
+        # Pronouns
+        'PRP': 'PRON', 'PRP$': 'PRON', 'WP': 'PRON', 'WP$': 'PRON',
+        
+        # Determiners
+        'DT': 'DET', 'PDT': 'DET', 'WDT': 'DET',
+        
+        # Prepositions/Adpositions
+        'IN': 'ADP',
+        
+        # Coordinating conjunctions
+        'CC': 'CCONJ',
+        
+        # Subordinating conjunctions  
+        # Note: IN can be either ADP or SCONJ - we default to ADP above
+        
+        # Numbers
+        'CD': 'NUM',
+        
+        # Particles
+        'RP': 'PART', 'TO': 'PART',
+        
+        # Interjections
+        'UH': 'INTJ',
+        
+        # Symbols and punctuation
+        'SYM': 'SYM',
+        '.': 'PUNCT', ',': 'PUNCT', ':': 'PUNCT', ';': 'PUNCT', 
+        '!': 'PUNCT', '?': 'PUNCT', '``': 'PUNCT', "''": 'PUNCT',
+        '(': 'PUNCT', ')': 'PUNCT', '"': 'PUNCT', '#': 'PUNCT', '$': 'PUNCT',
+        
+        # Other/Unknown
+        'FW': 'X',     # Foreign words
+        'LS': 'X',     # List markers
+        'POS': 'PART', # Possessive endings
+        'EX': 'PRON',  # Existential there
+        
+        # Default for any unmapped tags
+        'X': 'X'
+    }
+
+def convert_penn_to_universal(penn_tags):
+    """Convert Penn Treebank tags to Universal POS tags."""
+    mapping = penn_to_universal_mapping()
+    universal_tags = []
+    
+    for word, penn_tag in penn_tags:
+        # Handle compound tags (like PRP$ -> PRON)
+        base_tag = penn_tag.split('-')[0].split('+')[0]  # Remove suffixes like -TMP, -1, etc.
+        universal_tag = mapping.get(base_tag, 'X')
+        
+        # Special handling for auxiliaries (context-dependent)
+        if base_tag in ['VBZ', 'VBP', 'VBD', 'VB'] and word.lower() in {
+            'be', 'am', 'is', 'are', 'was', 'were', 'being', 'been',
+            'have', 'has', 'had', 'having', 'do', 'does', 'did'
+        }:
+            universal_tag = 'AUX'
+        
+        universal_tags.append((word, universal_tag))
+    
+    return universal_tags
+
+def load_penn_treebank_test():
+    """
+    Load Penn Treebank test data available through NLTK.
+    
+    Note: NLTK's Penn Treebank corpus contains a sample of the full corpus.
+    For full WSJ sections 22-24 evaluation, you need the complete LDC Penn Treebank.
+    
+    Returns:
+        List of (sentence, tags) tuples where tags are in Universal POS format
+    """
+    try:
+        # Ensure Penn Treebank data is available
+        try:
+            nltk.data.find('corpora/treebank')
+        except LookupError:
+            print("Downloading Penn Treebank sample...")
+            nltk.download('treebank', quiet=True)
+        
+        from nltk.corpus import treebank
+        
+        print("Loading Penn Treebank sample from NLTK...")
+        
+        # Get all tagged sentences
+        penn_sentences = list(treebank.tagged_sents())
+        
+        # Convert to universal tags and prepare test data
+        test_data = []
+        
+        for sent in penn_sentences:
+            if len(sent) == 0:
+                continue
+                
+            # Extract words and penn tags
+            words = [word for word, tag in sent]
+            penn_tags = [(word, tag) for word, tag in sent]
+            
+            # Convert to universal tags
+            universal_tags = convert_penn_to_universal(penn_tags)
+            expected_tags = [tag for word, tag in universal_tags]
+            
+            # Create sentence text
+            sentence_text = " ".join(words)
+            
+            test_data.append((sentence_text, expected_tags))
+        
+        print(f"✅ Loaded {len(test_data)} Penn Treebank sentences")
+        print(f"📊 Total tokens: {sum(len(tags) for _, tags in test_data)}")
+        
+        return test_data
+        
+    except Exception as e:
+        print(f"❌ Error loading Penn Treebank: {e}")
+        print("💡 This uses NLTK's sample of Penn Treebank. For full WSJ sections 22-24:")
+        print("   1. Obtain the complete Penn Treebank from LDC")
+        print("   2. Use load_wsj_sections_22_24() function below")
+        return []
+
+def load_wsj_sections_22_24(penn_treebank_path):
+    """
+    Load Wall Street Journal sections 22-24 from the complete Penn Treebank.
+    
+    This function is for users who have access to the complete LDC Penn Treebank.
+    
+    Args:
+        penn_treebank_path: Path to the Penn Treebank root directory
+        
+    Returns:
+        List of (sentence, tags) tuples for WSJ sections 22-24
+        
+    Example usage:
+        # If you have the complete Penn Treebank from LDC:
+        test_data = load_wsj_sections_22_24("/path/to/penn-treebank-rel3/parsed/mrg/wsj/")
+    """
+    import os
+    import glob
+    
+    if not os.path.exists(penn_treebank_path):
+        raise FileNotFoundError(f"Penn Treebank path not found: {penn_treebank_path}")
+    
+    test_data = []
+    
+    # WSJ sections 22, 23, 24 are the standard test set
+    test_sections = ['22', '23', '24']
+    
+    print(f"Loading WSJ sections {test_sections} from {penn_treebank_path}")
+    
+    for section in test_sections:
+        section_path = os.path.join(penn_treebank_path, section)
+        if not os.path.exists(section_path):
+            print(f"⚠️  Section {section} not found at {section_path}")
+            continue
+            
+        # Find all .mrg files in this section
+        mrg_files = glob.glob(os.path.join(section_path, "*.mrg"))
+        
+        for mrg_file in mrg_files:
+            print(f"Processing {mrg_file}...")
+            
+            # Parse the .mrg file (simplified parser)
+            # Note: Full implementation would need a proper treebank parser
+            # This is a placeholder for the actual implementation
+            try:
+                sentences = parse_mrg_file(mrg_file)
+                for sentence, penn_tags in sentences:
+                    universal_tags = convert_penn_to_universal(penn_tags)
+                    expected_tags = [tag for word, tag in universal_tags]
+                    test_data.append((sentence, expected_tags))
+            except Exception as e:
+                print(f"Error parsing {mrg_file}: {e}")
+    
+    print(f"✅ Loaded {len(test_data)} sentences from WSJ sections {test_sections}")
+    return test_data
+
+def parse_mrg_file(mrg_file):
+    """
+    Parse a .mrg file from Penn Treebank.
+    
+    Note: This is a simplified implementation. A complete implementation
+    would use the NLTK tree parsing functionality or a dedicated parser.
+    """
+    # Placeholder implementation
+    # In practice, you would use:
+    # from nltk.tree import Tree
+    # Or use the full Penn Treebank parsing utilities
+    
+    print(f"⚠️  parse_mrg_file is a placeholder. Implement full .mrg parsing for complete WSJ evaluation.")
+    return []
+
+def evaluate_on_penn_treebank(predictor, test_data=None, max_sentences=None):
+    """
+    Evaluate the model on Penn Treebank test data.
+    
+    Args:
+        predictor: POSPredictor instance
+        test_data: Pre-loaded test data, or None to load from NLTK
+        max_sentences: Limit number of sentences for testing
+        
+    Returns:
+        Dictionary with evaluation results
+    """
+    if test_data is None:
+        test_data = load_penn_treebank_test()
+    
+    if not test_data:
+        return {"error": "No Penn Treebank test data available"}
+    
+    if max_sentences:
+        test_data = test_data[:max_sentences]
+    
+    print(f"\n🏆 PENN TREEBANK EVALUATION")
+    print(f"📊 Testing on {len(test_data)} sentences")
+    
+    correct = 0
+    total = 0
+    tag_stats = defaultdict(lambda: {"correct": 0, "total": 0})
+    
+    start_time = time.time()
+    
+    for i, (sentence, expected_tags) in enumerate(tqdm(test_data, desc="Evaluating")):
+        try:
+            # Get predictions
+            predictions = predictor.predict(sentence)
+            predicted_tags = [tag for word, tag in predictions]
+            
+            # Align predictions with expected (handle length mismatches)
+            min_len = min(len(predicted_tags), len(expected_tags))
+            
+            for j in range(min_len):
+                pred_tag = predicted_tags[j]
+                true_tag = expected_tags[j]
+                
+                total += 1
+                tag_stats[true_tag]["total"] += 1
+                
+                if pred_tag == true_tag:
+                    correct += 1
+                    tag_stats[true_tag]["correct"] += 1
+        
+        except Exception as e:
+            print(f"Error processing sentence {i}: {e}")
+            continue
+    
+    elapsed_time = time.time() - start_time
+    
+    # Calculate metrics
+    accuracy = correct / total if total > 0 else 0
+    
+    # Per-tag accuracy
+    tag_accuracies = {}
+    for tag, stats in tag_stats.items():
+        if stats["total"] > 0:
+            tag_accuracies[tag] = stats["correct"] / stats["total"]
+    
+    results = {
+        "accuracy": accuracy,
+        "correct": correct,
+        "total": total,
+        "sentences": len(test_data),
+        "time_seconds": elapsed_time,
+        "tokens_per_second": total / elapsed_time if elapsed_time > 0 else 0,
+        "tag_accuracies": tag_accuracies,
+        "dataset": "Penn Treebank (NLTK sample)"
+    }
+    
+    # Print results
+    print(f"\n📈 PENN TREEBANK RESULTS:")
+    print(f"Accuracy: {accuracy:.1%} ({correct:,}/{total:,} tokens)")
+    print(f"Time: {elapsed_time:.2f}s ({results['tokens_per_second']:.0f} tokens/sec)")
+    print(f"Sentences: {len(test_data):,}")
+    
+    # Show per-tag accuracy for common tags
+    print(f"\n🏷️  PER-TAG ACCURACY:")
+    common_tags = ['NOUN', 'VERB', 'ADJ', 'ADV', 'ADP', 'DET', 'PRON', 'PUNCT']
+    for tag in common_tags:
+        if tag in tag_accuracies and tag_stats[tag]["total"] >= 10:
+            acc = tag_accuracies[tag]
+            count = tag_stats[tag]["total"]
+            print(f"{tag:8s}: {acc:.1%} ({count:,} tokens)")
+    
+    return results
+
+def benchmark_penn_treebank_comparison(predictor, max_sentences=500):
+    """
+    Compare performance on Penn Treebank against NLTK and spaCy baselines.
+    """
+    print(f"\n🥊 PENN TREEBANK BENCHMARK COMPARISON")
+    
+    # Load test data
+    test_data = load_penn_treebank_test()
+    if not test_data:
+        print("❌ No Penn Treebank data available for comparison")
+        return {}
+    
+    if max_sentences:
+        test_data = test_data[:max_sentences]
+    
+    print(f"📊 Comparing on {len(test_data)} sentences")
+    
+    results = {}
+    
+    # Test our model
+    print("\n🤖 Testing our model...")
+    our_results = evaluate_on_penn_treebank(predictor, test_data)
+    results['our_model'] = our_results
+    
+    # Test NLTK
+    print("\n📚 Testing NLTK...")
+    try:
+        # Ensure NLTK data is available
+        try:
+            nltk.data.find('taggers/averaged_perceptron_tagger')
+        except LookupError:
+            print("Downloading NLTK POS tagger...")
+            nltk.download('averaged_perceptron_tagger', quiet=True)
+        
+        start_time = time.time()
+        correct = 0
+        total = 0
+        
+        for sentence, expected_tags in tqdm(test_data, desc="NLTK"):
+            tokens = predictor.tokenize(sentence)
+            nltk_tagged = nltk.pos_tag(tokens)
+            
+            # Convert NLTK (Penn) tags to Universal
+            universal_tagged = convert_penn_to_universal(nltk_tagged)
+            predicted_tags = [tag for word, tag in universal_tagged]
+            
+            # Align and count
+            min_len = min(len(predicted_tags), len(expected_tags))
+            for j in range(min_len):
+                total += 1
+                if predicted_tags[j] == expected_tags[j]:
+                    correct += 1
+        
+        elapsed_time = time.time() - start_time
+        nltk_accuracy = correct / total if total > 0 else 0
+        
+        results['nltk'] = {
+            "accuracy": nltk_accuracy,
+            "correct": correct,
+            "total": total,
+            "time_seconds": elapsed_time,
+            "tokens_per_second": total / elapsed_time if elapsed_time > 0 else 0
+        }
+        
+    except Exception as e:
+        print(f"❌ NLTK test failed: {e}")
+        results['nltk'] = {"error": str(e)}
+    
+    # Test spaCy (optional)
+    print("\n🚀 Testing spaCy...")
+    try:
+        import spacy
+        
+        # Try to load spacy model
+        try:
+            nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            print("📦 spaCy en_core_web_sm not found. Install with: python -m spacy download en_core_web_sm")
+            results['spacy'] = {"error": "Model not available"}
+        else:
+            start_time = time.time()
+            correct = 0
+            total = 0
+            
+            for sentence, expected_tags in tqdm(test_data, desc="spaCy"):
+                doc = nlp(sentence)
+                predicted_tags = [token.pos_ for token in doc]
+                
+                # spaCy uses Universal POS tags by default
+                min_len = min(len(predicted_tags), len(expected_tags))
+                for j in range(min_len):
+                    total += 1
+                    if predicted_tags[j] == expected_tags[j]:
+                        correct += 1
+            
+            elapsed_time = time.time() - start_time
+            spacy_accuracy = correct / total if total > 0 else 0
+            
+            results['spacy'] = {
+                "accuracy": spacy_accuracy,
+                "correct": correct,
+                "total": total,
+                "time_seconds": elapsed_time,
+                "tokens_per_second": total / elapsed_time if elapsed_time > 0 else 0
+            }
+    
+    except ImportError:
+        print("📦 spaCy not available. Install with: pip install spacy")
+        results['spacy'] = {"error": "Not installed"}
+    except Exception as e:
+        print(f"❌ spaCy test failed: {e}")
+        results['spacy'] = {"error": str(e)}
+    
+    # Print comparison table
+    print(f"\n📊 PENN TREEBANK COMPARISON RESULTS:")
+    print(f"{'Model':<12} {'Accuracy':<10} {'Speed (tok/s)':<12} {'Time (s)':<10}")
+    print("-" * 50)
+    
+    for model_name, model_results in results.items():
+        if 'error' not in model_results:
+            acc = model_results['accuracy']
+            speed = model_results['tokens_per_second']
+            time_s = model_results['time_seconds']
+            print(f"{model_name:<12} {acc:<10.1%} {speed:<12.0f} {time_s:<10.2f}")
+        else:
+            print(f"{model_name:<12} {'ERROR':<10} {'-':<12} {'-':<10}")
+    
+    return results
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="router_en_gum.pt", 
+    parser.add_argument("--model", default="router_combined.pt", 
                         help="Path to saved model weights")
-    parser.add_argument("--treebank", default="en_gum",
-                        help="Treebank used for training (to rebuild vocab)")
+    parser.add_argument("--config", default=None,
+                        help="Path to model configuration JSON file (auto-detected if not provided)")
     parser.add_argument("--text", type=str,
                         help="Text to analyze (if not provided, enters interactive mode)")
     parser.add_argument("--benchmark", action="store_true",
@@ -938,10 +1520,46 @@ def main():
                         help="JSON file to store/load optimal batch size (default: batch_config.json)")
     parser.add_argument("--no-fine-tuning", action="store_true",
                         help="Skip fine-grained optimization (faster but less precise)")
+    parser.add_argument("--penn-treebank", action="store_true",
+                        help="Evaluate on Penn Treebank (NLTK sample)")
+    parser.add_argument("--wsj-path", type=str, default=None,
+                        help="Path to full Penn Treebank for WSJ sections 22-24 evaluation")
+    parser.add_argument("--penn-benchmark", action="store_true",
+                        help="Compare models on Penn Treebank")
     args = parser.parse_args()
 
     # Initialize predictor
-    predictor = POSPredictor(args.model, args.treebank)
+    predictor = POSPredictor(args.model, args.config)
+
+    # Penn Treebank evaluation mode
+    if args.penn_treebank or args.wsj_path or args.penn_benchmark:
+        print("🏆 PENN TREEBANK EVALUATION MODE")
+        
+        if args.wsj_path:
+            # Full WSJ sections 22-24 evaluation (requires complete Penn Treebank)
+            try:
+                test_data = load_wsj_sections_22_24(args.wsj_path)
+                if test_data:
+                    print("🎯 Evaluating on WSJ sections 22-24 (gold standard)")
+                    results = evaluate_on_penn_treebank(predictor, test_data)
+                    print("\n📊 This is the standard Penn Treebank WSJ test set!")
+                else:
+                    print("❌ Failed to load WSJ sections 22-24")
+            except Exception as e:
+                print(f"❌ Error loading WSJ data: {e}")
+                print("💡 Make sure you have the complete Penn Treebank from LDC")
+                
+        elif args.penn_benchmark:
+            # Compare models on Penn Treebank
+            benchmark_penn_treebank_comparison(predictor, max_sentences=args.num_sentences)
+            
+        else:
+            # NLTK Penn Treebank sample evaluation
+            print("📚 Using NLTK Penn Treebank sample")
+            print("💡 For full WSJ sections 22-24, use --wsj-path with complete Penn Treebank")
+            results = evaluate_on_penn_treebank(predictor, max_sentences=args.num_sentences)
+            
+        return
 
     # Load optimal batch size if available
     optimal_config = load_optimal_batch_size(args.config_file)
@@ -967,7 +1585,7 @@ def main():
         print("🚀 Large-Scale Batch Testing Mode")
         
         # Load test sentences
-        test_sentences = load_test_sentences(args.num_sentences, args.treebank)
+        test_sentences = load_test_sentences(args.num_sentences, predictor.config['vocabulary']['treebanks'][0])
         
         if args.benchmark:
             # Run full benchmark with all models
@@ -1020,10 +1638,12 @@ def main():
         # Interactive mode
         print("\n" + "="*60)
         print("Interactive POS Tagger")
+        print(f"📋 Model: {predictor.config['model_name']} - {predictor.config['description']}")
         print("Enter text to analyze (or 'quit' to exit)")
         if args.benchmark:
             print("🏆 Benchmark mode: comparing with NLTK and spaCy")
         print("💡 Tip: Use --batch for large-scale testing, --stress-test for extreme performance")
+        print("💡 Tip: Use --penn-treebank for Penn Treebank evaluation")
         print("="*60)
         
         while True:

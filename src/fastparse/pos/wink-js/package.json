@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "wink-pos-tagger": "^2.2.2"
+  },
+  "name": "wink-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "devDependencies": {},
+  "scripts": {
+    "test": "node index.js"
+  },
+  "author": "Harper Chisari",
+  "license": "ISC",
+  "description": ""
+}

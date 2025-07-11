@@ -106,11 +106,11 @@ class DepthWiseCNNRouter(nn.Module):
         x = self.dropout1(x)
         
         # Second conv layer
-        #x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
-        #x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
-        #x = x.transpose(1, 2)                 # back to [B, T, D]
-        #x = self.norm2(x)
-        #x = self.dropout2(x)
+        x = x.transpose(1, 2)                 # -> [B, D, T]  for Conv1d
+        x = self.pw2(self.act2(self.dw2(x)))  # depth-wise + point-wise
+        x = x.transpose(1, 2)                 # back to [B, T, D]
+        x = self.norm2(x)
+        x = self.dropout2(x)
         
         # Final classification
         logits = self.lin(x)                  # [B, T, 18]
@@ -411,11 +411,13 @@ def main():
                         help="Disable label smoothing")
     parser.add_argument("--no-temp-scaling", action="store_true",
                         help="Disable temperature scaling")
+    parser.add_argument("--share", action="store_true",
+                        help="If 4 GPUs are available, force use of cuda:1")
     args = parser.parse_args()
-    
+
     # Enable cuDNN autotuning for faster convolutions
     torch.backends.cudnn.benchmark = True
-    
+
     # Configure label smoothing and temperature scaling
     global LABEL_SMOOTHING, TEMP_SCALING
     if args.no_label_smoothing:
@@ -424,114 +426,112 @@ def main():
         TEMP_SCALING = False
 
     print("Loading UD dataset …")
-    
     if args.combine:
-        print("🔥 Loading combined English treebanks for maximum training data!")
         # Load multiple English treebanks for maximum training data
         english_treebanks = [
             "en_ewt",      # English Web Treebank (12,543 sentences)
             "en_gum",      # Georgetown University Multilayer (8,551 sentences) 
             "en_lines",    # English LinES (4,564 sentences)
             "en_partut",   # English ParTUT (1,781 sentences)
-            "en_pronouns", # English Pronouns (305 sentences)
-            "en_esl",      # English ESL (5,124 sentences)
         ]
         
-        train_datasets = []
-        val_datasets = []
+        print(f"🔥 Loading combined English treebanks: {english_treebanks}")
+        
+        # Combine training sets
+        combined_train = []
+        combined_val = []
         
         for tb in english_treebanks:
             try:
                 ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
                 ds_val_tb = load_dataset("universal_dependencies", tb, split="validation", trust_remote_code=True)
-                train_datasets.append(ds_train_tb)
-                val_datasets.append(ds_val_tb)
-                print(f"  ✓ Loaded {tb}: {len(ds_train_tb)} train, {len(ds_val_tb)} val")
+                
+                # Convert to list and extend
+                combined_train.extend(list(ds_train_tb))
+                combined_val.extend(list(ds_val_tb))
+                
+                print(f"  ✓ Loaded {tb}: {len(ds_train_tb)} train, {len(ds_val_tb)} val sentences")
+                
             except Exception as e:
                 print(f"  ❌ Failed to load {tb}: {e}")
+                continue
         
-        # Concatenate datasets
-        from datasets import concatenate_datasets
-        ds_train = concatenate_datasets(train_datasets)
-        ds_val = concatenate_datasets(val_datasets)
-        print(f"🎯 Combined English total: {len(ds_train)} train, {len(ds_val)} val sentences")
+        # Convert back to datasets
+        from datasets import Dataset
+        ds_train = Dataset.from_list(combined_train)
+        ds_val = Dataset.from_list(combined_val)
+        
+        print(f"🎯 Combined dataset: {len(ds_train)} train, {len(ds_val)} val sentences")
+        
+        # Fallback to single treebank if combine failed
+        if len(ds_train) == 0:
+            print("⚠️  Combined loading failed, falling back to single treebank")
+            ds_train = load_dataset("universal_dependencies", "en_ewt", split="train", trust_remote_code=True)
+            ds_val = load_dataset("universal_dependencies", "en_ewt", split="validation", trust_remote_code=True)
+            print(f"📊 Fallback to en_ewt: {len(ds_train)} train, {len(ds_val)} val sentences")
+        
     else:
-        # Single treebank mode
         ds_train = load_dataset("universal_dependencies", args.treebank, split="train", trust_remote_code=True)
-        ds_val = load_dataset("universal_dependencies", args.treebank, split="validation", trust_remote_code=True)
+        ds_val   = load_dataset("universal_dependencies", args.treebank, split="validation", trust_remote_code=True)
         print(f"📊 Single treebank {args.treebank}: {len(ds_train)} train, {len(ds_val)} val sentences")
 
     vocab = build_vocab(ds_train)
-    
-    # Apply data augmentation if requested
     if args.augment:
         ds_train = augment_dataset(ds_train, augment_factor=1.5)
-        # Convert back to dataset format if needed
+        from datasets import Dataset
         if not hasattr(ds_train, 'map'):
-            # Convert list back to dataset-like object
-            from datasets import Dataset
             ds_train = Dataset.from_list(ds_train)
-    
-    # Debug: Check upos value ranges
-    all_upos = []
-    for ex in ds_train:
-        all_upos.extend(ex["upos"])
-    print(f"POS tag range in dataset: {min(all_upos)} to {max(all_upos)}")
-    print(f"Model expects: 0 to {N_TAGS-1}")
-    
+
+    # Pre-tensorify and DataLoader setup (unchanged)
     train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
     val_enc   = ds_val  .map(lambda ex: encode_sent(ex, vocab))
-    
-    # Pre-tensorify datasets to avoid Python tensor creation overhead
     train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
-    val_enc   = val_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
+    val_enc   = val_enc  .with_format("torch", columns=["ids", "upos"], output_all_columns=True)
 
     train_loader = DataLoader(
-        train_enc,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        collate_fn=collate,
-        num_workers=4,       # parallelize Python preprocessing
-        pin_memory=True,     # speed up host→GPU transfer
-        prefetch_factor=2,   # each worker preloads 2 batches
-        persistent_workers=True  # keep workers alive between epochs
+        train_enc, batch_size=BATCH_SIZE, shuffle=True,
+        collate_fn=collate, num_workers=32, pin_memory=True,
+        prefetch_factor=2, persistent_workers=True
     )
     val_loader = DataLoader(
-        val_enc,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        collate_fn=collate,
-        num_workers=2,       # fewer workers for validation
-        pin_memory=True,
-        prefetch_factor=2,
-        persistent_workers=True
+        val_enc, batch_size=BATCH_SIZE, shuffle=False,
+        collate_fn=collate, num_workers=2, pin_memory=True,
+        prefetch_factor=2, persistent_workers=True
     )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model  = DepthWiseCNNRouter(len(vocab)).to(device)
-    opt    = optim.AdamW(model.parameters(), lr=LR_MIN, weight_decay=1e-4)  # Start with min LR for warm-up
-    
-    # Initialize loss function with label smoothing
+    # —— GPU selection logic ——
+    if torch.cuda.is_available():
+        ngpu = torch.cuda.device_count()
+        if args.share and ngpu == 4:
+            selected = 1
+        else:
+            selected = 0
+        torch.cuda.set_device(selected)
+        device = torch.device(f"cuda:{selected}")
+        print(f"🚀 Using GPU device cuda:{selected} (of {ngpu} available)")
+    else:
+        device = torch.device("cpu")
+        print("⚠️  CUDA not available, falling back to CPU")
+
+    # Model, optimizer, criterion, scaler, scheduler
+    model     = DepthWiseCNNRouter(len(vocab)).to(device)
+    optimiser = optim.AdamW(model.parameters(), lr=LR_MIN, weight_decay=1e-4)
+
     criterion = None
     if LABEL_SMOOTHING > 0:
         criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
         print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
-    
-    # Initialize AMP scaler for mixed precision training
-    scaler = GradScaler() if device == "cuda" else None
-    
-    # Cosine annealing scheduler with warm-up
+
+    scaler = GradScaler() if device.type.startswith("cuda") else None
+
     def get_lr(epoch):
         if epoch < WARMUP_EPOCHS:
-            # Linear warm-up from LR_MIN to LR_MAX
             return LR_MIN + (LR_MAX - LR_MIN) * epoch / WARMUP_EPOCHS
-        else:
-            # Cosine decay from LR_MAX to LR_MIN
-            progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
-            return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
-    
-    scheduler = optim.lr_scheduler.LambdaLR(opt, lambda epoch: get_lr(epoch) / LR_MIN)
-    
+        progress = (epoch - WARMUP_EPOCHS) / (EPOCHS - WARMUP_EPOCHS)
+        return LR_MIN + (LR_MAX - LR_MIN) * 0.5 * (1 + math.cos(math.pi * progress))
+
+    scheduler = optim.lr_scheduler.LambdaLR(optimiser, lambda epoch: get_lr(epoch) / LR_MIN)
+
     print(f"🚀 Starting training on {device}")
     print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
     print(f"📈 Cosine annealing LR: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e} (warmup: {WARMUP_EPOCHS} epochs)")
@@ -541,7 +541,7 @@ def main():
     for epoch in range(1, EPOCHS + 1):
         # Training with label smoothing
         train_ppl, train_acc, _ = run_epoch(
-            model, train_loader, opt, device, scaler, criterion, epoch
+            model, train_loader, optimiser, device, scaler, criterion, epoch
         )
         
         # Validation with detailed analysis every 10 epochs
@@ -553,7 +553,7 @@ def main():
         # Step the learning rate scheduler
         scheduler.step()
         
-        current_lr = opt.param_groups[0]['lr']
+        current_lr = optimiser.param_groups[0]['lr']
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
         phase = "warmup" if epoch <= WARMUP_EPOCHS else "cosine"
         print(f"epoch {epoch:02d} | "

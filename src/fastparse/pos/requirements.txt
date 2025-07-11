@@ -1,0 +1,15 @@
+# Working configuration for POS router training
+# Compatible with NumPy 2.x and modern PyTorch
+
+datasets>=3.0,<4.0  # v3.6.0 works with NumPy 2.x but avoids v4.0 breaking changes
+numpy>=2.0.0        # v2.3.1 tested and working
+torch>=2.7.0        # v2.7.1+cu126 tested and working
+tqdm>=4.64.0        # v4.67.1 working
+
+# Optional dependencies (comment out if compatibility issues)
+# scikit-learn>=1.2.0  # Disabled due to NumPy 2.x compatibility issues
+# sentencepiece>=0.1.98  # Not needed for current training
+# conllu>=6.0.0  # Not needed for current training
+
+# Additional recommended packages
+huggingface-hub>=0.24.0  # For dataset access

@@ -1,0 +1,37 @@
+{
+  "model_name": "router_en_gum",
+  "description": "Single EN-GUM treebank POS router",
+  "architecture": {
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_second_conv_layer": false,
+    "use_temperature_scaling": true,
+    "dropout_rate": 0.1
+  },
+  "vocabulary": {
+    "type": "single",
+    "treebanks": ["en_gum"],
+    "expected_vocab_size": 15000,
+    "pad_token": "<PAD>"
+  },
+  "pos_tags": [
+    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", 
+    "DET", "CCONJ", "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+  ],
+  "training_info": {
+    "epochs": 80,
+    "batch_size": 8000,
+    "lr_max": 0.07,
+    "lr_min": 0.0001,
+    "warmup_epochs": 3,
+    "label_smoothing": 0.1,
+    "mixed_precision": true
+  },
+  "inference": {
+    "default_batch_size": 512,
+    "use_temperature": true,
+    "enable_amp": false
+  }
+} 
