@@ -62,7 +62,7 @@ class DepthWiseCNNRouter(nn.Module):
         self.emb_dim = arch['emb_dim']
         self.dw_kernel = arch['dw_kernel']
         self.n_tags = arch['n_tags']
-        self.use_second_conv = arch.get('use_second_conv_layer', False)
+        self.use_second_conv = arch.get('use_second_conv_layer', False) or arch.get('use_two_layers', False)
         self.use_temp_scaling = arch.get('use_temperature_scaling', True)
         dropout_rate = arch.get('dropout_rate', 0.1)
         
@@ -138,11 +138,42 @@ class DepthWiseCNNRouter(nn.Module):
         logits = logits.masked_fill(~mask.unsqueeze(-1), -1e4)
         return torch.log_softmax(logits, dim=-1)
 
-def build_vocab_from_config(config):
-    """Build vocabulary based on configuration."""
+def build_vocab_from_config(config, model_path=None):
+    """Build vocabulary based on configuration, preferring saved vocab JSON if available."""
     vocab_config = config['vocabulary']
     treebanks = vocab_config['treebanks']
     pad_token = vocab_config.get('pad_token', '<PAD>')
+    
+    # Try to load vocabulary from saved JSON file first (from modular training script)
+    if model_path:
+        model_dir = os.path.dirname(model_path)
+        model_name = os.path.basename(model_path).replace('.pt', '')
+        vocab_json_path = os.path.join(model_dir, f"{model_name}_vocab.json")
+        
+        if os.path.exists(vocab_json_path):
+            try:
+                print(f"📚 Loading vocabulary from saved JSON: {vocab_json_path}")
+                with open(vocab_json_path, 'r', encoding='utf-8') as f:
+                    vocab_data = json.load(f)
+                
+                vocab = vocab_data['token_to_id']
+                print(f"✓ Loaded vocabulary size: {len(vocab)}")
+                
+                # Validate vocab size matches config
+                expected_size = vocab_config.get('size') or vocab_config.get('expected_vocab_size')
+                if expected_size and abs(len(vocab) - expected_size) > 10:  # Small tolerance
+                    print(f"⚠️  Warning: Vocab size mismatch! Expected {expected_size}, got {len(vocab)}")
+                else:
+                    print(f"✓ Vocabulary size matches expected: {len(vocab)}")
+                    
+                return vocab
+                
+            except Exception as e:
+                print(f"⚠️  Failed to load vocabulary JSON: {e}")
+                print("   Falling back to rebuilding vocabulary...")
+    
+    # Fallback: rebuild vocabulary from scratch (original behavior)
+    print(f"🔧 Rebuilding vocabulary from configuration...")
     
     if vocab_config['type'] == 'combined':
         print(f"🔥 Loading combined treebanks to rebuild vocabulary: {treebanks}")
@@ -218,8 +249,73 @@ def build_vocab_from_config(config):
                         vocab[tok] = len(vocab)
             return vocab
     
+    elif vocab_config['type'] in ['combined_ud', 'combined_ud_penn', 'combined_penn']:
+        print(f"🔥 Loading {vocab_config['type']} vocabulary: {treebanks}")
+        vocab = {pad_token: 0}
+        
+        # Process UD treebanks
+        ud_treebanks = [tb for tb in treebanks if not tb.startswith('penn')]
+        for tb in ud_treebanks:
+            try:
+                ds_train_tb = load_dataset("universal_dependencies", tb, split="train", trust_remote_code=True)
+                for ex in ds_train_tb:
+                    for tok in ex["tokens"]:
+                        if tok not in vocab:
+                            vocab[tok] = len(vocab)
+                print(f"  ✓ Processed UD {tb}: vocab size now {len(vocab)}")
+            except Exception as e:
+                print(f"  ❌ Failed to load UD {tb}: {e}")
+        
+        # If combined_ud_penn or combined_penn, also add Penn Treebank vocabulary
+        if vocab_config['type'] in ['combined_ud_penn', 'combined_penn'] and any(tb.startswith('penn') for tb in treebanks):
+            print(f"  🏛️  Adding Penn Treebank vocabulary...")
+            try:
+                import nltk
+                from nltk.corpus import treebank
+                
+                # Ensure Penn Treebank is available
+                try:
+                    nltk.data.find('corpora/treebank')
+                except LookupError:
+                    print("    Downloading Penn Treebank...")
+                    nltk.download('treebank', quiet=True)
+                
+                # Add Penn Treebank words to existing vocabulary
+                sents = list(treebank.tagged_sents())
+                for sent in sents:
+                    for word, tag in sent:
+                        word = word.strip()
+                        if word and word not in vocab:
+                            vocab[word] = len(vocab)
+                
+                print(f"  ✓ Added Penn Treebank: final vocab size {len(vocab)}")
+            except Exception as e:
+                print(f"  ❌ Failed to add Penn Treebank: {e}")
+        
+        print(f"🎯 Final {vocab_config['type']} vocabulary size: {len(vocab)}")
+        
+        # Validate vocab size if expected size is provided
+        expected_size = vocab_config.get('expected_vocab_size')
+        if expected_size and abs(len(vocab) - expected_size) > 100:  # Allow some tolerance
+            print(f"⚠️  Warning: Vocab size mismatch! Expected ~{expected_size}, got {len(vocab)}")
+        
+        return vocab
+    
+    elif vocab_config['type'] == 'single_treebank':
+        print(f"📚 Loading single treebank vocabulary: {treebanks[0]}")
+        ds_train = load_dataset("universal_dependencies", treebanks[0], split="train", trust_remote_code=True)
+        
+        vocab = {pad_token: 0}
+        for ex in ds_train:
+            for tok in ex["tokens"]:
+                if tok not in vocab:
+                    vocab[tok] = len(vocab)
+        
+        print(f"📊 Vocabulary size: {len(vocab)}")
+        return vocab
+    
     else:
-        raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}")
+        raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}. Supported types: 'single', 'combined', 'penn_treebank', 'single_treebank', 'combined_ud', 'combined_ud_penn', 'combined_penn'")
 
 class POSPredictor:
     def __init__(self, model_path, config_path=None):
@@ -238,24 +334,80 @@ class POSPredictor:
         DW_KERNEL = arch['dw_kernel']
         N_TAGS = arch['n_tags']
         MAX_LEN = arch['max_len']
-        POS_TAGS = self.config['pos_tags']
+        
+        # Handle different pos_tags structures
+        if isinstance(self.config['pos_tags'], list):
+            # Direct list format: ["NOUN", "PUNCT", ...]
+            POS_TAGS = self.config['pos_tags']
+            self.pos_tags = self.config['pos_tags']
+        else:
+            # Dictionary format: {"tags": ["NOUN", "PUNCT", ...], "count": 18}
+            POS_TAGS = self.config['pos_tags']['tags']
+            self.pos_tags = self.config['pos_tags']['tags']
         
         # Store config values as instance variables
-        self.pos_tags = self.config['pos_tags']
         self.max_len = arch['max_len']
         
-        # Build vocabulary from config
-        self.vocab = build_vocab_from_config(self.config)
+        # Build vocabulary from config (preferring saved vocab JSON)
+        self.vocab = build_vocab_from_config(self.config, model_path)
         
         # Load model with config
         self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        
+        # Load model weights with vocabulary size handling
+        checkpoint = torch.load(model_path, map_location=self.device)
+        
+        # Check for vocabulary size mismatch and handle gracefully
+        if 'emb.weight' in checkpoint:
+            checkpoint_vocab_size = checkpoint['emb.weight'].shape[0]
+            current_vocab_size = len(self.vocab)
+            
+            if checkpoint_vocab_size != current_vocab_size:
+                print(f"⚠️  Vocabulary size mismatch detected:")
+                print(f"   Model was trained with: {checkpoint_vocab_size} tokens")
+                print(f"   Current vocabulary has: {current_vocab_size} tokens")
+                
+                if checkpoint_vocab_size < current_vocab_size:
+                    print(f"🔧 Truncating vocabulary to match model size...")
+                    # Create a smaller vocabulary by keeping only the first N tokens
+                    sorted_vocab = sorted(self.vocab.items(), key=lambda x: x[1])
+                    truncated_vocab = {token: idx for token, idx in sorted_vocab[:checkpoint_vocab_size]}
+                    self.vocab = truncated_vocab
+                    print(f"✓ Vocabulary truncated to {len(self.vocab)} tokens")
+                    
+                    # Recreate model with correct vocab size
+                    self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
+                    
+                elif checkpoint_vocab_size > current_vocab_size:
+                    print(f"🔧 Expanding vocabulary to match model size...")
+                    # Pad vocabulary with dummy tokens
+                    for i in range(current_vocab_size, checkpoint_vocab_size):
+                        self.vocab[f"<UNK_{i}>"] = i
+                    print(f"✓ Vocabulary expanded to {len(self.vocab)} tokens")
+                    
+                    # Recreate model with correct vocab size
+                    self.model = DepthWiseCNNRouter(len(self.vocab), self.config).to(self.device)
+        
+        # Load the state dict
+        try:
+            self.model.load_state_dict(checkpoint)
+            print(f"✓ Model weights loaded successfully")
+        except Exception as e:
+            print(f"❌ Failed to load model weights: {e}")
+            # Try loading with strict=False as fallback
+            missing_keys, unexpected_keys = self.model.load_state_dict(checkpoint, strict=False)
+            if missing_keys:
+                print(f"⚠️  Missing keys: {missing_keys}")
+            if unexpected_keys:
+                print(f"⚠️  Unexpected keys: {unexpected_keys}")
+            print(f"✓ Model weights loaded with strict=False")
+        
         self.model.eval()
         
         print(f"✓ Model loaded on {self.device}")
         print(f"✓ Vocabulary size: {len(self.vocab)}")
         print(f"✓ Architecture: {arch['emb_dim']}D, " +
-              f"{'2-layer' if arch.get('use_second_conv_layer', False) else '1-layer'} CNN, " +
+              f"{'2-layer' if arch.get('use_second_conv_layer', False) or arch.get('use_two_layers', False) else '1-layer'} CNN, " +
               f"{'with' if arch.get('use_temperature_scaling', True) else 'no'} temp scaling")
 
     def tokenize(self, text):
@@ -395,6 +547,7 @@ class POSPredictor:
         predictions = []
         for i, (token, pred_id) in enumerate(zip(tokens, pred_ids)):
             if i < len(token_ids):  # Only for actual tokens
+                pred_id = int(pred_id)  # Convert numpy int64 to Python int
                 pos_tag = self.pos_tags[pred_id] if pred_id < len(self.pos_tags) else "X"
                 predictions.append((token, pos_tag))
         
@@ -446,6 +599,7 @@ class POSPredictor:
                 predictions = []
                 for k, (token, pred_id) in enumerate(zip(tokens, preds)):
                     if k < len(tokens) and batch_mask[j, k].item():
+                        pred_id = int(pred_id)  # Convert numpy int64 to Python int
                         pos_tag = self.pos_tags[pred_id] if pred_id < len(self.pos_tags) else "X"
                         predictions.append((token, pos_tag))
                 batch_predictions.append(predictions)

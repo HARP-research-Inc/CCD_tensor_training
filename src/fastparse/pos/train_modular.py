@@ -19,6 +19,9 @@ from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import classification_report, f1_score
 from collections import defaultdict
+import json
+import os
+from datetime import datetime
 
 # Import our modular components
 from models.router import DepthWiseCNNRouter
@@ -55,6 +58,192 @@ UPOS_TAGS = [
     "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", "DET", "CCONJ", 
     "PROPN", "PRON", "X", "_", "ADV", "INTJ", "VERB", "AUX"
 ]
+
+def create_model_directory():
+    """Create models directory if it doesn't exist."""
+    os.makedirs("models", exist_ok=True)
+    return "models"
+
+def save_model_config(model_name, args, vocab, dataset_info, architecture_info):
+    """Create and save comprehensive model configuration JSON."""
+    config = {
+        "model_name": model_name,
+        "description": _get_model_description(args),
+        "created_at": datetime.now().isoformat(),
+        "architecture": {
+            "type": "DepthWiseCNNRouter",
+            "emb_dim": EMB_DIM,
+            "dw_kernel": DW_KERNEL,
+            "n_tags": N_TAGS,
+            "max_len": MAX_LEN,
+            "use_two_layers": True,  # Current architecture has 2 layers
+            "use_temperature_scaling": not args.no_temp_scaling,
+            "dropout_rate": 0.1,
+            "activation": "ReLU",
+            "normalization": "LayerNorm"
+        },
+        "vocabulary": {
+            "size": len(vocab),
+            "type": _get_vocab_type(args),
+            "treebanks": _get_treebanks_used(args),
+            "pad_token": "<PAD>",
+            "augmented": args.augment,
+            "penn_treebank_included": args.penn_treebank or args.combined_penn
+        },
+        "training": {
+            "dataset_size": dataset_info,
+            "label_smoothing": LABEL_SMOOTHING if not args.no_label_smoothing else 0.0,
+            "temperature_scaling": not args.no_temp_scaling,
+            "lr_max": LR_MAX,
+            "lr_min": LR_MIN,
+            "epochs": EPOCHS,
+            "warmup_epochs": WARMUP_EPOCHS,
+            "scheduler": "SGDR" if not args.cosine else "cosine",
+            "mixed_precision": True,
+            "early_stopping": not args.fixed_epochs,
+            "monitor_metric": args.monitor if not args.fixed_epochs else None,
+            "patience": args.patience if not args.fixed_epochs else None
+        },
+        "pos_tags": {
+            "tagset": "Universal Dependencies",
+            "tags": UPOS_TAGS,
+            "count": len(UPOS_TAGS)
+        },
+        "inference": {
+            "default_batch_size": 512,
+            "enable_temperature": not args.no_temp_scaling,
+            "enable_amp": False  # Disabled for inference stability
+        },
+        "files": {
+            "model_weights": f"{model_name}.pt",
+            "config": f"{model_name}.json",
+            "vocabulary": f"{model_name}_vocab.json",
+            "training_log": f"{model_name}_training.json"
+        }
+    }
+    return config
+
+def save_vocabulary_json(vocab, model_dir, model_name):
+    """Save vocabulary as a JSON file."""
+    vocab_file = os.path.join(model_dir, f"{model_name}_vocab.json")
+    
+    # Create vocabulary mapping (both directions)
+    vocab_data = {
+        "vocab_size": len(vocab),
+        "token_to_id": vocab,
+        "id_to_token": {str(v): k for k, v in vocab.items()},
+        "special_tokens": {
+            "pad_token": "<PAD>",
+            "pad_id": 0
+        },
+        "created_at": datetime.now().isoformat()
+    }
+    
+    with open(vocab_file, 'w', encoding='utf-8') as f:
+        json.dump(vocab_data, f, indent=2, ensure_ascii=False)
+    
+    return vocab_file
+
+def save_training_results(model_dir, model_name, training_history, final_results, args):
+    """Save comprehensive training results and metrics."""
+    training_file = os.path.join(model_dir, f"{model_name}_training.json")
+    
+    training_data = {
+        "training_completed_at": datetime.now().isoformat(),
+        "command_line_args": vars(args),
+        "final_results": final_results,
+        "training_history": training_history,
+        "hyperparameters": {
+            "architecture": {
+                "emb_dim": EMB_DIM,
+                "dw_kernel": DW_KERNEL,
+                "n_tags": N_TAGS,
+                "max_len": MAX_LEN
+            },
+            "training": {
+                "lr_max": LR_MAX,
+                "lr_min": LR_MIN,
+                "epochs": EPOCHS,
+                "warmup_epochs": WARMUP_EPOCHS,
+                "label_smoothing": LABEL_SMOOTHING if not args.no_label_smoothing else 0.0,
+                "batch_size": getattr(args, 'final_batch_size', args.batch_size),
+                "scheduler": "SGDR" if not args.cosine else "cosine"
+            },
+            "optimization": {
+                "mixed_precision": True,
+                "optimizer": "AdamW",
+                "weight_decay": 1e-4,
+                "compute_node_optimizations": args.compute_node
+            }
+        },
+        "environment": {
+            "pytorch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
+        }
+    }
+    
+    with open(training_file, 'w') as f:
+        json.dump(training_data, f, indent=2)
+    
+    return training_file
+
+def _get_model_description(args):
+    """Generate a descriptive model name based on training configuration."""
+    if args.penn_treebank:
+        desc = "Pure Penn Treebank WSJ POS Router"
+    elif args.combined_penn:
+        desc = "Combined UD + Penn Treebank POS Router"
+    elif args.combine:
+        desc = "Combined Universal Dependencies English POS Router"
+    else:
+        desc = f"Universal Dependencies {args.treebank.upper()} POS Router"
+    
+    # Add training method
+    if args.fixed_epochs:
+        desc += f" (Fixed {EPOCHS} epochs)"
+    else:
+        desc += f" (Early stopping, {args.monitor})"
+    
+    # Add special features
+    features = []
+    if args.adaptive_batch:
+        features.append("CABS")
+    if not args.no_temp_scaling:
+        features.append("TempScaling")
+    if args.augment:
+        features.append("Augmented")
+    if args.cosine:
+        features.append("Cosine")
+    else:
+        features.append("SGDR")
+    
+    if features:
+        desc += f" [{', '.join(features)}]"
+    
+    return desc
+
+def _get_vocab_type(args):
+    """Determine vocabulary type from arguments."""
+    if args.penn_treebank:
+        return "penn_treebank"
+    elif args.combined_penn:
+        return "combined_ud_penn"
+    elif args.combine:
+        return "combined_ud"
+    else:
+        return "single_treebank"
+
+def _get_treebanks_used(args):
+    """Get list of treebanks used for training."""
+    if args.penn_treebank:
+        return ["penn_wsj"]
+    elif args.combined_penn:
+        return ["en_ewt", "en_gum", "en_lines", "en_partut", "penn_wsj"]
+    elif args.combine:
+        return ["en_ewt", "en_gum", "en_lines", "en_partut"]
+    else:
+        return [args.treebank]
 
 def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterion=None, 
               epoch=None, detailed_analysis=False, calculate_f1=True, f1_average='macro'):
@@ -282,6 +471,12 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Override default batch size")
     
+    # Output directory options
+    parser.add_argument("--model-dir", default="models",
+                        help="Directory to save model outputs (default: models)")
+    parser.add_argument("--model-prefix", default=None,
+                        help="Custom prefix for model files (default: auto-generated)")
+    
     # Early stopping arguments (restored from original)
     parser.add_argument("--fixed-epochs", action="store_true",
                         help="Use fixed epoch training instead of early stopping")
@@ -349,6 +544,11 @@ def main():
     if args.combine and args.combined_penn:
         print("❌ ERROR: Cannot use --combine and --combined-penn together!")
         exit(1)
+
+    # Create model output directory
+    model_dir = args.model_dir
+    os.makedirs(model_dir, exist_ok=True)
+    print(f"📁 Model outputs will be saved to: {model_dir}/")
 
     # GPU optimizations (restored from original)
     torch.backends.cudnn.benchmark = True
@@ -641,6 +841,17 @@ def main():
             verbose=False
         )
     
+    # Training loop tracking for JSON output
+    training_history = {
+        "epochs": [],
+        "loss": [],
+        "accuracy": [],
+        "validation": [],
+        "learning_rates": [],
+        "early_stopping_info": None,
+        "adaptive_batch_info": None
+    }
+    
     # SGDR cycle tracking (restored from original)
     if not use_cosine:
         sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
@@ -728,6 +939,17 @@ def main():
         # Temperature display
         temp_val = model.temperature.item() if TEMP_SCALING else 1.0
         temp_str = f" | temp {temp_val:.3f}" if TEMP_SCALING and abs(temp_val - 1.0) > 0.01 else ""
+        
+        # Track training history for JSON output
+        training_history["epochs"].append(epoch)
+        training_history["loss"].append(train_ppl)
+        training_history["accuracy"].append(train_acc)
+        training_history["validation"].append({
+            "loss": val_ppl,
+            "accuracy": val_acc,
+            "f1_score": f1_score_val if CALCULATE_F1 else None
+        })
+        training_history["learning_rates"].append(current_lr)
         
         # Print progress (restored from original format)
         if CALCULATE_F1 and f1_score_val > 0:
@@ -932,23 +1154,99 @@ def main():
         cal_f1_str = f", {F1_AVERAGE[0].upper()}F1 {cal_f1_score*100:.2f}%" if CALCULATE_F1 and cal_f1_score > 0 else ""
         print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%{cal_f1_str}, ppl {cal_ppl:.2f}")
 
-    # Save model (restored from original)
-    if args.penn_treebank:
-        model_name = "router_penn_wsj.pt"
+    # At the end of training, before model saving, collect final results
+    final_results = {
+        "training_method": "early stopping" if USE_EARLY_STOPPING else "fixed epochs",
+        "total_epochs": epoch if 'epoch' in locals() else MAX_EPOCHS,
+        "final_train_acc": train_acc if 'train_acc' in locals() else None,
+        "final_val_acc": val_acc if 'val_acc' in locals() else None,
+        "final_val_ppl": val_ppl if 'val_ppl' in locals() else None,
+        "final_f1_score": f1_score_val if 'f1_score_val' in locals() and CALCULATE_F1 else None,
+        "final_temperature": model.temperature.item() if TEMP_SCALING else 1.0,
+        "final_batch_size": adaptive_batch_sizer.get_current_batch_size() if adaptive_batch_sizer else BATCH_SIZE
+    }
+    
+    # Add early stopping info to training history
+    if early_stopping is not None:
+        training_history["early_stopping_info"] = early_stopping.get_stats()
+        final_results.update(early_stopping.get_stats())
+    
+    # Add adaptive batch sizing info
+    if adaptive_batch_sizer is not None:
+        training_history["adaptive_batch_info"] = adaptive_batch_sizer.get_statistics()
+        # Store final batch size for hyperparameters
+        args.final_batch_size = adaptive_batch_sizer.get_current_batch_size()
+
+    # Generate model name and save all files
+    if args.model_prefix:
+        model_base_name = args.model_prefix
+    elif args.penn_treebank:
+        model_base_name = "router_penn_wsj"
     elif args.combined_penn:
-        model_name = "router_combined_penn.pt"
+        model_base_name = "router_combined_penn"
     elif args.combine:
-        model_name = "router_combined.pt"
+        model_base_name = "router_combined"
     else:
-        model_name = f"router_{args.treebank}.pt"
+        model_base_name = f"router_{args.treebank}"
     
-    torch.save(model.state_dict(), model_name)
+    # Add timestamp for uniqueness if desired
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # model_base_name = f"{model_base_name}_{timestamp}"
     
+    model_path = os.path.join(model_dir, f"{model_base_name}.pt")
+    
+    # Save model weights
+    torch.save(model.state_dict(), model_path)
+    print(f"💾 Model weights saved: {model_path}")
+    
+    # Create and save comprehensive JSON files
+    dataset_info = {
+        "train_size": len(ds_train),
+        "val_size": len(ds_val),
+        "treebanks": _get_treebanks_used(args)
+    }
+    
+    architecture_info = {
+        "emb_dim": EMB_DIM,
+        "n_tags": N_TAGS,
+        "layers": 2
+    }
+    
+    # Save model configuration JSON
+    config = save_model_config(model_base_name, args, vocab, dataset_info, architecture_info)
+    config_path = os.path.join(model_dir, f"{model_base_name}.json")
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    print(f"📋 Model config saved: {config_path}")
+    
+    # Save vocabulary JSON
+    vocab_path = save_vocabulary_json(vocab, model_dir, model_base_name)
+    print(f"📚 Vocabulary saved: {vocab_path}")
+    
+    # Save training results JSON
+    training_path = save_training_results(model_dir, model_base_name, training_history, final_results, args)
+    print(f"📊 Training results saved: {training_path}")
+    
+    # Summary
     training_method = "early stopping" if USE_EARLY_STOPPING else "fixed epochs"
-    print(f"✓ finished; weights saved to {model_name} (trained with {training_method})")
+    print(f"\n✅ Training complete! Files saved to {model_dir}/:")
+    print(f"   🧠 Model weights: {model_base_name}.pt")
+    print(f"   📋 Configuration: {model_base_name}.json") 
+    print(f"   📚 Vocabulary: {model_base_name}_vocab.json")
+    print(f"   📊 Training log: {model_base_name}_training.json")
+    print(f"   🎯 Trained with: {training_method}")
     
     if early_stopping and early_stopping.best_weights:
-        print(f"💡 Model contains best weights from epoch {early_stopping.best_epoch}")
+        print(f"   ⭐ Contains best weights from epoch {early_stopping.best_epoch}")
+    
+    # Show model info
+    print(f"\n📋 Model Summary:")
+    print(f"   • Name: {config['model_name']}")
+    print(f"   • Description: {config['description']}")
+    print(f"   • Vocabulary size: {len(vocab):,} tokens")
+    print(f"   • Final accuracy: {final_results.get('final_val_acc', 0)*100:.2f}%")
+    if final_results.get('final_f1_score'):
+        print(f"   • Final F1 score: {final_results['final_f1_score']*100:.2f}%")
 
 if __name__ == "__main__":
     main() 
