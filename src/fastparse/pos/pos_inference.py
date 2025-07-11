@@ -181,6 +181,43 @@ def build_vocab_from_config(config):
         print(f"📊 Vocabulary size: {len(vocab)}")
         return vocab
     
+    elif vocab_config['type'] == 'penn_treebank':
+        print(f"🏛️  Loading Penn Treebank vocabulary")
+        try:
+            import nltk
+            from nltk.corpus import treebank
+            
+            # Ensure Penn Treebank is available
+            try:
+                nltk.data.find('corpora/treebank')
+            except LookupError:
+                print("Downloading Penn Treebank...")
+                nltk.download('treebank', quiet=True)
+            
+            # Build vocabulary from Penn Treebank
+            sents = list(treebank.tagged_sents())
+            vocab = {pad_token: 0}
+            
+            for sent in sents:
+                for word, tag in sent:
+                    word = word.strip()
+                    if word and word not in vocab:
+                        vocab[word] = len(vocab)
+            
+            print(f"📊 Penn Treebank vocabulary size: {len(vocab)}")
+            return vocab
+            
+        except Exception as e:
+            print(f"❌ Failed to load Penn Treebank: {e}")
+            print("💡 Falling back to single UD treebank")
+            ds_train = load_dataset("universal_dependencies", "en_ewt", split="train", trust_remote_code=True)
+            vocab = {pad_token: 0}
+            for ex in ds_train:
+                for tok in ex["tokens"]:
+                    if tok not in vocab:
+                        vocab[tok] = len(vocab)
+            return vocab
+    
     else:
         raise ValueError(f"Unknown vocabulary type: {vocab_config['type']}")
 

@@ -1,0 +1,29 @@
+{
+  "model_name": "router_penn_wsj",
+  "description": "Penn Treebank WSJ POS router trained on real English text",
+  "architecture": {
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_second_conv_layer": true,
+    "use_temperature_scaling": true,
+    "dropout_rate": 0.1
+  },
+  "vocabulary": {
+    "type": "penn_treebank",
+    "treebanks": ["penn_wsj"],
+    "expected_vocab_size": 12408,
+    "pad_token": "<PAD>"
+  },
+  "pos_tags": [
+    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", 
+    "DET", "CCONJ", "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+  ],
+  "training_info": {
+    "epochs": 80,
+    "batch_size": 8192,
+    "dataset": "Penn Treebank WSJ",
+    "domain": "Financial news text (better for real English)"
+  }
+} 

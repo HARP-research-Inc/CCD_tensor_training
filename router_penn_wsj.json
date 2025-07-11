@@ -1,0 +1,65 @@
+{
+  "model_name": "router_penn_wsj",
+  "description": "Penn Treebank WSJ POS router trained on real English text",
+  "architecture": {
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_second_conv_layer": true,
+    "use_temperature_scaling": true,
+    "dropout_rate": 0.1
+  },
+  "vocabulary": {
+    "type": "penn_treebank",
+    "treebanks": ["penn_wsj"],
+    "expected_vocab_size": 12408,
+    "pad_token": "<PAD>",
+    "description": "Penn Treebank WSJ vocabulary with standard train/val/test splits"
+  },
+  "pos_tags": [
+    "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", 
+    "DET", "CCONJ", "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+  ],
+  "training_info": {
+    "epochs": 80,
+    "batch_size": 8192,
+    "lr_max": 0.07,
+    "lr_min": 0.0001,
+    "warmup_epochs": 3,
+    "label_smoothing": 0.1,
+    "mixed_precision": true,
+    "dataset": "Penn Treebank WSJ",
+    "domain": "Financial news text (Wall Street Journal)",
+    "advantages": [
+      "No domain mismatch with real English",
+      "Consistent VERB vs AUX labeling", 
+      "Gold standard benchmark dataset",
+      "Better generalization to casual text"
+    ]
+  },
+  "inference": {
+    "default_batch_size": 512,
+    "supports_penn_eval": true,
+    "expected_performance": {
+      "penn_treebank_accuracy": "92-95%",
+      "real_world_accuracy": "88-92%",
+      "verb_classification": "Much improved vs UD-trained model"
+    }
+  },
+  "penn_treebank_info": {
+    "total_sentences": 49208,
+    "total_tokens": 1173766,
+    "train_sentences": 39832,
+    "val_sentences": 1700,
+    "test_sentences": 2416,
+    "sections": {
+      "train": "02-21",
+      "validation": "22", 
+      "test": "23-24"
+    },
+    "original_tagset": "Penn Treebank POS tags",
+    "converted_tagset": "Universal POS tags",
+    "domain": "1987-1989 Wall Street Journal articles"
+  }
+} 

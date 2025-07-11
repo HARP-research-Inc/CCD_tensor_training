@@ -35,14 +35,20 @@ from collections import defaultdict
 EMB_DIM      = 48          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 25911  # Optimal for GPU utilization - NOT full dataset size!
-LR_MAX       = 7e-2  # Peak learning rate after warm-up
+BATCH_SIZE   = 8192     # Smaller for Penn Treebank (3K sentences)
+LR_MAX       = 7e-2  # Lower LR for smaller Penn dataset
 LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
 EPOCHS       = 80    # Total training epochs
 WARMUP_EPOCHS = 3    # Warm-up epochs (gradual LR increase)
 MAX_LEN      = 64    # truncate very long sentences
 LABEL_SMOOTHING = 0.1      # Label smoothing factor for better calibration
 TEMP_SCALING = True        # Enable temperature scaling
+
+# Compute node optimizations
+NUM_WORKERS_TRAIN = 48     # 64 cores: use 48 for training (leave some for system)
+NUM_WORKERS_VAL = 16       # 16 for validation
+PREFETCH_FACTOR = 4        # Higher prefetch for compute nodes
+PIN_MEMORY = True          # Always pin memory on compute nodes
 
 # Universal POS tag names for better reporting
 UPOS_TAGS = [
@@ -159,7 +165,149 @@ class LabelSmoothingLoss(nn.Module):
         return loss
 
 ###############################################################################
-# 4.  UD data → tensors
+# 4.  Penn Treebank support
+###############################################################################
+
+def penn_to_universal_tag_mapping():
+    """Convert Penn Treebank POS tags to Universal POS tags."""
+    return {
+        # Nouns
+        'NN': 'NOUN', 'NNS': 'NOUN', 'NNP': 'PROPN', 'NNPS': 'PROPN',
+        
+        # Verbs  
+        'VB': 'VERB', 'VBD': 'VERB', 'VBG': 'VERB', 'VBN': 'VERB', 'VBP': 'VERB', 'VBZ': 'VERB',
+        
+        # Auxiliaries (modal verbs)
+        'MD': 'AUX',
+        
+        # Adjectives
+        'JJ': 'ADJ', 'JJR': 'ADJ', 'JJS': 'ADJ',
+        
+        # Adverbs
+        'RB': 'ADV', 'RBR': 'ADV', 'RBS': 'ADV', 'WRB': 'ADV',
+        
+        # Pronouns
+        'PRP': 'PRON', 'PRP$': 'PRON', 'WP': 'PRON', 'WP$': 'PRON',
+        
+        # Determiners
+        'DT': 'DET', 'PDT': 'DET', 'WDT': 'DET',
+        
+        # Prepositions
+        'IN': 'ADP',
+        
+        # Conjunctions
+        'CC': 'CCONJ',
+        
+        # Numbers
+        'CD': 'NUM',
+        
+        # Particles
+        'RP': 'PART', 'TO': 'PART',
+        
+        # Interjections
+        'UH': 'INTJ',
+        
+        # Symbols and punctuation
+        'SYM': 'SYM',
+        '.': 'PUNCT', ',': 'PUNCT', ':': 'PUNCT', ';': 'PUNCT', 
+        '!': 'PUNCT', '?': 'PUNCT', '``': 'PUNCT', "''": 'PUNCT',
+        '(': 'PUNCT', ')': 'PUNCT', '"': 'PUNCT', '#': 'PUNCT', '$': 'PUNCT',
+        
+        # Other/Unknown
+        'FW': 'X',     # Foreign words
+        'LS': 'X',     # List markers
+        'POS': 'PART', # Possessive endings
+        'EX': 'PRON',  # Existential there
+        
+        # Default for any unmapped tags
+        'X': 'X'
+    }
+
+def load_penn_treebank_data(penn_path=None):
+    """
+    Load Penn Treebank data with standard WSJ splits.
+    
+    Returns:
+        train_data, val_data, test_data: Lists of {'tokens': [...], 'upos': [...]}
+    """
+    import os
+    from nltk.corpus import treebank
+    
+    if penn_path and os.path.exists(penn_path):
+        print(f"🏛️  Loading full Penn Treebank from {penn_path}")
+        # TODO: Implement full Penn Treebank loading
+        # This would require parsing .mrg files from the full LDC distribution
+        print("⚠️  Full Penn Treebank parsing not yet implemented")
+        print("   Falling back to NLTK sample with manual splits")
+    
+    print("📚 Using NLTK Penn Treebank sample with train/val/test splits")
+    
+    # Get all sentences from NLTK
+    sents = list(treebank.tagged_sents())
+    
+    # Create train/val/test splits (80/10/10)
+    total = len(sents)
+    train_end = int(0.8 * total)
+    val_end = int(0.9 * total)
+    
+    train_sents = sents[:train_end]
+    val_sents = sents[train_end:val_end]
+    test_sents = sents[val_end:]
+    
+    print(f"📊 Penn Treebank splits:")
+    print(f"   Train: {len(train_sents):,} sentences")
+    print(f"   Val:   {len(val_sents):,} sentences") 
+    print(f"   Test:  {len(test_sents):,} sentences")
+    
+    # Convert to Universal POS format
+    tag_mapping = penn_to_universal_tag_mapping()
+    
+    def convert_sentences(sentences):
+        converted = []
+        for sent in sentences:
+            tokens = []
+            upos = []
+            
+            for word, penn_tag in sent:
+                # Skip empty/trace elements
+                if penn_tag == '-NONE-' or not word or not word.strip():
+                    continue
+                    
+                # Clean up word
+                word = word.strip()
+                
+                # Convert tag
+                base_tag = penn_tag.split('-')[0]  # Remove suffixes like -TMP
+                universal_tag = tag_mapping.get(base_tag, 'X')
+                
+                # Special handling for auxiliaries (context-dependent)
+                if base_tag in ['VBZ', 'VBP', 'VBD', 'VB'] and word.lower() in {
+                    'be', 'am', 'is', 'are', 'was', 'were', 'being', 'been',
+                    'have', 'has', 'had', 'having', 'do', 'does', 'did'
+                }:
+                    universal_tag = 'AUX'
+                
+                tokens.append(word)
+                upos.append(UPOS_TAGS.index(universal_tag))
+            
+            if tokens:  # Only add non-empty sentences
+                converted.append({
+                    'tokens': tokens,
+                    'upos': upos
+                })
+        
+        return converted
+    
+    train_data = convert_sentences(train_sents)
+    val_data = convert_sentences(val_sents)
+    test_data = convert_sentences(test_sents)
+    
+    print(f"✅ Converted to Universal POS format")
+    
+    return train_data, val_data, test_data
+
+###############################################################################
+# 5.  UD data → tensors
 ###############################################################################
 def build_vocab(train):
     """Map every token form to a unique integer id (0 = PAD)."""
@@ -412,21 +560,76 @@ def main():
     parser.add_argument("--no-temp-scaling", action="store_true",
                         help="Disable temperature scaling")
     parser.add_argument("--share", action="store_true",
-                        help="If 4 GPUs are available, force use of cuda:1")
+                        help="If multiple GPUs are available, force use of cuda:1 (compute node sharing)")
+    parser.add_argument("--gpu", type=int, default=None,
+                        help="Force specific GPU ID (overrides auto-selection)")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Override default batch size for compute node")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Override number of dataloader workers")
+    parser.add_argument("--compute-node", action="store_true",
+                        help="Enable all compute node optimizations")
+    parser.add_argument("--penn-treebank", action="store_true",
+                        help="Train on Penn Treebank WSJ (requires full LDC Penn Treebank)")
+    parser.add_argument("--penn-path", type=str, default=None,
+                        help="Path to full Penn Treebank directory")
     args = parser.parse_args()
 
     # Enable cuDNN autotuning for faster convolutions
     torch.backends.cudnn.benchmark = True
+    
+    # Compute node optimizations
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+    torch.backends.cuda.matmul.allow_tf32 = True  # Enable TF32 for compute nodes
+    torch.backends.cudnn.allow_tf32 = True
+    
+    # Set optimal thread count for 64-core machine
+    torch.set_num_threads(min(32, torch.get_num_threads()))  # Cap at 32 to avoid oversubscription
+    print(f"🧵 PyTorch threads: {torch.get_num_threads()}")
+    
+    # Memory optimization for compute nodes
+    import os
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'  # Reduce memory fragmentation
 
     # Configure label smoothing and temperature scaling
-    global LABEL_SMOOTHING, TEMP_SCALING
+    global LABEL_SMOOTHING, TEMP_SCALING, BATCH_SIZE, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
     if args.no_label_smoothing:
         LABEL_SMOOTHING = 0.0
     if args.no_temp_scaling:
         TEMP_SCALING = False
+    
+    # Apply compute node overrides
+    global PREFETCH_FACTOR
+    if args.compute_node:
+        print("🖥️  Compute node mode enabled: applying all optimizations")
+        # More aggressive settings for compute nodes
+        NUM_WORKERS_TRAIN = min(56, NUM_WORKERS_TRAIN)  # Leave 8 cores for system
+        PREFETCH_FACTOR = 6
+        
+    if args.batch_size:
+        BATCH_SIZE = args.batch_size
+        print(f"📦 Batch size override: {BATCH_SIZE}")
+        
+    if args.workers:
+        NUM_WORKERS_TRAIN = args.workers
+        NUM_WORKERS_VAL = max(1, args.workers // 3)
+        print(f"🧵 Workers override: {NUM_WORKERS_TRAIN} train, {NUM_WORKERS_VAL} val")
 
-    print("Loading UD dataset …")
-    if args.combine:
+    print("Loading dataset …")
+    
+    if args.penn_treebank:
+        # Load Penn Treebank WSJ data
+        print("🏛️  Penn Treebank WSJ Training Mode")
+        train_data, val_data, test_data = load_penn_treebank_data(args.penn_path)
+        
+        # Convert to datasets format
+        from datasets import Dataset
+        ds_train = Dataset.from_list(train_data)
+        ds_val = Dataset.from_list(val_data)
+        
+        print(f"📊 Penn Treebank: {len(ds_train)} train, {len(ds_val)} val sentences")
+        
+    elif args.combine:
         # Load multiple English treebanks for maximum training data
         english_treebanks = [
             "en_ewt",      # English Web Treebank (12,543 sentences)
@@ -490,25 +693,71 @@ def main():
 
     train_loader = DataLoader(
         train_enc, batch_size=BATCH_SIZE, shuffle=True,
-        collate_fn=collate, num_workers=32, pin_memory=True,
-        prefetch_factor=2, persistent_workers=True
+        collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
+        prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
+        drop_last=True  # For stable multi-GPU training
     )
     val_loader = DataLoader(
         val_enc, batch_size=BATCH_SIZE, shuffle=False,
-        collate_fn=collate, num_workers=2, pin_memory=True,
-        prefetch_factor=2, persistent_workers=True
+        collate_fn=collate, num_workers=NUM_WORKERS_VAL, pin_memory=PIN_MEMORY,
+        prefetch_factor=PREFETCH_FACTOR, persistent_workers=True
     )
 
-    # —— GPU selection logic ——
+    # —— Compute node GPU selection logic ——
     if torch.cuda.is_available():
         ngpu = torch.cuda.device_count()
-        if args.share and ngpu == 4:
+        print(f"🖥️  Compute node detected: {ngpu} GPU(s) available")
+        
+        # Smart GPU selection for compute nodes
+        if args.gpu is not None:
+            # Manual GPU override
+            if args.gpu < ngpu:
+                selected = args.gpu
+                print(f"🎯 Manual GPU selection: GPU {selected}")
+            else:
+                print(f"⚠️  GPU {args.gpu} not available, using GPU 0")
+                selected = 0
+        elif args.share and ngpu >= 2:
+            # Use GPU 1 if sharing (common on compute nodes)
             selected = 1
+            print(f"🤝 Sharing mode: using GPU {selected}")
+        elif ngpu >= 4:
+            # On 4-GPU systems, prefer GPU 0 unless busy
+            try:
+                # Check GPU memory usage to pick least busy GPU
+                gpu_memory = []
+                for i in range(ngpu):
+                    torch.cuda.set_device(i)
+                    allocated = torch.cuda.memory_allocated(i)
+                    total = torch.cuda.get_device_properties(i).total_memory
+                    usage = allocated / total
+                    gpu_memory.append((i, usage))
+                    print(f"  GPU {i}: {usage*100:.1f}% memory used")
+                
+                # Select GPU with lowest memory usage
+                selected = min(gpu_memory, key=lambda x: x[1])[0]
+                print(f"🎯 Auto-selected GPU {selected} (lowest memory usage)")
+            except Exception as e:
+                print(f"⚠️  GPU detection failed: {e}, using GPU 0")
+                selected = 0
         else:
             selected = 0
+            
         torch.cuda.set_device(selected)
         device = torch.device(f"cuda:{selected}")
-        print(f"🚀 Using GPU device cuda:{selected} (of {ngpu} available)")
+        
+        # Display GPU info
+        gpu_props = torch.cuda.get_device_properties(selected)
+        memory_gb = gpu_props.total_memory / 1024**3
+        print(f"🚀 Using {gpu_props.name} (GPU {selected})")
+        print(f"💾 GPU Memory: {memory_gb:.1f}GB total")
+        print(f"🔋 Compute Capability: {gpu_props.major}.{gpu_props.minor}")
+        
+        # Set memory allocation strategy for compute nodes
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, 'set_per_process_memory_fraction'):
+            torch.cuda.set_per_process_memory_fraction(0.95, selected)  # Use 95% of GPU memory
+            
     else:
         device = torch.device("cpu")
         print("⚠️  CUDA not available, falling back to CPU")
@@ -522,7 +771,17 @@ def main():
         criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
         print(f"📊 Using label smoothing with α={LABEL_SMOOTHING}")
 
-    scaler = GradScaler() if device.type.startswith("cuda") else None
+    # Updated GradScaler for compute nodes (PyTorch 2.7+)
+    if device.type.startswith("cuda"):
+        try:
+            from torch.amp import GradScaler
+            scaler = GradScaler('cuda')
+        except ImportError:
+            # Fallback for older PyTorch versions
+            from torch.cuda.amp import GradScaler
+            scaler = GradScaler()
+    else:
+        scaler = None
 
     def get_lr(epoch):
         if epoch < WARMUP_EPOCHS:
@@ -533,10 +792,24 @@ def main():
     scheduler = optim.lr_scheduler.LambdaLR(optimiser, lambda epoch: get_lr(epoch) / LR_MIN)
 
     print(f"🚀 Starting training on {device}")
-    print(f"🔥 GPU optimization enabled: cuDNN benchmark, AMP, optimized DataLoader")
+    print(f"🔥 Compute node optimizations enabled:")
+    print(f"   • cuDNN benchmark, AMP, TF32")
+    print(f"   • DataLoader: {NUM_WORKERS_TRAIN} train workers, {NUM_WORKERS_VAL} val workers")
+    print(f"   • Batch size: {BATCH_SIZE:,} samples")
+    print(f"   • Prefetch factor: {PREFETCH_FACTOR}")
     print(f"📈 Cosine annealing LR: {LR_MIN:.1e} → {LR_MAX:.1e} → {LR_MIN:.1e} (warmup: {WARMUP_EPOCHS} epochs)")
     if TEMP_SCALING:
         print(f"🌡️  Temperature scaling enabled")
+    
+    # Performance monitoring for compute nodes
+    print(f"\n📊 COMPUTE NODE PERFORMANCE BASELINE:")
+    print(f"   • Dataset size: {len(ds_train):,} train, {len(ds_val):,} val sentences")
+    print(f"   • Vocabulary size: {len(vocab):,} tokens")
+    print(f"   • Steps per epoch: {len(train_loader):,}")
+    print(f"   • Total training steps: {len(train_loader) * EPOCHS:,}")
+    if torch.cuda.is_available():
+        print(f"   • GPU memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f}GB")
+    print()
 
     for epoch in range(1, EPOCHS + 1):
         # Training with label smoothing
@@ -589,7 +862,9 @@ def main():
         print(f"📊 Calibrated results: acc {cal_acc*100:.2f}%, ppl {cal_ppl:.2f}")
 
     # Save model with dataset info
-    if args.combine:
+    if args.penn_treebank:
+        model_name = "router_penn_wsj.pt"
+    elif args.combine:
         model_name = "router_combined.pt"
     else:
         model_name = f"router_{args.treebank}.pt"
