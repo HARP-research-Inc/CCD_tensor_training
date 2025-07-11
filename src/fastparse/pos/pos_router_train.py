@@ -35,7 +35,7 @@ from collections import defaultdict
 EMB_DIM      = 48          # token embedding size
 DW_KERNEL    = 3           # depth-wise conv width   (±1 token context)
 N_TAGS       = 18          # Universal-POS (dataset has 18 tags: 0-17)
-BATCH_SIZE   = 8192     # Smaller for Penn Treebank (3K sentences)
+# BATCH_SIZE will be auto-calculated based on dataset size
 LR_MAX       = 7e-2  # Lower LR for smaller Penn dataset
 LR_MIN       = 1e-4  # Minimum learning rate at end of cosine decay
 EPOCHS       = 80    # Total training epochs
@@ -160,6 +160,7 @@ class LabelSmoothingLoss(nn.Module):
         # Compute loss only on non-ignored tokens
         loss = -true_dist * pred
         loss = loss.sum(dim=1)
+        # Return sum (not mean) to be consistent with F.nll_loss(reduction="sum") for perplexity calculation
         loss = loss[mask].sum() if mask.any() else torch.tensor(0.0, device=pred.device)
         
         return loss
@@ -375,6 +376,38 @@ def augment_dataset(ds, augment_factor=1.5):
     print(f"📈 Dataset augmented: {len(original_data)} → {len(augmented_data)} sentences")
     return augmented_data
 
+def calculate_batch_size(dataset_size, target_batches_per_epoch=25):
+    """
+    Auto-calculate batch size based on dataset size to ensure reasonable number of batches per epoch.
+    
+    Args:
+        dataset_size: Number of training samples
+        target_batches_per_epoch: Target number of batches per epoch (default: 25)
+    
+    Returns:
+        Optimal batch size (power of 2 between 64 and 8192)
+    """
+    # Calculate ideal batch size
+    ideal_batch_size = max(1, dataset_size // target_batches_per_epoch)
+    
+    # Round to nearest power of 2 and clamp to reasonable range
+    powers_of_2 = [64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    
+    # Find closest power of 2
+    best_batch_size = min(powers_of_2, key=lambda x: abs(x - ideal_batch_size))
+    
+    # Special cases for very small datasets
+    if dataset_size < 1000:
+        best_batch_size = min(64, dataset_size // 10)  # At least 10 batches for small datasets
+    elif dataset_size < 5000:
+        best_batch_size = min(256, best_batch_size)  # Cap at 256 for small-medium datasets
+    
+    # Ensure at least some batches per epoch
+    if best_batch_size >= dataset_size:
+        best_batch_size = max(32, dataset_size // 8)  # At least 8 batches
+    
+    return best_batch_size
+
 def collate(batch):
     max_len = max(len(x["ids"]) for x in batch)
     ids   = torch.zeros(len(batch), max_len, dtype=torch.long)
@@ -469,21 +502,29 @@ def run_epoch(model, loader, optimiser=None, device="cpu", scaler=None, criterio
                         per_class_stats[i]['correct'] += class_correct
                         per_class_stats[i]['total'] += class_total
 
-    ppl = math.exp(total_loss / total_tok) if total_tok > 0 else float('inf')
+    # Calculate perplexity from total sum loss (both criterion and nll_loss return sums now)
+    avg_loss_per_token = total_loss / total_tok if total_tok > 0 else float('inf')
+    ppl = math.exp(avg_loss_per_token) if avg_loss_per_token < 100 else float('inf')  # Avoid overflow
     acc = correct / total_tok if total_tok > 0 else 0.0
     
     # Generate detailed analysis
     analysis = {}
     if detailed_analysis and all_preds:
         try:
-            # Classification report
+            # Determine which classes are actually present in the data
+            present_classes = sorted(set(all_targets + all_preds))
+            present_class_names = [UPOS_TAGS[i] for i in present_classes if i < len(UPOS_TAGS)]
+            
+            # Classification report only for present classes
             report = classification_report(
                 all_targets, all_preds, 
-                target_names=UPOS_TAGS[:N_TAGS], 
+                labels=present_classes,
+                target_names=present_class_names, 
                 output_dict=True, 
                 zero_division=0
             )
             analysis['classification_report'] = report
+            analysis['present_classes'] = present_classes  # Store for reference
             
             # Per-class accuracy
             per_class_acc = {}
@@ -549,7 +590,9 @@ def run_epoch_with_sgdr(model, loader, optimiser, device, scaler, criterion, sch
         pred        = logp.argmax(-1)
         correct     += ((pred == upos) & mask).sum().item()
 
-    ppl = math.exp(total_loss / total_tok) if total_tok > 0 else float('inf')
+    # Calculate perplexity from total sum loss (both criterion and nll_loss return sums now)
+    avg_loss_per_token = total_loss / total_tok if total_tok > 0 else float('inf')
+    ppl = math.exp(avg_loss_per_token) if avg_loss_per_token < 100 else float('inf')  # Avoid overflow
     acc = correct / total_tok if total_tok > 0 else 0.0
     
     return ppl, acc, step_count
@@ -685,7 +728,7 @@ def main():
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'  # Reduce memory fragmentation
 
     # Configure label smoothing and temperature scaling
-    global LABEL_SMOOTHING, TEMP_SCALING, BATCH_SIZE, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
+    global LABEL_SMOOTHING, TEMP_SCALING, NUM_WORKERS_TRAIN, NUM_WORKERS_VAL
     if args.no_label_smoothing:
         LABEL_SMOOTHING = 0.0
     if args.no_temp_scaling:
@@ -698,10 +741,6 @@ def main():
         # More aggressive settings for compute nodes
         NUM_WORKERS_TRAIN = min(56, NUM_WORKERS_TRAIN)  # Leave 8 cores for system
         PREFETCH_FACTOR = 6
-        
-    if args.batch_size:
-        BATCH_SIZE = args.batch_size
-        print(f"📦 Batch size override: {BATCH_SIZE}")
         
     if args.workers:
         NUM_WORKERS_TRAIN = args.workers
@@ -830,17 +869,26 @@ def main():
         if not hasattr(ds_train, 'map'):
             ds_train = Dataset.from_list(ds_train)
 
-    # Pre-tensorify and DataLoader setup (unchanged)
+    # Pre-tensorify and DataLoader setup with auto-scaling batch size
     train_enc = ds_train.map(lambda ex: encode_sent(ex, vocab))
     val_enc   = ds_val  .map(lambda ex: encode_sent(ex, vocab))
     train_enc = train_enc.with_format("torch", columns=["ids", "upos"], output_all_columns=True)
     val_enc   = val_enc  .with_format("torch", columns=["ids", "upos"], output_all_columns=True)
 
+    # Auto-calculate optimal batch size unless manually overridden
+    if args.batch_size:
+        BATCH_SIZE = args.batch_size
+        print(f"📦 Manual batch size: {BATCH_SIZE}")
+    else:
+        BATCH_SIZE = calculate_batch_size(len(ds_train))
+        expected_batches = len(ds_train) // BATCH_SIZE
+        print(f"📦 Auto-calculated batch size: {BATCH_SIZE} ({expected_batches} batches/epoch)")
+
     train_loader = DataLoader(
         train_enc, batch_size=BATCH_SIZE, shuffle=True,
         collate_fn=collate, num_workers=NUM_WORKERS_TRAIN, pin_memory=PIN_MEMORY,
         prefetch_factor=PREFETCH_FACTOR, persistent_workers=True,
-        drop_last=True  # For stable multi-GPU training
+        drop_last=False  # Don't drop last batch for small datasets
     )
     val_loader = DataLoader(
         val_enc, batch_size=BATCH_SIZE, shuffle=False,
@@ -958,8 +1006,8 @@ def main():
         eta_min = LR_MAX * eta_min_ratio
         
         print(f"🔄 SGDR Scheduler (default):")
-        print(f"   • First cycle: {T_0} steps ({T_0 / len(train_loader):.1f} epochs)")
-        print(f"   • Cycle multiplier: {T_mult}x")
+        print(f"   • First cycle: {T_0} steps")
+        print(f"   • Cycle multiplier: {T_mult}x") 
         print(f"   • LR range: {eta_min:.1e} → {LR_MAX:.1e}")
         
         scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -974,7 +1022,6 @@ def main():
     print(f"🔥 Compute node optimizations enabled:")
     print(f"   • cuDNN benchmark, AMP, TF32")
     print(f"   • DataLoader: {NUM_WORKERS_TRAIN} train workers, {NUM_WORKERS_VAL} val workers")
-    print(f"   • Batch size: {BATCH_SIZE:,} samples")
     print(f"   • Prefetch factor: {PREFETCH_FACTOR}")
     if TEMP_SCALING:
         print(f"🌡️  Temperature scaling enabled")
@@ -985,6 +1032,34 @@ def main():
     print(f"   • Vocabulary size: {len(vocab):,} tokens")
     print(f"   • Steps per epoch: {len(train_loader):,}")
     print(f"   • Total training steps: {len(train_loader) * EPOCHS:,}")
+    
+    # Check which POS classes are present in the dataset
+    print(f"   • POS tag analysis:")
+    sample_upos = []
+    for i, batch in enumerate(train_loader):
+        if i >= 5:  # Check first 5 batches
+            break
+        _, upos, mask = batch
+        valid_upos = upos[mask & (upos != -100)]
+        sample_upos.extend(valid_upos.cpu().numpy().tolist())
+    
+    present_classes = sorted(set(sample_upos))
+    missing_classes = [i for i in range(N_TAGS) if i not in present_classes]
+    
+    print(f"     - Classes present: {len(present_classes)}/{N_TAGS}")
+    if missing_classes:
+        missing_names = [UPOS_TAGS[i] for i in missing_classes if i < len(UPOS_TAGS)]
+        print(f"     - Missing classes: {missing_names} (indices: {missing_classes})")
+    else:
+        print(f"     - All {N_TAGS} Universal POS classes present ✓")
+    
+    # Add SGDR cycle info now that we have train_loader
+    if not use_cosine:
+        sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
+        if args.penn_treebank and len(train_loader) < 200:
+            sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(5, len(train_loader) // 6)
+        print(f"   • SGDR first cycle: {sgdr_T_0} steps ({sgdr_T_0 / len(train_loader):.1f} epochs)")
+    
     if torch.cuda.is_available():
         print(f"   • GPU memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f}GB")
     print()
