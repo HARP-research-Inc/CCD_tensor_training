@@ -997,9 +997,16 @@ def main():
         sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(10, len(train_loader) // 4)
         if args.penn_treebank and len(train_loader) < 200:
             sgdr_T_0 = args.sgdr_t0 if args.sgdr_t0 else max(5, len(train_loader) // 6)
-        sgdr_cycle_length = sgdr_T_0
+            sgdr_T_mult = args.sgdr_mult if hasattr(args, 'sgdr_mult') else 1.5
+        else:
+            sgdr_T_mult = args.sgdr_mult
+        
+        sgdr_current_cycle_length = sgdr_T_0
         sgdr_cycle_step = 0
+        sgdr_total_steps_in_cycles = 0
+        sgdr_cycle_num = 1
         sgdr_eta_min = LR_MAX * (0.01 if args.penn_treebank and len(train_loader) < 200 else 0.1)
+        previous_lr = LR_MIN  # Initialize for SGDR tracking
     
     for epoch in range(1, EPOCHS + 1):
         if use_cosine:
@@ -1014,10 +1021,6 @@ def main():
             train_ppl, train_acc, step_count = run_epoch_with_sgdr(
                 model, train_loader, optimiser, device, scaler, criterion, scheduler, step_count, epoch
             )
-            
-            # Update SGDR cycle tracking
-            steps_this_epoch = len(train_loader)
-            sgdr_cycle_step = step_count % sgdr_cycle_length
         
         # Validation with detailed analysis every 10 epochs
         detailed = (epoch % 10 == 0) or (epoch == EPOCHS)
@@ -1025,15 +1028,27 @@ def main():
             model, val_loader, None, device, None, criterion, epoch, detailed_analysis=detailed
         )
         
-        # Get current learning rate and determine phase
+        # Get current learning rate once
         current_lr = optimiser.param_groups[0]['lr']
         
+        # Update SGDR cycle tracking and determine phase
         if use_cosine:
             # Standard cosine annealing phases
             phase = "warmup" if epoch <= WARMUP_EPOCHS else "cosine"
         else:
+            # Update SGDR cycle tracking - detect restarts by LR increases
+            if epoch > 1:
+                if current_lr > previous_lr * 1.5:  # LR jumped up significantly = restart
+                    sgdr_cycle_num += 1
+                    sgdr_cycle_step = 0
+                    sgdr_current_cycle_length = int(sgdr_current_cycle_length * sgdr_T_mult)
+                else:
+                    sgdr_cycle_step += len(train_loader)
+            else:
+                sgdr_cycle_step += len(train_loader)
+                
             # SGDR phase detection based on cycle position
-            cycle_progress = sgdr_cycle_step / sgdr_cycle_length
+            cycle_progress = sgdr_cycle_step / sgdr_current_cycle_length if sgdr_current_cycle_length > 0 else 0
             
             if cycle_progress < 0.1:
                 phase = "restart"  # Just restarted, LR climbing from minimum
@@ -1045,8 +1060,10 @@ def main():
                 phase = "late"     # Late in cycle, LR falling toward minimum
                 
             # Add cycle info to phase
-            cycle_num = (step_count // sgdr_cycle_length) + 1
-            phase = f"{phase}-C{cycle_num}"
+            phase = f"{phase}-C{sgdr_cycle_num}"
+            
+            # Update previous LR for next iteration
+            previous_lr = current_lr
         
         temp_str = f" | temp {model.temperature.item():.3f}" if TEMP_SCALING else ""
         print(f"epoch {epoch:02d} | "
@@ -1145,7 +1162,7 @@ def main():
                                             print(f"         • True {true_name} → Pred {pred_name}: {contrib_count:3d} ({contrib_pct:4.1f}%)")
                 
                 # Special diagnostic for VERB class failure
-                if 'VERB' in [UPOS_TAGS[i] for i, _ in problematic_classes]:
+                if 'VERB' in [i for i, _ in problematic_classes]:
                     print("\n🚨 VERB Diagnostic Analysis:")
                     verb_idx = UPOS_TAGS.index('VERB')
                     if verb_idx in analysis['confusion_matrix']:
