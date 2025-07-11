@@ -50,10 +50,10 @@ NUM_WORKERS_VAL = 16       # 16 for validation
 PREFETCH_FACTOR = 4        # Higher prefetch for compute nodes
 PIN_MEMORY = True          # Always pin memory on compute nodes
 
-# Universal POS tag names for better reporting
+# Universal POS tag names for better reporting (MUST match UD dataset order!)
 UPOS_TAGS = [
     "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", "DET", "CCONJ", 
-    "PROPN", "PRON", "X", "ADV", "INTJ", "VERB", "AUX", "SPACE"
+    "PROPN", "PRON", "X", "_", "ADV", "INTJ", "VERB", "AUX"
 ]
 
 ###############################################################################
@@ -160,7 +160,7 @@ class LabelSmoothingLoss(nn.Module):
         # Compute loss only on non-ignored tokens
         loss = -true_dist * pred
         loss = loss.sum(dim=1)
-        loss = loss[mask].mean() if mask.any() else torch.tensor(0.0, device=pred.device)
+        loss = loss[mask].sum() if mask.any() else torch.tensor(0.0, device=pred.device)
         
         return loss
 
