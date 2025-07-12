@@ -6,6 +6,7 @@ This is the main training orchestration class that replaces the monolithic main 
 """
 
 import math
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,6 +52,10 @@ class POSTrainer:
         self.step_count = 0
         self.best_metric = 0.0
         self.best_model_state = None
+        
+        # Timing tracking
+        self.training_start_time = None
+        self.epoch_times = []
         
         # Data
         self.vocab = None
@@ -204,17 +209,23 @@ class POSTrainer:
             self.model = DepthWiseCNNRouter(
                 use_hash_embed=True,
                 hash_dim=self.args.hash_dim,
-                num_buckets=self.args.num_buckets
+                num_buckets=self.args.num_buckets,
+                dw_kernel=self.args.dw_kernel
             ).to(self.device)
             print(f"🧠 Hash-based model created:")
             print(f"   • Embedding dimension: {self.args.hash_dim}")
             print(f"   • Hash buckets: {self.args.num_buckets:,}")
+            print(f"   • Kernel size: {self.args.dw_kernel}")
             print(f"   • Memory usage: ~{self.args.num_buckets * self.args.hash_dim * 4 / 1024**2:.1f} MB")
         else:
-            self.model = DepthWiseCNNRouter(len(self.vocab)).to(self.device)
+            self.model = DepthWiseCNNRouter(
+                vocab_size=len(self.vocab),
+                dw_kernel=self.args.dw_kernel
+            ).to(self.device)
             print(f"🧠 Vocabulary-based model created:")
             print(f"   • Vocabulary size: {len(self.vocab):,}")
             print(f"   • Embedding dimension: {EMB_DIM}")
+            print(f"   • Kernel size: {self.args.dw_kernel}")
         
         # Setup optimizer
         self.optimizer = optim.AdamW(
@@ -513,6 +524,9 @@ class POSTrainer:
         """Main training loop."""
         print("🚀 Starting training...")
         
+        # Start timing
+        self.training_start_time = time.time()
+        
         max_epochs = EPOCHS if self.args.fixed_epochs else self.args.max_epochs
         
         # SGDR cycle tracking for phase display
@@ -530,11 +544,18 @@ class POSTrainer:
             previous_lr = LR_MIN
         
         for epoch in range(1, max_epochs + 1):
+            # Track epoch time
+            epoch_start_time = time.time()
+            
             # Training
             train_ppl, train_acc, train_f1 = self.train_epoch(epoch)
             
             # Validation
             val_ppl, val_acc, val_f1, analysis = self.validate_epoch(epoch)
+            
+            # Record epoch time
+            epoch_time = time.time() - epoch_start_time
+            self.epoch_times.append(epoch_time)
             
             # Update scheduled class-balanced loss if using it
             if (self.args.class_balanced and self.args.class_balanced_schedule and 
@@ -627,6 +648,9 @@ class POSTrainer:
                   hasattr(self.criterion, 'get_brief_status')):
                 cb_str = f" | {self.criterion.get_brief_status()}"
             
+            # Format epoch time for display
+            epoch_time_str = f" | {self._format_time(epoch_time)}"
+            
             # Print progress (restored from original format)
             if not self.args.no_f1 and val_f1 > 0:
                 if self.args.monitor in ['macro_f1', 'weighted_f1']:
@@ -634,19 +658,19 @@ class POSTrainer:
                           f"train acc {train_acc*100:5.2f}% | "
                           f"{self.args.f1_average[0].upper()}F1 {val_f1*100:5.2f}% (acc {val_acc*100:4.1f}%) | "
                           f"val ppl {val_ppl:4.2f} | "
-                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
+                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}{epoch_time_str}")
                 else:
                     print(f"epoch {epoch:02d} | "
                           f"train acc {train_acc*100:5.2f}% | "
                           f"val acc {val_acc*100:5.2f}% ({self.args.f1_average[0].upper()}F1 {val_f1*100:4.1f}%) | "
                           f"val ppl {val_ppl:4.2f} | "
-                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
+                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}{epoch_time_str}")
             else:
                 print(f"epoch {epoch:02d} | "
                       f"train acc {train_acc*100:5.2f}% | "
                       f"val acc {val_acc*100:5.2f}% | "
                       f"val ppl {val_ppl:4.2f} | "
-                      f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
+                      f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}{epoch_time_str}")
             
             # Early stopping check
             if not self.args.fixed_epochs:
@@ -692,6 +716,10 @@ class POSTrainer:
             # Update final values with calibrated results
             val_ppl, val_acc, val_f1 = cal_ppl, cal_acc, cal_f1_score
         
+        # Calculate training time statistics
+        total_training_time = time.time() - self.training_start_time
+        avg_epoch_time = sum(self.epoch_times) / len(self.epoch_times) if self.epoch_times else 0
+        
         # Final results
         final_results = {
             'training_method': 'early stopping' if not self.args.fixed_epochs else 'fixed epochs',
@@ -705,7 +733,14 @@ class POSTrainer:
             'best_metric': self.best_metric,
             'perplexity': val_ppl,
             'accuracy': val_acc,
-            'f1_score': val_f1
+            'f1_score': val_f1,
+            'timing': {
+                'total_training_time_seconds': total_training_time,
+                'total_training_time_formatted': self._format_time(total_training_time),
+                'average_epoch_time_seconds': avg_epoch_time,
+                'average_epoch_time_formatted': self._format_time(avg_epoch_time),
+                'epoch_times': self.epoch_times
+            }
         }
         
         # Add early stopping info
@@ -716,6 +751,8 @@ class POSTrainer:
         print(f"   Final accuracy: {val_acc:.1%}")
         print(f"   Final F1: {val_f1:.3f}")
         print(f"   Best {self.args.monitor}: {self.best_metric:.3f}")
+        print(f"   Training time: {self._format_time(total_training_time)}")
+        print(f"   Average per epoch: {self._format_time(avg_epoch_time)}")
         
         return final_results
     
@@ -724,10 +761,11 @@ class POSTrainer:
         print("💾 Saving model artifacts...")
         
         # Generate model name and config
-        self.model_name = generate_model_name(self.args)
+        self.model_name = generate_model_name(self.args, final_results)
         self.model_config = create_model_config(
             self.model_name, self.args, self.vocab, 
-            {"train_size": len(self.train_dataset), "val_size": len(self.val_dataset)}
+            {"train_size": len(self.train_dataset), "val_size": len(self.val_dataset)},
+            final_results
         )
         
         # Save all artifacts
@@ -1042,6 +1080,18 @@ class POSTrainer:
             'best_metric': self.best_metric
         }, checkpoint_path)
         print(f"📁 Saved checkpoint: {checkpoint_path}") 
+    
+    def _format_time(self, seconds: float) -> str:
+        """Format time duration in a human-readable format."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            minutes = seconds / 60
+            return f"{minutes:.1f}m"
+        else:
+            hours = seconds / 3600
+            minutes = (seconds % 3600) / 60
+            return f"{hours:.0f}h {minutes:.0f}m"
 
     def _print_detailed_analysis(self, analysis: Dict, epoch: int):
         """Print detailed per-class analysis like in the modular trainer."""

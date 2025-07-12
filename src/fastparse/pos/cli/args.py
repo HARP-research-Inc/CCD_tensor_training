@@ -135,6 +135,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temp-calibration-samples", type=int, default=1000,
                         help="Number of samples for temperature calibration (default: 1000)")
     
+    # Model architecture arguments
+    parser.add_argument("--dw-kernel", type=int, default=3,
+                        help="Depth-wise convolution kernel size (default: 3)")
+    
     # Hash-based embedding arguments
     parser.add_argument("--hash-embed", action="store_true",
                         help="Use hash-based embeddings instead of vocabulary-based (spaCy-style)")
@@ -213,6 +217,12 @@ def validate_args(args: Any) -> None:
     if args.save_checkpoints and args.checkpoint_freq <= 0:
         raise ValueError("Checkpoint frequency must be positive")
     
+    # Validate model architecture parameters
+    if args.dw_kernel <= 0:
+        raise ValueError("Depth-wise kernel size must be positive")
+    if args.dw_kernel % 2 == 0:
+        raise ValueError("Depth-wise kernel size must be odd for symmetric padding")
+    
     # Validate hash embedding parameters
     if args.hash_embed:
         if args.hash_dim <= 0:
@@ -290,6 +300,9 @@ def print_args_summary(args: Any) -> None:
         print(f"   Noise threshold: {args.noise_threshold}")
     else:
         print(f"📊 Batch Size: {args.batch_size or 'Auto'}")
+    
+    # Architecture
+    print(f"🏗️  Architecture: Depth-wise CNN (kernel size {args.dw_kernel})")
     
     # Embeddings
     if args.hash_embed:

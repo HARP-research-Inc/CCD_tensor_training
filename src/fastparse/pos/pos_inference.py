@@ -45,6 +45,17 @@ def get_config_path(model_path):
         model_dir = os.path.dirname(model_path)
         model_name = os.path.basename(model_path).replace('.pt', '')
         config_path = os.path.join(model_dir, f"{model_name}.json")
+        
+        # If still not found, try common model directories
+        if not os.path.exists(config_path):
+            # Try models/ directory
+            models_dir = os.path.join(os.path.dirname(model_path), "models")
+            if os.path.exists(models_dir):
+                config_path = os.path.join(models_dir, f"{model_name}.json")
+            
+            # If still not found, try looking in models/ relative to current directory
+            if not os.path.exists(config_path):
+                config_path = os.path.join("models", f"{model_name}.json")
     
     return config_path
 
@@ -68,7 +79,11 @@ class DepthWiseCNNRouter(nn.Module):
             # Hash-based embedding setup
             self.emb_dim = hash_dim
             self.num_buckets = num_buckets
-            self.dw_kernel = 3
+            # For hash embed, try to get kernel from config if available, otherwise use default
+            if config and 'architecture' in config:
+                self.dw_kernel = config['architecture'].get('dw_kernel', 3)
+            else:
+                self.dw_kernel = 3  # Default
             self.n_tags = 18
             self.use_second_conv = True
             self.use_temp_scaling = True
@@ -398,14 +413,17 @@ class POSPredictor:
             # Hash-based model
             hash_dim = arch.get('hash_dim', 96)
             num_buckets = arch.get('num_buckets', 1048576)
+            dw_kernel = arch.get('dw_kernel', 3)
             self.model = DepthWiseCNNRouter(
                 use_hash_embed=True,
                 hash_dim=hash_dim,
-                num_buckets=num_buckets
+                num_buckets=num_buckets,
+                config=self.config
             ).to(self.device)
             print(f"🎯 Hash-based model loaded:")
             print(f"   • Hash dimension: {hash_dim}")
             print(f"   • Hash buckets: {num_buckets:,}")
+            print(f"   • Kernel size: {dw_kernel}")
             
             # Store hash parameters for inference
             self.hash_dim = hash_dim
@@ -469,6 +487,7 @@ class POSPredictor:
         print(f"✓ Model loaded on {self.device}")
         print(f"✓ Vocabulary size: {len(self.vocab)}")
         print(f"✓ Architecture: {arch['emb_dim']}D, " +
+              f"kernel={arch.get('dw_kernel', 3)}, " +
               f"{'2-layer' if arch.get('use_second_conv_layer', False) or arch.get('use_two_layers', False) else '1-layer'} CNN, " +
               f"{'with' if arch.get('use_temperature_scaling', True) else 'no'} temp scaling")
 

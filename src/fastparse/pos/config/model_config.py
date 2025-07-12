@@ -13,15 +13,17 @@ import os
 from datetime import datetime
 from typing import Dict, List, Any
 
+# Best command (7/12/25): python train_clean.py --adaptive-class-balanced --adaptive-cb-threshold 0.6 --adaptive-cb-weight-power 2.0 --adaptive-cb-max-ratio 8.0 --fixed-epochs --batch-size 512 --combined-penn
+# w/ 300 epochs
 
 # Constants (moved from train_modular.py)
-EMB_DIM = 48
-DW_KERNEL = 3
+EMB_DIM = 48  # Size of embeddings. Scales O(n^2)*number of layers
+DW_KERNEL = 7  # Amount of context taken in. Scales O(dw)
 N_TAGS = 18
 LR_MAX = 7e-2
 LR_MIN = 1e-4
-EPOCHS = 100
-WARMUP_EPOCHS = 3
+EPOCHS = 30
+WARMUP_EPOCHS = 6
 MAX_LEN = 64
 LABEL_SMOOTHING = 0.1
 
@@ -32,7 +34,7 @@ UPOS_TAGS = [
 ]
 
 
-def create_model_config(model_name: str, args: Any, vocab: Dict, dataset_info: Dict) -> Dict:
+def create_model_config(model_name: str, args: Any, vocab: Dict, dataset_info: Dict, final_results: Dict = None) -> Dict:
     """Create comprehensive model configuration dictionary."""
     config = {
         "model_name": model_name,
@@ -41,7 +43,7 @@ def create_model_config(model_name: str, args: Any, vocab: Dict, dataset_info: D
         "architecture": {
             "type": "DepthWiseCNNRouter",
             "emb_dim": args.hash_dim if args.hash_embed else EMB_DIM,
-            "dw_kernel": DW_KERNEL,
+            "dw_kernel": args.dw_kernel,
             "n_tags": N_TAGS,
             "max_len": MAX_LEN,
             "use_two_layers": True,
@@ -71,12 +73,14 @@ def create_model_config(model_name: str, args: Any, vocab: Dict, dataset_info: D
             "lr_max": LR_MAX,
             "lr_min": LR_MIN,
             "epochs": EPOCHS,
+            "actual_epochs": final_results.get('total_epochs') if final_results else None,
             "warmup_epochs": WARMUP_EPOCHS,
             "scheduler": "SGDR" if not args.cosine else "cosine",
             "mixed_precision": True,
             "early_stopping": not args.fixed_epochs,
             "monitor_metric": args.monitor if not args.fixed_epochs else None,
-            "patience": args.patience if not args.fixed_epochs else None
+            "patience": args.patience if not args.fixed_epochs else None,
+            "timing": final_results.get('timing') if final_results else None
         },
         "pos_tags": {
             "tagset": "Universal Dependencies",
@@ -166,7 +170,7 @@ def get_treebanks_used(args: Any) -> List[str]:
         return [args.treebank]
 
 
-def generate_model_name(args: Any) -> str:
+def generate_model_name(args: Any, final_results: Dict = None) -> str:
     """Generate model name based on configuration."""
     if args.model_prefix:
         base_name = args.model_prefix
@@ -179,8 +183,14 @@ def generate_model_name(args: Any) -> str:
     else:
         base_name = f"router_{args.treebank}"
     
-    # Add hash embedding suffix to model name
+    # Add embedding dimension
     if args.hash_embed:
-        base_name += "_hash"
+        base_name += f"_hash{args.hash_dim}d"
+    else:
+        base_name += f"_{EMB_DIM}d"
+    
+    # Add epoch count if final_results is provided
+    if final_results and 'total_epochs' in final_results:
+        base_name += f"_e{final_results['total_epochs']}"
     
     return base_name 

@@ -160,6 +160,14 @@ def print_model_summary(model_name: str, artifacts: Dict[str, str],
     print(f"   F1 Score: {final_results.get('f1_score', 0):.3f}")
     print(f"   Perplexity: {final_results.get('perplexity', 0):.2f}")
     
+    # Timing information
+    if 'timing' in final_results and final_results['timing']:
+        timing = final_results['timing']
+        print(f"\n⏱️  Training Time:")
+        print(f"   Total: {timing.get('total_training_time_formatted', 'N/A')}")
+        print(f"   Average per epoch: {timing.get('average_epoch_time_formatted', 'N/A')}")
+        print(f"   Total epochs: {final_results.get('total_epochs', 'N/A')}")
+    
     # Artifacts
     print(f"\n📁 Saved Artifacts:")
     for artifact_type, path in artifacts.items():

@@ -1,0 +1,124 @@
+{
+  "model_name": "router_en_gum_48d_e30",
+  "description": "Universal Dependencies EN_GUM POS Router (Fixed 30 epochs) [TempScaling, SGDR]",
+  "created_at": "2025-07-12T14:25:00.844566",
+  "architecture": {
+    "type": "DepthWiseCNNRouter",
+    "emb_dim": 48,
+    "dw_kernel": 3,
+    "n_tags": 18,
+    "max_len": 64,
+    "use_two_layers": true,
+    "use_temperature_scaling": true,
+    "use_hash_embed": false,
+    "hash_dim": null,
+    "num_buckets": null,
+    "ngram_min": null,
+    "ngram_max": null,
+    "dropout_rate": 0.1,
+    "activation": "ReLU",
+    "normalization": "LayerNorm"
+  },
+  "vocabulary": {
+    "size": 12378,
+    "type": "single_treebank",
+    "treebanks": [
+      "en_gum"
+    ],
+    "pad_token": "<PAD>",
+    "augmented": false,
+    "penn_treebank_included": false,
+    "hash_based": false
+  },
+  "training": {
+    "dataset_size": {
+      "train_size": 4287,
+      "val_size": 784
+    },
+    "label_smoothing": 0.1,
+    "temperature_scaling": true,
+    "lr_max": 0.07,
+    "lr_min": 0.0001,
+    "epochs": 30,
+    "actual_epochs": 30,
+    "warmup_epochs": 6,
+    "scheduler": "SGDR",
+    "mixed_precision": true,
+    "early_stopping": false,
+    "monitor_metric": null,
+    "patience": null,
+    "timing": {
+      "total_training_time_seconds": 27.837120294570923,
+      "total_training_time_formatted": "27.8s",
+      "average_epoch_time_seconds": 0.8764624277750651,
+      "average_epoch_time_formatted": "0.9s",
+      "epoch_times": [
+        1.6555516719818115,
+        0.86702561378479,
+        0.8159663677215576,
+        0.8731288909912109,
+        0.8262729644775391,
+        0.7850337028503418,
+        0.7915167808532715,
+        0.7847733497619629,
+        0.7887217998504639,
+        0.8268260955810547,
+        0.8096797466278076,
+        0.8073065280914307,
+        0.8554103374481201,
+        0.8427703380584717,
+        0.8317148685455322,
+        1.0936601161956787,
+        0.8707239627838135,
+        0.8219289779663086,
+        0.892357349395752,
+        0.8435404300689697,
+        0.8486201763153076,
+        0.7960846424102783,
+        0.8629496097564697,
+        0.8280441761016846,
+        0.8430342674255371,
+        0.7909348011016846,
+        0.850348949432373,
+        0.8191423416137695,
+        0.8223962783813477,
+        1.1484076976776123
+      ]
+    }
+  },
+  "pos_tags": {
+    "tagset": "Universal Dependencies",
+    "tags": [
+      "NOUN",
+      "PUNCT",
+      "ADP",
+      "NUM",
+      "SYM",
+      "SCONJ",
+      "ADJ",
+      "PART",
+      "DET",
+      "CCONJ",
+      "PROPN",
+      "PRON",
+      "X",
+      "_",
+      "ADV",
+      "INTJ",
+      "VERB",
+      "AUX"
+    ],
+    "count": 18
+  },
+  "inference": {
+    "default_batch_size": 512,
+    "enable_temperature": true,
+    "enable_amp": false
+  },
+  "files": {
+    "model_weights": "router_en_gum_48d_e30.pt",
+    "config": "router_en_gum_48d_e30.json",
+    "vocabulary": "router_en_gum_48d_e30_vocab.json",
+    "training_log": "router_en_gum_48d_e30_training.json"
+  }
+}
