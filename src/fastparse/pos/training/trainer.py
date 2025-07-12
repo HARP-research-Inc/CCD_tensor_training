@@ -19,7 +19,7 @@ from typing import Dict, Any, Tuple, Optional, List
 
 from models.router import DepthWiseCNNRouter
 from losses.label_smoothing import LabelSmoothingLoss
-from losses.class_balanced import create_class_balanced_loss
+from losses.class_balanced import create_class_balanced_loss, create_scheduled_class_balanced_loss
 from training.early_stopping import EarlyStopping
 from training.adaptive_batch import AdaptiveBatchSizer, create_adaptive_dataloader
 from training.temperature import calibrate_temperature
@@ -264,24 +264,58 @@ class POSTrainer:
             )
         
         # Setup mixed precision
-        self.scaler = GradScaler()
+        try:
+            from torch.amp import GradScaler
+            self.scaler = GradScaler('cuda')
+        except ImportError:
+            from torch.cuda.amp import GradScaler
+            self.scaler = GradScaler()
         
         # Setup loss function
         if self.args.class_balanced:
             # Class-balanced loss with optional label smoothing
             smoothing = 0.0 if self.args.no_label_smoothing else LABEL_SMOOTHING
-            self.criterion = create_class_balanced_loss(
-                self.train_dataset, 
-                num_classes=N_TAGS, 
-                smoothing=smoothing
-            )
-            print(f"⚖️  Using class-balanced loss (inverse log frequency)")
+            
+            if self.args.class_balanced_schedule:
+                # Use scheduled class-balanced loss
+                self.criterion = create_scheduled_class_balanced_loss(
+                    self.train_dataset, 
+                    num_classes=N_TAGS, 
+                    smoothing=smoothing,
+                    temperature=self.args.class_balanced_temperature,
+                    scale=self.args.class_balanced_scale,
+                    schedule_type=self.args.class_balanced_schedule,
+                    threshold=self.args.class_balanced_threshold,
+                    warmup_epochs=self.args.class_balanced_warmup
+                )
+                print(f"⚖️  Using scheduled class-balanced loss")
+                print(f"   • Schedule: {self.args.class_balanced_schedule}")
+                if self.args.class_balanced_schedule == "accuracy":
+                    print(f"   • Activation threshold: {self.args.class_balanced_threshold*100:.0f}%")
+                elif self.args.class_balanced_schedule == "epoch":
+                    print(f"   • Warmup epochs: {self.args.class_balanced_warmup}")
+            else:
+                # Use immediate class-balanced loss
+                self.criterion = create_class_balanced_loss(
+                    self.train_dataset, 
+                    num_classes=N_TAGS, 
+                    smoothing=smoothing,
+                    temperature=self.args.class_balanced_temperature,
+                    scale=self.args.class_balanced_scale
+                )
+                print(f"⚖️  Using class-balanced loss (inverse log frequency)")
+            
+            print(f"   • Temperature: {self.args.class_balanced_temperature} (moderation)")
+            print(f"   • Scale: {self.args.class_balanced_scale} (strength)")
             if smoothing > 0:
                 print(f"   • With label smoothing α={smoothing}")
             
             # Print class weights for debugging
             from config.model_config import UPOS_TAGS
-            self.criterion.print_class_weights(UPOS_TAGS)
+            if hasattr(self.criterion, 'cb_loss'):
+                self.criterion.cb_loss.print_class_weights(UPOS_TAGS)
+            else:
+                self.criterion.print_class_weights(UPOS_TAGS)
             
         elif not self.args.no_label_smoothing:
             self.criterion = LabelSmoothingLoss(smoothing=LABEL_SMOOTHING)
@@ -324,6 +358,11 @@ class POSTrainer:
         all_preds = []
         all_targets = []
         
+        # Enhanced analysis for detailed breakdowns
+        per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0})
+        confusion_matrix = defaultdict(lambda: defaultdict(int))
+        detailed = (epoch % 10 == 0) or (epoch == 100)  # Every 10 epochs or final
+        
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch}", leave=True)
             for batch_data in pbar:
@@ -355,8 +394,26 @@ class POSTrainer:
                 if not self.args.no_f1:
                     valid_mask = mask & (upos != -100)
                     if valid_mask.any():
-                        all_preds.extend(pred[valid_mask].cpu().numpy())
-                        all_targets.extend(upos[valid_mask].cpu().numpy())
+                        valid_preds = pred[valid_mask].cpu().numpy()
+                        valid_targets = upos[valid_mask].cpu().numpy()
+                        
+                        all_preds.extend(valid_preds)
+                        all_targets.extend(valid_targets)
+                        
+                        # Detailed analysis collection
+                        if detailed:
+                            # Build confusion matrix
+                            for true_label, pred_label in zip(valid_targets, valid_preds):
+                                confusion_matrix[true_label][pred_label] += 1
+                            
+                            # Per-class statistics
+                            for i in range(N_TAGS):
+                                class_mask = valid_mask & (upos == i)
+                                if class_mask.any():
+                                    class_correct = ((pred == upos) & class_mask).sum().item()
+                                    class_total = class_mask.sum().item()
+                                    per_class_stats[i]['correct'] += class_correct
+                                    per_class_stats[i]['total'] += class_total
         
         # Calculate metrics
         avg_loss = total_loss / total_tok if total_tok > 0 else float('inf')
@@ -371,12 +428,15 @@ class POSTrainer:
             except Exception as e:
                 print(f"Warning: Could not calculate F1: {e}")
         
-        # Detailed analysis
+        # Generate detailed analysis
         analysis = {}
-        if self.args.detailed_analysis and all_preds:
+        if detailed and all_preds:
             try:
+                # Determine which classes are actually present in the data
                 present_classes = sorted(set(all_targets + all_preds))
                 present_class_names = [UPOS_TAGS[i] for i in present_classes if i < len(UPOS_TAGS)]
+                
+                # Classification report only for present classes
                 report = classification_report(
                     all_targets, all_preds, 
                     labels=present_classes,
@@ -385,6 +445,21 @@ class POSTrainer:
                     zero_division=0
                 )
                 analysis['classification_report'] = report
+                analysis['present_classes'] = present_classes
+                
+                # Per-class accuracy
+                per_class_acc = {}
+                for i, stats in per_class_stats.items():
+                    if stats['total'] > 0:
+                        per_class_acc[UPOS_TAGS[i]] = stats['correct'] / stats['total']
+                analysis['per_class_accuracy'] = per_class_acc
+                
+                # Confusion matrix analysis
+                analysis['confusion_matrix'] = confusion_matrix
+                
+                # Print detailed analysis immediately
+                self._print_detailed_analysis(analysis, epoch)
+                
             except Exception as e:
                 print(f"Warning: Could not generate detailed analysis: {e}")
         
@@ -416,6 +491,16 @@ class POSTrainer:
             
             # Validation
             val_ppl, val_acc, val_f1, analysis = self.validate_epoch(epoch)
+            
+            # Update scheduled class-balanced loss if using it
+            if (self.args.class_balanced and self.args.class_balanced_schedule and 
+                hasattr(self.criterion, 'update_schedule')):
+                if self.args.class_balanced_schedule == "accuracy":
+                    # Use validation accuracy for schedule
+                    self.criterion.update_schedule(accuracy=val_acc)
+                else:
+                    # Use epoch number
+                    self.criterion.update_schedule(epoch=epoch)
             
             # Step scheduler (for cosine)
             if self.args.cosine:
@@ -477,6 +562,12 @@ class POSTrainer:
             temp_val = self.model.temperature.item() if hasattr(self.model, 'temperature') and not self.args.no_temp_scaling else 1.0
             temp_str = f" | temp {temp_val:.3f}" if not self.args.no_temp_scaling and abs(temp_val - 1.0) > 0.01 else ""
             
+            # Class-balanced schedule display
+            cb_str = ""
+            if (self.args.class_balanced and self.args.class_balanced_schedule and 
+                hasattr(self.criterion, 'get_schedule_info')):
+                cb_str = f" | {self.criterion.get_schedule_info()}"
+            
             # Print progress (restored from original format)
             if not self.args.no_f1 and val_f1 > 0:
                 if self.args.monitor in ['macro_f1', 'weighted_f1']:
@@ -484,19 +575,19 @@ class POSTrainer:
                           f"train acc {train_acc*100:5.2f}% | "
                           f"{self.args.f1_average[0].upper()}F1 {val_f1*100:5.2f}% (acc {val_acc*100:4.1f}%) | "
                           f"val ppl {val_ppl:4.2f} | "
-                          f"lr {current_lr:.1e} ({phase}){temp_str}")
+                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
                 else:
                     print(f"epoch {epoch:02d} | "
                           f"train acc {train_acc*100:5.2f}% | "
                           f"val acc {val_acc*100:5.2f}% ({self.args.f1_average[0].upper()}F1 {val_f1*100:4.1f}%) | "
                           f"val ppl {val_ppl:4.2f} | "
-                          f"lr {current_lr:.1e} ({phase}){temp_str}")
+                          f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
             else:
                 print(f"epoch {epoch:02d} | "
                       f"train acc {train_acc*100:5.2f}% | "
                       f"val acc {val_acc*100:5.2f}% | "
                       f"val ppl {val_ppl:4.2f} | "
-                      f"lr {current_lr:.1e} ({phase}){temp_str}")
+                      f"lr {current_lr:.1e} ({phase}){temp_str}{cb_str}")
             
             # Early stopping check
             if not self.args.fixed_epochs:
@@ -872,3 +963,123 @@ class POSTrainer:
             'best_metric': self.best_metric
         }, checkpoint_path)
         print(f"📁 Saved checkpoint: {checkpoint_path}") 
+
+    def _print_detailed_analysis(self, analysis: Dict, epoch: int):
+        """Print detailed per-class analysis like in the modular trainer."""
+        print(f"\n📊 Detailed Per-Class Analysis (Epoch {epoch}):")
+        
+        if 'per_class_accuracy' in analysis:
+            sorted_classes = sorted(analysis['per_class_accuracy'].items(), 
+                                  key=lambda x: x[1], reverse=True)
+            for class_name, acc in sorted_classes:
+                print(f"  {class_name:8s}: {acc*100:5.2f}%")
+        
+        # Show confusion for problematic classes (accuracy < 20%)
+        if 'confusion_matrix' in analysis and 'per_class_accuracy' in analysis:
+            print("\n🔍 Confusion Analysis for Low-Accuracy Classes:")
+            
+            problematic_classes = [
+                (class_name, acc) for class_name, acc in analysis['per_class_accuracy'].items() 
+                if acc < 0.20  # Less than 20% accuracy
+            ]
+            
+            for class_name, acc in sorted(problematic_classes, key=lambda x: x[1]):
+                class_idx = UPOS_TAGS.index(class_name)
+                confusion_data = analysis['confusion_matrix'][class_idx]
+                
+                if confusion_data:  # Only show if there were instances of this class
+                    total_instances = sum(confusion_data.values())
+                    print(f"\n  📋 True={class_name} ({total_instances} instances, {acc*100:.1f}% correct):")
+                    
+                    # Show top 5 predictions for this true class
+                    top_predictions = sorted(confusion_data.items(), key=lambda x: x[1], reverse=True)[:5]
+                    for pred_idx, count in top_predictions:
+                        if pred_idx < len(UPOS_TAGS):
+                            pred_name = UPOS_TAGS[pred_idx]
+                            percentage = (count / total_instances) * 100
+                            marker = "✓" if pred_idx == class_idx else "✗"
+                            print(f"    {marker} Predicted as {pred_name:8s}: {count:4d} ({percentage:5.1f}%)")
+            
+            # Precision analysis for confused predictions
+            if problematic_classes:
+                print("\n🎯 Precision Analysis for Most Confused Predictions:")
+                
+                predicted_totals = defaultdict(int)
+                for true_idx in analysis['confusion_matrix']:
+                    for pred_idx, count in analysis['confusion_matrix'][true_idx].items():
+                        predicted_totals[pred_idx] += count
+                
+                for class_name, acc in sorted(problematic_classes, key=lambda x: x[1])[:3]:  # Top 3 worst
+                    class_idx = UPOS_TAGS.index(class_name)
+                    confusion_data = analysis['confusion_matrix'][class_idx]
+                    
+                    if confusion_data:
+                        wrong_predictions = [(pred_idx, count) for pred_idx, count in confusion_data.items() 
+                                           if pred_idx != class_idx]
+                        top_wrong = sorted(wrong_predictions, key=lambda x: x[1], reverse=True)[:2]
+                        
+                        for pred_idx, count in top_wrong:
+                            if pred_idx < len(UPOS_TAGS) and predicted_totals[pred_idx] > 0:
+                                pred_name = UPOS_TAGS[pred_idx]
+                                
+                                pred_breakdown = defaultdict(int)
+                                for true_idx in analysis['confusion_matrix']:
+                                    if pred_idx in analysis['confusion_matrix'][true_idx]:
+                                        pred_breakdown[true_idx] += analysis['confusion_matrix'][true_idx][pred_idx]
+                                
+                                total_pred = predicted_totals[pred_idx]
+                                correct_pred = pred_breakdown.get(pred_idx, 0)
+                                false_positive = total_pred - correct_pred
+                                
+                                precision = (correct_pred / total_pred) * 100 if total_pred > 0 else 0
+                                false_pos_rate = (false_positive / total_pred) * 100 if total_pred > 0 else 0
+                                
+                                print(f"\n    🎯 Predicted as {pred_name} ({total_pred} total predictions):")
+                                print(f"      ✓ Correct {pred_name}: {correct_pred:4d} ({precision:5.1f}% - True Positives)")
+                                print(f"      ✗ Wrong {pred_name}:   {false_positive:4d} ({false_pos_rate:5.1f}% - False Positives)")
+                                
+                                false_contributors = [(true_idx, cnt) for true_idx, cnt in pred_breakdown.items() 
+                                                    if true_idx != pred_idx]
+                                top_contributors = sorted(false_contributors, key=lambda x: x[1], reverse=True)[:3]
+                                
+                                if top_contributors:
+                                    print(f"      📊 Main false positive sources:")
+                                    for true_idx, contrib_count in top_contributors:
+                                        if true_idx < len(UPOS_TAGS):
+                                            true_name = UPOS_TAGS[true_idx]
+                                            contrib_pct = (contrib_count / total_pred) * 100
+                                            print(f"         • True {true_name} → Pred {pred_name}: {contrib_count:3d} ({contrib_pct:4.1f}%)")
+            
+            # Special diagnostic for VERB class failure
+            if 'VERB' in [i for i, _ in problematic_classes]:
+                print("\n🚨 VERB Diagnostic Analysis:")
+                verb_idx = UPOS_TAGS.index('VERB')
+                if verb_idx in analysis['confusion_matrix']:
+                    verb_confusion = analysis['confusion_matrix'][verb_idx]
+                    total_verbs = sum(verb_confusion.values())
+                    
+                    if total_verbs > 0:
+                        print(f"   📊 VERB instances: {total_verbs}")
+                        print(f"   🎯 Top VERB → ? confusions:")
+                        
+                        sorted_confusions = sorted(verb_confusion.items(), key=lambda x: x[1], reverse=True)
+                        for pred_idx, count in sorted_confusions[:8]:
+                            if pred_idx < len(UPOS_TAGS):
+                                pred_name = UPOS_TAGS[pred_idx]
+                                pct = (count / total_verbs) * 100
+                                status = "CORRECT" if pred_idx == verb_idx else "WRONG"
+                                print(f"      VERB → {pred_name:8s}: {count:3d} ({pct:5.1f}%) [{status}]")
+                        
+                        verb_acc = analysis['per_class_accuracy'].get('VERB', 0)
+                        aux_acc = analysis['per_class_accuracy'].get('AUX', 0)
+                        print(f"   ⚖️  VERB accuracy: {verb_acc*100:.1f}% vs AUX accuracy: {aux_acc*100:.1f}%")
+        
+        if 'classification_report' in analysis:
+            macro_f1_from_report = analysis['classification_report']['macro avg']['f1-score']
+            weighted_f1_from_report = analysis['classification_report']['weighted avg']['f1-score']
+            print(f"\n📋 Macro F1: {macro_f1_from_report*100:.2f}%")
+            print(f"   Weighted F1: {weighted_f1_from_report*100:.2f}%")
+            if not self.args.no_f1:
+                expected_f1 = weighted_f1_from_report if self.args.f1_average == 'weighted' else macro_f1_from_report
+                print(f"   ✓ {self.args.f1_average.title()} F1 calculation verified")
+        print() 

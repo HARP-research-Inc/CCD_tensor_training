@@ -77,6 +77,17 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Disable temperature scaling")
     parser.add_argument("--class-balanced", action="store_true",
                         help="Use class-balanced loss with inverse log frequency weighting")
+    parser.add_argument("--class-balanced-temperature", type=float, default=2.0,
+                        help="Temperature for class-balanced loss (default: 2.0, higher = more moderate)")
+    parser.add_argument("--class-balanced-scale", type=float, default=0.5,
+                        help="Scale factor for class-balanced loss (default: 0.5, lower = more moderate)")
+    parser.add_argument("--class-balanced-schedule", type=str, default=None,
+                        choices=["accuracy", "epoch", "linear"],
+                        help="Schedule type for class-balanced loss (default: None = immediate)")
+    parser.add_argument("--class-balanced-threshold", type=float, default=0.8,
+                        help="Accuracy threshold to activate class-balanced loss (default: 0.8)")
+    parser.add_argument("--class-balanced-warmup", type=int, default=10,
+                        help="Warmup epochs before activating class-balanced loss (default: 10)")
     parser.add_argument("--cosine", action="store_true",
                         help="Use cosine annealing instead of SGDR")
     parser.add_argument("--share", action="store_true",
@@ -200,6 +211,13 @@ def validate_args(args: Any) -> None:
             raise ValueError("Maximum n-gram length must be positive")
         if args.ngram_min > args.ngram_max:
             raise ValueError("Minimum n-gram length must be less than or equal to maximum")
+    
+    # Validate class-balanced loss parameters
+    if args.class_balanced:
+        if args.class_balanced_temperature <= 0:
+            raise ValueError("Class-balanced temperature must be positive")
+        if args.class_balanced_scale <= 0:
+            raise ValueError("Class-balanced scale must be positive")
 
 
 def print_args_summary(args: Any) -> None:
