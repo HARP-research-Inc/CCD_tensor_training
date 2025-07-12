@@ -88,6 +88,20 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Accuracy threshold to activate class-balanced loss (default: 0.8)")
     parser.add_argument("--class-balanced-warmup", type=int, default=10,
                         help="Warmup epochs before activating class-balanced loss (default: 10)")
+    parser.add_argument("--adaptive-class-balanced", action="store_true",
+                        help="Use adaptive class-balanced loss that adjusts weights based on per-class accuracy")
+    parser.add_argument("--adaptive-cb-threshold", type=float, default=0.8,
+                        help="Accuracy threshold to activate adaptive class-balanced loss (default: 0.8)")
+    parser.add_argument("--adaptive-cb-min-samples", type=int, default=10,
+                        help="Minimum samples per class for reliable accuracy (default: 10)")
+    parser.add_argument("--adaptive-cb-weight-power", type=float, default=2.0,
+                        help="Power to apply to accuracy gaps (default: 2.0, higher = more aggressive)")
+    parser.add_argument("--adaptive-cb-max-ratio", type=float, default=10.0,
+                        help="Maximum ratio between highest and lowest weights (default: 10.0)")
+    parser.add_argument("--adaptive-cb-update-freq", type=int, default=5,
+                        help="How often to update weights (every N batches, default: 5)")
+    parser.add_argument("--adaptive-cb-smoothing", type=float, default=0.9,
+                        help="EMA smoothing for accuracy tracking (default: 0.9, higher = more stable)")
     parser.add_argument("--cosine", action="store_true",
                         help="Use cosine annealing instead of SGDR")
     parser.add_argument("--share", action="store_true",
@@ -218,6 +232,27 @@ def validate_args(args: Any) -> None:
             raise ValueError("Class-balanced temperature must be positive")
         if args.class_balanced_scale <= 0:
             raise ValueError("Class-balanced scale must be positive")
+    
+    # Validate adaptive class-balanced loss parameters
+    if args.adaptive_class_balanced:
+        if args.adaptive_cb_threshold <= 0 or args.adaptive_cb_threshold > 1:
+            raise ValueError("Adaptive class-balanced threshold must be between 0 and 1")
+        if args.adaptive_cb_min_samples <= 0:
+            raise ValueError("Adaptive class-balanced min samples must be positive")
+        if args.adaptive_cb_weight_power <= 0:
+            raise ValueError("Adaptive class-balanced weight power must be positive")
+        if args.adaptive_cb_max_ratio <= 1:
+            raise ValueError("Adaptive class-balanced max ratio must be greater than 1")
+        if args.adaptive_cb_update_freq <= 0:
+            raise ValueError("Adaptive class-balanced update frequency must be positive")
+        if args.adaptive_cb_smoothing <= 0 or args.adaptive_cb_smoothing >= 1:
+            raise ValueError("Adaptive class-balanced smoothing must be between 0 and 1")
+        
+        # Check for conflicts
+        if args.class_balanced:
+            raise ValueError("Cannot use both --class-balanced and --adaptive-class-balanced")
+        if args.class_balanced_schedule:
+            raise ValueError("Cannot use --class-balanced-schedule with --adaptive-class-balanced")
 
 
 def print_args_summary(args: Any) -> None:
@@ -269,6 +304,12 @@ def print_args_summary(args: Any) -> None:
     print(f"🌡️  Temperature Scaling: {'No' if args.no_temp_scaling else 'Yes'}")
     print(f"🎯 Label Smoothing: {'No' if args.no_label_smoothing else 'Yes'}")
     print(f"⚖️  Class-Balanced Loss: {'Yes' if args.class_balanced else 'No'}")
+    print(f"🎯 Adaptive Class-Balanced: {'Yes' if args.adaptive_class_balanced else 'No'}")
+    if args.adaptive_class_balanced:
+        print(f"   Threshold: {args.adaptive_cb_threshold*100:.0f}%")
+        print(f"   Weight power: {args.adaptive_cb_weight_power}")
+        print(f"   Max ratio: {args.adaptive_cb_max_ratio}:1")
+        print(f"   Update freq: every {args.adaptive_cb_update_freq} batches")
     print(f"📈 Scheduler: {'Cosine' if args.cosine else 'SGDR'}")
     print(f"🖥️  Compute Node: {'Yes' if args.compute_node else 'No'}")
     

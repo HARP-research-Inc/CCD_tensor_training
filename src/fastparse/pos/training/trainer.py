@@ -19,7 +19,7 @@ from typing import Dict, Any, Tuple, Optional, List
 
 from models.router import DepthWiseCNNRouter
 from losses.label_smoothing import LabelSmoothingLoss
-from losses.class_balanced import create_class_balanced_loss, create_scheduled_class_balanced_loss
+from losses.class_balanced import create_class_balanced_loss, create_scheduled_class_balanced_loss, create_adaptive_class_balanced_loss
 from training.early_stopping import EarlyStopping
 from training.adaptive_batch import AdaptiveBatchSizer, create_adaptive_dataloader
 from training.temperature import calibrate_temperature
@@ -272,7 +272,31 @@ class POSTrainer:
             self.scaler = GradScaler()
         
         # Setup loss function
-        if self.args.class_balanced:
+        if self.args.adaptive_class_balanced:
+            # Adaptive class-balanced loss with optional label smoothing
+            smoothing = 0.0 if self.args.no_label_smoothing else LABEL_SMOOTHING
+            
+            self.criterion = create_adaptive_class_balanced_loss(
+                self.train_dataset, 
+                num_classes=N_TAGS, 
+                smoothing=smoothing,
+                activation_threshold=self.args.adaptive_cb_threshold,
+                min_samples_per_class=self.args.adaptive_cb_min_samples,
+                weight_power=self.args.adaptive_cb_weight_power,
+                max_weight_ratio=self.args.adaptive_cb_max_ratio,
+                update_frequency=self.args.adaptive_cb_update_freq,
+                smoothing_factor=self.args.adaptive_cb_smoothing
+            )
+            print(f"🎯 Using adaptive class-balanced loss")
+            print(f"   • Activation threshold: {self.args.adaptive_cb_threshold*100:.0f}%")
+            print(f"   • Weight power: {self.args.adaptive_cb_weight_power} (higher = more aggressive)")
+            print(f"   • Max weight ratio: {self.args.adaptive_cb_max_ratio}:1")
+            print(f"   • Update frequency: every {self.args.adaptive_cb_update_freq} batches")
+            print(f"   • Smoothing factor: {self.args.adaptive_cb_smoothing}")
+            if smoothing > 0:
+                print(f"   • With label smoothing α={smoothing}")
+            
+        elif self.args.class_balanced:
             # Class-balanced loss with optional label smoothing
             smoothing = 0.0 if self.args.no_label_smoothing else LABEL_SMOOTHING
             
@@ -460,6 +484,20 @@ class POSTrainer:
                 # Print detailed analysis immediately
                 self._print_detailed_analysis(analysis, epoch)
                 
+                # Print adaptive class-balanced loss status if using it
+                if (self.args.adaptive_class_balanced and 
+                    hasattr(self.criterion, 'print_status')):
+                    try:
+                        from config.model_config import UPOS_TAGS
+                        self.criterion.print_status(UPOS_TAGS)
+                    except ImportError:
+                        # Fallback if UPOS_TAGS not available
+                        UPOS_TAGS = [
+                            "NOUN", "PUNCT", "ADP", "NUM", "SYM", "SCONJ", "ADJ", "PART", "DET", "CCONJ", 
+                            "PROPN", "PRON", "X", "_", "ADV", "INTJ", "VERB", "AUX"
+                        ]
+                        self.criterion.print_status(UPOS_TAGS)
+                
             except Exception as e:
                 print(f"Warning: Could not generate detailed analysis: {e}")
         
@@ -501,6 +539,18 @@ class POSTrainer:
                 else:
                     # Use epoch number
                     self.criterion.update_schedule(epoch=epoch)
+            
+            # Update adaptive class-balanced loss if using it
+            if (self.args.adaptive_class_balanced and 
+                hasattr(self.criterion, 'update_accuracy_stats')):
+                # Update with validation accuracy
+                self.criterion.update_accuracy_stats(
+                    torch.zeros(1, 1, N_TAGS), torch.zeros(1, 1), val_acc
+                )
+                
+                # Check for activation
+                if self.criterion.check_activation():
+                    pass  # Activation message already printed
             
             # Step scheduler (for cosine)
             if self.args.cosine:
@@ -567,6 +617,9 @@ class POSTrainer:
             if (self.args.class_balanced and self.args.class_balanced_schedule and 
                 hasattr(self.criterion, 'get_schedule_info')):
                 cb_str = f" | {self.criterion.get_schedule_info()}"
+            elif (self.args.adaptive_class_balanced and 
+                  hasattr(self.criterion, 'get_brief_status')):
+                cb_str = f" | {self.criterion.get_brief_status()}"
             
             # Print progress (restored from original format)
             if not self.args.no_f1 and val_f1 > 0:
@@ -811,6 +864,16 @@ class POSTrainer:
             pred = logp.argmax(-1)
             correct += ((pred == upos) & mask).sum().item()
             
+            # Update adaptive class-balanced loss if using it
+            if (self.args.adaptive_class_balanced and 
+                hasattr(self.criterion, 'update_accuracy_stats')):
+                current_acc = correct / total_tok if total_tok > 0 else 0.0
+                self.criterion.update_accuracy_stats(logp, upos, current_acc)
+                
+                # Check for activation
+                if self.criterion.check_activation():
+                    pass  # Activation message already printed
+            
             # Collect predictions for F1 if needed
             if not self.args.no_f1:
                 valid_mask = mask & (upos != -100)
@@ -911,6 +974,16 @@ class POSTrainer:
             total_tok += mask.sum().item()
             pred = logp.argmax(-1)
             correct += ((pred == upos) & mask).sum().item()
+            
+            # Update adaptive class-balanced loss if using it
+            if (self.args.adaptive_class_balanced and 
+                hasattr(self.criterion, 'update_accuracy_stats')):
+                current_acc = correct / total_tok if total_tok > 0 else 0.0
+                self.criterion.update_accuracy_stats(logp, upos, current_acc)
+                
+                # Check for activation
+                if self.criterion.check_activation():
+                    pass  # Activation message already printed
 
         # Calculate metrics
         avg_loss = total_loss / total_tok if total_tok > 0 else float('inf')
