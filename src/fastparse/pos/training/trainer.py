@@ -385,7 +385,10 @@ class POSTrainer:
         # Enhanced analysis for detailed breakdowns
         per_class_stats = defaultdict(lambda: {'correct': 0, 'total': 0})
         confusion_matrix = defaultdict(lambda: defaultdict(int))
-        detailed = (epoch % 10 == 0) or (epoch == 100)  # Every 10 epochs or final
+        
+        # Determine max epochs for detailed analysis trigger
+        max_epochs = EPOCHS if self.args.fixed_epochs else self.args.max_epochs
+        detailed = (epoch % 10 == 0) or (epoch == max_epochs)  # Every 10 epochs or final
         
         with torch.no_grad():
             pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch}", leave=True)
@@ -456,6 +459,9 @@ class POSTrainer:
         analysis = {}
         if detailed and all_preds:
             try:
+                # Import UPOS_TAGS at the very beginning of detailed analysis
+                from config.model_config import UPOS_TAGS
+                
                 # Determine which classes are actually present in the data
                 present_classes = sorted(set(all_targets + all_preds))
                 present_class_names = [UPOS_TAGS[i] for i in present_classes if i < len(UPOS_TAGS)]
@@ -1039,6 +1045,9 @@ class POSTrainer:
 
     def _print_detailed_analysis(self, analysis: Dict, epoch: int):
         """Print detailed per-class analysis like in the modular trainer."""
+        # Import UPOS_TAGS in method scope to avoid variable access issues
+        from config.model_config import UPOS_TAGS
+        
         print(f"\n📊 Detailed Per-Class Analysis (Epoch {epoch}):")
         
         if 'per_class_accuracy' in analysis:
@@ -1047,13 +1056,13 @@ class POSTrainer:
             for class_name, acc in sorted_classes:
                 print(f"  {class_name:8s}: {acc*100:5.2f}%")
         
-        # Show confusion for problematic classes (accuracy < 20%)
+        # Show confusion for problematic classes (accuracy < 60%)
         if 'confusion_matrix' in analysis and 'per_class_accuracy' in analysis:
             print("\n🔍 Confusion Analysis for Low-Accuracy Classes:")
             
             problematic_classes = [
                 (class_name, acc) for class_name, acc in analysis['per_class_accuracy'].items() 
-                if acc < 0.20  # Less than 20% accuracy
+                if acc < 0.60  # Less than 60% accuracy (lowered from 20%)
             ]
             
             for class_name, acc in sorted(problematic_classes, key=lambda x: x[1]):
