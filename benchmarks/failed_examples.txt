@@ -19,14 +19,14 @@ Socialists complain that capitalism necessarily leads to unfair and exploitative
 Because such people are rich, they may choose where and how to live, and their choices in turn limit the options of the poor.
 As a result, terms such as individual freedom and equality of opportunity may be meaningful for capitalists but can only ring hollow for working people, who must do the capitalists’ bidding if they are to survive.
 Karl Marx and Friedrich Engels made this point in Manifesto of the Communist Party (1848) when they proclaimed that in a socialist society “the condition for the free development of each is the free development of all.”
-The next question is whether there is any pair of words in which the two phones are in minimal contrast (or opposition); that is, whether there is any context in English in which the occurrence of the one rather than the other has the effect of distinguishing two or more words (in the way that [ph] versus [b] distinguishes the so-called minimal pairs “pit” and “bit,” “pan” and “ban,” and so on).
+# The next question is whether there is any pair of words in which the two phones are in minimal contrast (or opposition); that is, whether there is any context in English in which the occurrence of the one rather than the other has the effect of distinguishing two or more words (in the way that [ph] versus [b] distinguishes the so-called minimal pairs “pit” and “bit,” “pan” and “ban,” and so on).
 If there is, it can be said that, despite their phonetic similarity, the two phones realize (or “belong to”) different phonemes—that the difference between them is phonemic.
 If there is no context in which the two phones are in contrast (or opposition) in this sense, it can be said that they are variants of the same phoneme—that the difference between them is nonphonemic.
-In several other languages—e.g., Hindi—the contrast between such sounds as [ph] and [p] is phonemic, however.
+# In several other languages—e.g., Hindi—the contrast between such sounds as [ph] and [p] is phonemic, however.
 The question is rather more complicated than it has been represented here.
-In particular, it should be noted that [p] is phonetically similar to [b] as well as to [ph] and that, although [ph] and [b] are in contrast, [p] and [b] are not.
-It would thus be possible to regard [p] and [b] as variants of the same phoneme.
-Most linguists, however, have taken the alternative view, assigning [p] to the same phoneme as [ph].
+# In particular, it should be noted that [p] is phonetically similar to [b] as well as to [ph] and that, although [ph] and [b] are in contrast, [p] and [b] are not.
+# It would thus be possible to regard [p] and [b] as variants of the same phoneme.
+# Most linguists, however, have taken the alternative view, assigning [p] to the same phoneme as [ph].
 Pacific settlement of disputes is based upon the assumption that war is primarily a technique for settling disputes, although it can, of course, also serve other purposes, such as allaying fears and seeking status.
 Further assumptions are that war frequently comes about because of the unawareness of decision makers of the possibility of settling disputes peacefully to the mutual advantage of both sides—an unawareness due to mere ignorance, pride, lack of imagination, or selfish and cynical leadership.
 It is thus possible that international organizations can contribute to the prevention of wars by devising and institutionalizing alternative, peaceful techniques for the settlement of disputes and by persuading the states to use them.

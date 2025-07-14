@@ -3,10 +3,11 @@ import mteb
 from src.DisCoBERT.DisCoBERT import DisCoBERT
 from src.DisCoBERT.categories import Box
 from torch import nn
+import torch
 
 def sentence_to_circuit_test():
 	model = DisCoBERT("en_core_web_lg")
-	with open("benchmarks/test.txt") as f:
+	with open("benchmarks/failed_examples.txt") as f:
 		sentences = f.readlines()
 	total = 0
 	breaks = 0
@@ -25,6 +26,8 @@ def sentence_to_circuit_test():
 		total += 1
 		try:
 			embedding = model.encode(sentence)
+			if not isinstance(embedding, torch.Tensor):
+				raise ValueError("Sentence evaluates to a model, not an embedding.")
 			if embedding is None or embedding.shape[0] == 0:
 				raise ValueError("Embedding is empty or None")
 		except:

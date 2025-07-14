@@ -181,14 +181,14 @@ class Box(Category):
 
 	def forward(self):
 
+		print("packet length:", len(self.packets))
+		print("incoming words:", [wire.label for wire in self.in_wires] )
+		
 		packet = list()
 		packet.append(self.type)
 
 		packet.append(self.forward_helper())
-		#print(packet)
-		#print([item[1] for item in self.packets if type(item) is torch.Tensor])
-
-		# 
+		
 
 		for wire in self.out_wires:
 			print(self.label, "sending", packet[0], "to", wire.get_sink_label())
