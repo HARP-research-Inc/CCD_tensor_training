@@ -54,7 +54,7 @@ def build_DCB_data(path, toy_mode = False):
     with open(path, 'r') as file:
         data = file.readlines()
 
-    model = DCB("en_core_web_lg")
+    model = DCB("en_core_web_sm")
 
     total_sentences = 0
 

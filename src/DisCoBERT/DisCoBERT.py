@@ -21,6 +21,9 @@ class DisCoBERT(object):
         embedding = discourse.forward()[1]
 
         return embedding
+    
+    def get_failures(self):
+        return Circuit.breaking_POS
 
     def encode(self, text: str):
         embedding = None
@@ -43,10 +46,16 @@ class DisCoBERT(object):
 
 if __name__ == "__main__":
     # example usage:
-    module = DisCoBERT("en_core_web_lg")
+    module = DisCoBERT("en_core_web_sm")
 
     #embedding = module.encode_confident("This topic is more complex than it seems.")
-    embedding = module.encode_confident("He was healthy though enjoying baking.")
+    try:
+        embedding = module.encode_confident("The name of the application was altered to magnetic resonance imaging (MRI) to avoid the loaded word nuclear.")
+
+    except:
+        #print(module.get_failures())
+        raise
+    
     print(embedding)
 
         
