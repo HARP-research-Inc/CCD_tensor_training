@@ -420,12 +420,24 @@ class SubordinatingConjunction(Box):
 	def forward_helper(self):
 		word_packets = [packet[1] for packet in self.packets]
 
-		print("packet length", len(self.packets))
+		# print("packet length:", len(self.packets))
+		# print("incoming words:", [wire.label for wire in self.in_wires] )
+		print("packet info:", [packet[0] for packet in self.packets])
 		if len(word_packets) not in (1, 2):
 			raise ValueError(f"Subordinating conjunction {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
 		
 		if len(word_packets) == 1 and isinstance(word_packets[0], torch.nn.Module):
 			return NestedNetwork(self.models[len(word_packets) - 1], word_packets[0])
+		
+		# if len(word_packets) == 2 and isinstance(word_packets[1], torch.nn.Module):
+		# 	word_packets[1] = word_packets[1](Box.model_cache.retrieve_BERT("it"))
+
+		for i in range(len(word_packets)):
+			if isinstance(word_packets[i], torch.nn.Module):
+				word_packets[i] = word_packets[i](Box.model_cache.retrieve_BERT("it"))
+				
+
+		
 
 		output = self.models[len(word_packets) - 1](*word_packets)
 	
@@ -609,7 +621,7 @@ class Box_Factory(object):
 		return self
  
 if __name__ == "__main__":
-	factory = Box_Factory(spacy.load("en_core_web_trf"), "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/")
+	factory = Box_Factory(spacy.load("en_core_web_trf"), "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert")
 
 	# tiny_discourse = Circuit("Tiny Discourse")
 
