@@ -1,0 +1,1 @@
+find models/discobert -mindepth 2 -type f | wc -l | awk '{print "total words: "$0}'; find models/discobert -mindepth 2 -type f -printf "%f\n" | sort -u | wc -l | awk '{print "unique words: "$0}'

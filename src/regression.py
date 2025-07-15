@@ -630,6 +630,9 @@ def batch_word_regression(model_destination, word_embeddings, sentence_embedding
 		avg_loss = epoch_loss / num_batches
 		if epoch % 10 == 0 or epoch == num_epochs - 1:
 			print(f'Epoch [{epoch+1}/{num_epochs}], Avg Loss: {avg_loss:.6f}')
+
+			torch.save(module.state_dict(), model_destination)
+			print(f"Model weights saved to: {model_destination}")
 	
 	print(f'>Training complete! Final Loss: {avg_loss:.6f}\n')
 	

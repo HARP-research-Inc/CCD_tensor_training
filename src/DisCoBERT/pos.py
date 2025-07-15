@@ -209,7 +209,7 @@ class Adjective(Box):
 		super().__init__(label, model_path)
 		self.grammar = ['SELF', 'NOUN']
 		self.type = "ADJ"
-		self.model = Box.model_cache.load_ann((label, "adj_model"), n=1)
+		self.model = Box.model_cache.load_ann((label, "adj_model"), n=1, fallback="general_adj_model")
 		self.inward_requirements: dict = {("ADV", "0:inf")}
 
 	def forward_helper(self):
@@ -237,7 +237,7 @@ class Intransitive_Verb(Box):
 		self.inward_requirements: dict = {("ADV", "0:inf"),
 										  ("INTJ", "0:inf"), 
 										 ("NOUN", "1:1")}
-		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
+		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1, fallback="general_intransitive_model")
 	
 	def forward_helper(self):
 		state_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
@@ -269,7 +269,7 @@ class Transitive_Verb(Box):
 										  ("INTJ", "0:inf"), 
 										 ("NOUN", "2:2")} 
 		
-		self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2)
+		self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2, fallback="general_transitive_model")
 
 	def forward_helper(self):
 		"""
@@ -341,7 +341,7 @@ class Ditransitive_Verb(Box):
 										  ("INTJ", "0:inf"), 
 										 ("NOUN", "3:3")} 
 		
-		self.model = Box.model_cache.load_ann((label, "ditransitive_model"), n=3)
+		self.model = Box.model_cache.load_ann((label, "ditransitive_model"), n=3, fallback="general_ditransitive_model")
 
 	def forward_helper(self):
 		"""

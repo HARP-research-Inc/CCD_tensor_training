@@ -5,6 +5,16 @@ import spacy
 from sentence_transformers import SentenceTransformer
 import os
 
+class GeneralNetwork(torch.nn.Module):
+    def __init__(self, network: torch.nn.Module, inp: torch.Tensor):
+        super().__init__()
+
+        self.network = network
+        self.inp = inp
+
+    def forward(self, *inputs):
+        return self.network(self.inp, *inputs)
+
 class ModelBank(object):
     def __init__(self, model_locations: str):
         self.reference_caches: dict[str, list] = dict()
@@ -72,7 +82,7 @@ class ModelBank(object):
         """
         load regression model from the given path.
         """
-        model_path = f"{self.model_locations}/{directory}/{model_name}"
+        model_path = f"{self.model_locations}/{directory}/{model_name}" if model_name else f"{self.model_locations}/{directory}/model"
         
         model = CPTensorRegression([384 for _ in range(n)], 384, 100)
         #model = OneWordTensorRegression(384, 384)
@@ -83,7 +93,7 @@ class ModelBank(object):
 
         return model
 
-    def load_ann(self, ID: tuple[str, str], n: int) -> torch.nn.Module:
+    def load_ann(self, ID: tuple[str, str], n: int, fallback=None) -> torch.nn.Module:
         """
         load ANN model from the given path.
         """
@@ -93,26 +103,29 @@ class ModelBank(object):
             try:
                 model = self.load_model(ID[1], ID[0], n=n)
             except:
-                try:
-                    print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
-                    word = ID[0]
-                    if self.nlp is None:
-                        print("spaCy model uninitialized.")
-                        raise ValueError("spaCy model uninitialized.")
-                    else:
-                        doc = self.nlp(word)
+                if fallback:
+                    model = GeneralNetwork(self.load_model(fallback, None, n=n+1), self.retrieve_BERT(ID[0]))
+                else:
+                    try:
+                        print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
+                        word = ID[0]
+                        if self.nlp is None:
+                            print("spaCy model uninitialized.")
+                            raise ValueError("spaCy model uninitialized.")
+                        else:
+                            doc = self.nlp(word)
+                            
+                            for token in doc:
+                                word = token.lemma_
+                                print(f"lemma: {word}")
                         
-                        for token in doc:
-                            word = token.lemma_
-                            print(f"lemma: {word}")
-                    
-                        model = self.load_model(ID[1], word, n=n)
-                except:
-                    print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
-            
-                    word = ID[0]
-                    nearest_name, _ = self.ann(ID[0], ID[1])
-                    model = self.load_model(ID[1], nearest_name, n = n)
+                            model = self.load_model(ID[1], word, n=n)
+                    except:
+                        print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
+                
+                        word = ID[0]
+                        nearest_name, _ = self.ann(ID[0], ID[1])
+                        model = self.load_model(ID[1], nearest_name, n = n)
             
             self.model_caches[ID] = model
 
