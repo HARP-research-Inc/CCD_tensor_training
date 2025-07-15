@@ -42,6 +42,7 @@ tests/data
 src/DisCoBERT/dummy_weights
 results/
 /old_models
+nearest_neighbor_cache.json
 checkpoints/checkpoint_20250501_192122.json
 checkpoints/checkpoint_20250501_191513.json
 checkpoints/checkpoint_20250501_191555.json
@@ -52,3 +53,4 @@ checkpoints/checkpoint_20250501_191638.json
 checkpoints/latest_checkpoint.txt
 preorder_output.txt
 *.tokens
+dump.txt
