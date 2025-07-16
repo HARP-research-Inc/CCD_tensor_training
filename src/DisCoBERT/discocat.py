@@ -447,11 +447,14 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 		elems = [token]
 		nextParse = [token]
 		coordinator = None
+		#local_visited = set([token])
 
+		counter = 0
 		while True:
 			expanded = False
 
 			targets = nextParse
+			#print(targets)
 			nextParse = []
 
 			for targetElem in targets:
@@ -460,12 +463,17 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 					if child.dep_ == "conj":
 						hasConj = True
 				
-				for child in get_children(targetElem):
+				for child in get_children(targetElem): #infinite loop gets stuck here
+					print(child)
+					# if child in local_visited:  # <-- Prevent revisiting
+					# 	continue
 					if child.dep_ == "conj" or (hasConj and child.dep_ == "dobj"):
 						elems.append(child)
 						nextParse.append(child)
+						#local_visited.add(child)
 						expanded = True
 					if child.dep_ == "cc":
+						print("Coordinator", coordinator)
 						if coordinator:
 							break
 
@@ -473,6 +481,9 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 			if not expanded or coordinator:
 				break
+			if counter >= 10000:
+				raise ValueError("Hanging conjunction cluster")
+			counter += 1
 		
 		if coordinator:
 			print(coordinator.text, "has", [elem.text for elem in elems], "children")
