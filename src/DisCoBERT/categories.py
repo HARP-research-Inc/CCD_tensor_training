@@ -286,6 +286,7 @@ class Circuit(Category):
 		self.root = None #root node
 		self.sources: list[Box] = list()
 		self.levels: list[list[Box]] = list()
+		self.topic: torch.Tensor = None
 
 	def __str__(self):
 		"""
@@ -315,6 +316,9 @@ class Circuit(Category):
 	
 	def set_root(self, root: Box):
 		self.root = root
+
+	def set_topic(self, subject: str):
+		self.topic = ModelBank.retrieve_BERT(subject)
 		
 		
 	def add_wire(self, parentBox: Box, childBox: Box):

@@ -21,7 +21,7 @@ def sentence_to_circuit_test():
 	for sentence in sentences:
 		print(sentence)
 		sentence = sentence.strip()#.lower().replace(",", "")
-		if len(sentence) <= 2 or sentence[0] == "=":
+		if len(sentence) <= 2 or sentence[0] in ["=", "#"]:
 			continue
 		total += 1
 		try:

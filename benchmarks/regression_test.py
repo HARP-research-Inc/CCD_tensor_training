@@ -54,7 +54,11 @@ def build_DCB_data(path, toy_mode = False):
     with open(path, 'r') as file:
         data = file.readlines()
 
-    model = DCB("en_core_web_sm")
+    failure_dump = open("benchmarks/failed_examples_lg.txt", "w")
+    success_dump = open("benchmarks/successful_examples_lg.txt", "w")
+
+
+    model = DCB("en_core_web_trf")
 
     total_sentences = 0
 
@@ -92,8 +96,10 @@ def build_DCB_data(path, toy_mode = False):
             except:
                 print(f"Error processing sentence: {sentence.strip()}")
                 breaks += 1
+                failure_dump.write(sentence.strip() + "\n")
                 continue
-
+            
+            success_dump.write(sentence.strip() + "\n")
             n += 1
             print(sentence[0:20], y)
             print(len(embedding))
