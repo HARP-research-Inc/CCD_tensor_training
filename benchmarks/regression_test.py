@@ -4,6 +4,8 @@ from torch import nn
 from src.DisCoBERT.DisCoBERT import DisCoBERT as DCB
 from src.DisCoBERT.categories import Box, Circuit
 
+nltk.download('punkt_tab')
+
 def build_data(path):
     with open(path, 'r') as file:
         data = file.readlines()
@@ -66,6 +68,10 @@ def build_DCB_data(path, toy_mode = False):
 
     n = 0
     breaks = 0
+    import random
+    random.shuffle(data)
+
+    breaking_sentences = []
 
     for line in data:
         if line[0] == '#' or len(line) < 4:
@@ -89,9 +95,12 @@ def build_DCB_data(path, toy_mode = False):
             
             try:
                 embedding = model.encode_confident(sentence.strip()).tolist()[0]
-            except:
+            except Exception as e:
                 print(f"Error processing sentence: {sentence.strip()}")
                 breaks += 1
+                
+                if str(e) == "preposition":
+                    breaking_sentences.append(sentence.strip())
                 continue
 
             n += 1
@@ -111,6 +120,11 @@ def build_DCB_data(path, toy_mode = False):
     print(f"FINAL total sentences: {total_sentences}")
     print(f"FINAL total breaks: {breaks}")
     print(f"FINAL POS breaking dict: {Circuit.breaking_POS}")
+
+    with open('preposition_exceptions.json', 'w') as f:
+        import json
+        f.write(json.dumps(breaking_sentences))
+
     return train_embeddings, train_classifications, test_embeddings, test_classifications
 
 def save_data(train_embeddings, train_classifications, test_embeddings, test_classifications):

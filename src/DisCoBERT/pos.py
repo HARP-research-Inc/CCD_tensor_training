@@ -193,13 +193,37 @@ class VerbState(Box):
 		self.inward_requirements: dict = {("PREP_MOD", "0:inf")}
 
 	def forward_helper(self):
-		print(f"Parsing noun {self.label}...")
+		print(f"Parsing verb state {self.label}...")
 
 		for packet in self.packets:
 			if isinstance(packet[1], torch.nn.Module):
 				self.embedding_state = packet[1](self.embedding_state)
 		
 		return self.embedding_state
+
+
+class AdjectiveState(Box):
+	"""
+
+	"""
+	def __init__(self, label: str, model_path: str):
+		super().__init__(label, model_path)
+		self.type = "STATE"
+		self.grammar = ['PREP_MOD','SELF']
+
+		self.embedding_state = Box.model_cache.retrieve_BERT(label)
+
+		self.inward_requirements: dict = {("PREP_MOD", "0:inf")}
+
+	def forward_helper(self):
+		print(f"Parsing adjective state {self.label}...")
+
+		for packet in self.packets:
+			if isinstance(packet[1], torch.nn.Module):
+				self.embedding_state = packet[1](self.embedding_state)
+		
+		return self.embedding_state
+
 
 class Adjective(Box):
 	"""
@@ -217,6 +241,11 @@ class Adjective(Box):
 		returns the model
 		"""
 
+
+		for packet in self.packets:
+			if isinstance(packet[1], torch.nn.Module):
+				self.model = NestedNetwork(packet[1], self.model)
+		
 		#adv handling will be implemented when adv class is implemented
 		return self.model
 
@@ -244,7 +273,7 @@ class Intransitive_Verb(Box):
 
 		print("intransitive packet length", len(self.packets))
 		if len(state_packets) != 1:
-			raise ValueError(f"Transitive verb {self.label} requires exactly one state packet, got {len(state_packets)}.")  
+			raise ValueError(f"Intransitive verb {self.label} requires exactly one state packet, got {len(state_packets)}.")  
 		
 		output = self.model(state_packets[0])
 
@@ -385,8 +414,8 @@ class Preposition(Box):
 
 		print("packet length", len(word_packets), "out of", len(self.packets))
 
-		#if len(word_packets) == 1:
-		#	return self.general_model(word_packets[0][1])
+		if len(word_packets) == 1:
+			return self.general_model(word_packets[0][1])
 
 		if len(word_packets) != 2:
 			raise ValueError(f"Preposition {self.label} requires exactly two packets, got {len(word_packets)} from {len(self.packets)}.")  
@@ -461,35 +490,6 @@ class SubordinatingConjunction(Box):
 
 		return output"""
 
-class Intransitive_Verb(Box):
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
-		self.grammar = ['NOUN', 'SELF', 'NOUN']
-		self.type = "VERB"
-
-		self.inward_requirements: dict = {("ADV", "0:inf"),
-										  ("INTJ", "0:inf"), 
-										 ("NOUN", "1:1")}
-		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
-	
-	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
-
-		print("packet length", len(self.packets))
-		if len(noun_packets) != 1:
-			raise ValueError(f"Intransitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
-		
-		output = self.model(noun_packets[0])
-
-		####adverb stuff####
-		for packet in self.packets:
-			if isinstance(packet[1], torch.nn.Module):
-				model:torch.nn.Module = packet[1]
-				output = model(output)
-
-		return output
-
-
 class Conjunction(Box):
 	"""
 
@@ -518,6 +518,9 @@ class Conjunction(Box):
 			word_packets[1] = self.models[3](word_packets[0], word_packets[1])
 			word_packets = word_packets[1:]
 		
+		#if len(word_packets) == 1:
+		#	return word_packets[0]
+		
 		output = self.models[0](word_packets[0], word_packets[1]) if word_packets[0] == "VERB" and word_packets[1] == "VERB" \
 			else self.models[1](word_packets[0], word_packets[1]) if word_packets[0] == "AUX" and word_packets[1] == "VERB" \
 			else self.models[2](word_packets[0], word_packets[1]) if word_packets[0] == "NOUN" and word_packets[1] == "NOUN" \
@@ -535,6 +538,9 @@ class Conjunction(Box):
 	VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV
 	"""
 
+def get_children(token):
+	return [t for t in token.doc if t.head == token if t != token]
+
 class Box_Factory(object):
 	"""
 	Factory for creating boxes.
@@ -548,20 +554,21 @@ class Box_Factory(object):
 		return self.is_linking_verb(token, feature) if feature == "AUX" else feature not in ["ADV", "AUX", "DET"]
 
 	def is_linking_verb(self, token, feature: str): # set(['nsubj', 'prep']), set(['nsubj', 'attr']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp']), set(['acomp', 'relcl']) 
-		return feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set([relA, relB]) for relA in ['nsubj', 'acomp'] for relB in ['prep', 'attr', 'acomp', 'ccomp', 'relcl', 'xcomp']] or (feature == "AUX" and any("subj" in child.dep_ for child in token.children) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in token.children)))
+		return feature in ["AUX", "VERB"] and (any([relA != relB and any(relA in child.dep_ for child in get_children(token)) and any(relB in child.dep_ for child in get_children(token)) for relA in ['nsubj', 'acomp'] for relB in ['prep', 'attr', 'acomp', 'ccomp', 'relcl', 'xcomp']]) or (feature == "AUX" and any("subj" in child.dep_ for child in get_children(token)) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in get_children(token))))
 
 	def create_box(self, token: spacy.tokens.Token, feature: str):
 		if token is not None:
 			label = str(token.text).replace(',', '').lower()
 
+			#print(token.text, feature in ["AUX", "VERB"], set(child.dep_ for child in get_children(token)), set(child.dep_ for child in get_children(token)) in [set([relA, relB]) for relA in ['nsubj', 'acomp'] for relB in ['prep', 'attr', 'acomp', 'ccomp', 'relcl', 'xcomp']])
 		if feature == "spider":
 			return Spider("SPIDER", self.model_path)
 		elif feature == "bureaucrat":
 			return Bureaucrat("REFERENCE")
 		elif self.is_linking_verb(token, feature):
-			print(token.text, "is linking verb because", [child.dep_ for child in token.children])
+			print(token.text, "is linking verb because", [child.dep_ for child in get_children(token)])
 			return Linking_Verb(label, self.model_path)
-		elif feature == "PRON" and any(child.dep_ == "poss" for child in token.children):
+		elif feature == "PRON" and any(child.dep_ == "poss" for child in get_children(token)):
 			return Possessive(label, self.model_path)
 		elif feature == "NOUN" or feature == "PROPN" or feature == "PRON" or feature == "NUM":
 			return Noun(label, self.model_path)
@@ -569,10 +576,12 @@ class Box_Factory(object):
 			return Adjective(label, self.model_path)
 		elif feature == "VERB":
 			nsubj, dobj, dative = (None, None, None)
-			for child in token.children:
+			for child in get_children(token):
 				if "subj" in child.dep_ or child.dep_ in ["nsubj", "nsubjpass", "attr", "relcl"]:
 					nsubj = child.text
-				if child.dep_ in ["dobj", "expl"] or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
+			
+			for child in get_children(token):
+				if child.dep_ in ["dobj", "expl", "oprd"] or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
 					dobj = child.text
 				if child.dep_ == "dative":
 					dative = child.text
@@ -595,7 +604,7 @@ class Box_Factory(object):
 			return Adverb(label, self.model_path)
 		elif feature == "INTJ":
 			return Interjection(label, self.model_path)
-		elif feature == "ADP" and len(list(token.children)) == 0:
+		elif feature == "ADP" and len(list(get_children(token))) == 0:
 			return PrepositionalModifier(label, self.model_path)
 		elif feature == "ADP":
 			return Preposition(label, self.model_path)
