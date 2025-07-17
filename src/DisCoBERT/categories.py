@@ -407,7 +407,11 @@ class Circuit(Category):
 						if type(v) not in Circuit.breaking_POS:
 							Circuit.breaking_POS[type(v)] = 0
 						Circuit.breaking_POS[type(v)] += 1
-						raise
+
+						if v.type == "PREP":
+							raise ValueError("preposition")
+						else:
+							raise
 
 			if currentLevel > 0:
 				currentLevel -= 1

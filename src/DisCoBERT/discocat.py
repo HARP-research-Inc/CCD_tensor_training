@@ -66,8 +66,17 @@ def flip(doc, relation, where: lambda token: True):
 	while True:
 		flipped = False
 		root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
+		queue = [root]
+		elems = [root]
+		
+		while len(queue) > 0:
+			queue = [child for token in queue for child in get_children(token)]
+
+			elems += queue
+		elems.reverse()
+
 		print("root", root)
-		for token in doc:
+		for token in elems:
 			print("-", token.text)
 			if token.dep_ == relation and token not in alreadyParsed and where(token):
 				prev_token = token
@@ -287,7 +296,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	remove = set()
 	for token in doc:
-		if re.match(r'^[^A-Za-z]$', token.text):
+		if re.match(r'^[^A-Za-z0-9]$', token.text):
 			remove.add(token)
 			token.head = token
 			token.dep_ = "removed"
@@ -367,15 +376,33 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	for token in doc:
 		if token.dep_ == "conj" or token.dep_ == "punct":
-			has_cc_sibling = any(sib.dep_ == "cc" for sib in get_children(token.head) if sib is not token)
+			has_cc_sibling = False
+			queue = [token.head, token]
 
+			while queue and not has_cc_sibling:
+				nextQueue = []
+
+				for item in queue:
+					for child in get_children(item):
+						if child.dep_ == "conj":
+							nextQueue.append(child)
+						elif child.dep_ == "cc":
+							has_cc_sibling = True
+							break
+					
+					if has_cc_sibling:
+						break
+				
+				queue = nextQueue
+			
 			if not has_cc_sibling:
 				for candidate in doc:
 					if candidate.dep_ == "cc":
 						has_conj_sibling = any(sib.dep_ == "conj" for sib in get_children(candidate.head) if sib is not candidate)
 
 						if not has_conj_sibling:
-							if candidate.head != token and token.head != candidate:
+							if candidate.head != token and token.head != candidate and token != candidate.head.head:
+								print(token.text, "rewired to sibling of", candidate.head)
 								token.head = candidate.head
 								token.dep_ = "conj"
 								break
@@ -430,7 +457,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	rearrange(doc, "nsubjpass", "auxpass")
 
-	rearrange(doc, "xcomp", "aux", "PART", True, "ADP", "VERB")
+	rearrange(doc, ["xcomp", "advcl"], "aux", "PART", True, "ADP", "VERB")
 
 	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
@@ -456,12 +483,15 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 			for targetElem in targets:
 				hasConj = False
+				hasCoordinator = False
 				for child in get_children(targetElem):
 					if child.dep_ == "conj":
 						hasConj = True
+					if child.dep_ == "cc":
+						hasCoordinator = True
 				
 				for child in get_children(targetElem):
-					if child.dep_ == "conj" or (hasConj and child.dep_ == "dobj"):
+					if child.dep_ == "conj" or ((hasConj or hasCoordinator) and child.dep_ in ["dobj", "appos", "nummod"]):
 						elems.append(child)
 						nextParse.append(child)
 						expanded = True
@@ -544,6 +574,22 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	
 	print("\n\n<<< PREP FLIP >>>\n\n")
 
+	for token in doc:
+		if token.dep_ == "acomp":
+			for child in get_children(token):
+				if child.dep_ == "prep":
+					child.head = token.head
+	
+	"""for token in doc:
+		if token.pos_ == "ADP" and len(list(get_children(token))) == 1:
+			if token.head.head != token.head and token.head.pos_ in ["ADJ", "NOUN"] and token.head.head.pos_ == "ADP":
+				original_head = token.head.head
+				original_head_dep = original_head.dep_
+				token.head = original_head.head
+				original_head.dep_ = token.dep_
+				token.dep_ = original_head_dep
+				original_head.head = token"""
+
 	flip(doc, "prep", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
 	flip(doc, "agent", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
 
@@ -577,7 +623,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 	print("\n\n<<< POS FIXING >>>\n\n")
 
 	for token in doc:
-		if token.pos_ == "NOUN":
+		if token.pos_ == "NOUN" or token.pos_ == "ADJ":
 			prep_children = [child for child in get_children(token) if child.dep_ == "prep"]
 			if len(prep_children) > 1:
 				prep_children = sorted(prep_children, key=lambda t: t.i)
@@ -591,14 +637,21 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 					prep_children[i].head = prep_children[i - 1]
 		elif token.pos_ == "CCONJ" or token.pos_ == "SCONJ":
 			print(token.text, "has children", [child.pos_ for child in get_children(token)])
-			adv_children = [child for child in get_children(token) if child.pos_ == "ADV"]
-			for child in adv_children:
-				child.pos_ = "NOUN"
+			#adv_children = [child for child in get_children(token) if child.pos_ == "ADV"]
+			#for child in adv_children:
+			#	child.pos_ = "NOUN"
 
 			if any(child.pos_ == "ADJ" for child in get_children(token)):
 				for child in get_children(token):
 					if child.pos_ == "NOUN":
 						child.pos_ = "ADJ"
+
+
+	for token in doc:
+		print(token.pos_, token.text)
+		for child in get_children(token):
+			print(">>>", child.dep_, child.text)
+	print()
 
 	leaves = list()
 
@@ -697,7 +750,7 @@ if __name__ == "__main__":
 	#version 0.1.0 - bag of clauses approach
 
 	path_to_models = "/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert"
-	spacy_model = "en_core_web_lg"
+	spacy_model = "en_core_web_trf"
 
 	one_clause = "the big fat deformed french man eats a small helpless newborn baby"
 	one_clause2 = "small dog eats big man"
@@ -779,7 +832,7 @@ if __name__ == "__main__":
 		#"kids grow up so fast these days",
 		"his face was repulsive to look at",
 		"his face was repulsive to look at as a result of his neglectful upbringing",
-		"what she said that he thought she meant was, in fact, not what she meant at all",
+		#"what she said that he thought she meant was, in fact, not what she meant at all",
 		"the book is on the table",
 		"she walked through the park in the morning",
 		"he sat beside his friend during the movie",
@@ -790,7 +843,11 @@ if __name__ == "__main__":
 		"the cat hid behind the curtain",
 		"she poured milk into the glass",
 		"the painting hangs above the fireplace",
-		"i ate some rice and beans"
+		"i ate some rice and beans",
+		"British rock musicians in the 1960s, especially the Rolling Stones, Eric Clapton, and John Mayall, were strongly influenced by the blues, as were such American rock musicians as Mike Bloomfield, Paul Butterfield, and the Allman Brothers Band",
+		"A simple example of a recursive rule is the successor function in mathematics, which takes a number as input and yields that number plus 1 as output",
+		"In one way or another, socialists now seem more interested in bringing the free market under control than in eliminating it completely",
+		"Of particular consequence was his adoption of the behaviouristic theory of semantics according to which meaning is simply the relationship between a stimulus and a verbal response",
 	]
 
 	for ex in example_sentences:

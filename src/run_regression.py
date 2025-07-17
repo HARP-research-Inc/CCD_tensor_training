@@ -273,7 +273,25 @@ def embedding_generator(index: int, data, queue, wordQueue, cache: dict, counter
 			embeddings = []
 			sentence_embeddings = []
 
-			if all(isinstance(item, list) for item in words):
+			if all(isinstance(item, list) for item in words) and all(len(item) == len(words[0]) for item in words) and len(words) > 5:
+				n = 0
+				for item in words:
+					arr = []
+					for word in item:
+						if word in cache:
+							arr.append(cache[word])
+						else:
+							embedding = get_embedding_in_parallel(word, model)
+							cache[word] = embedding
+							arr.append(embedding)
+
+					if n % 500 == 499:
+						print(f'embedding_generator {index} parsed {n + 1} examples')
+					n += 1
+
+					embeddings.append(arr)
+					sentence_embeddings.append(get_embedding_in_parallel(f'{word[0]} {queue_obj} {' '.join(word[1:])}'.strip(), model))
+			elif all(isinstance(item, list) for item in words):
 				indices = [0 for _ in range(len(words))]
 				variations = set()
 				
@@ -595,6 +613,7 @@ if __name__ == "__main__":
 	# build_model("data/top_adv_advmod.json", "general_adv_model", 5000, 10, 10)
 	# bert_on_bert("data/one_verb.json", "models", epochs=500)
 	# build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
-	build_model("data/top_sconj.json", "general_sconj_model", 5000, 10, 10)
+	# build_model("data/top_sconj.json", "general_sconj_model", 5000, 10, 10)
+	build_model("data/top_cconj.json", "general_cconj_model", 5000, 10, 10)
 
 	print("Regression complete.")

@@ -304,6 +304,6 @@ if __name__ == "__main__":
 	#build_model("data/top_adj_amod.json", "general_adj_model", 200, 20)
 	#build_model("data/top_verb_nsubj.json", "general_intransitive_model", 200, 20)
 	#build_model("data/top_transitive.json", "general_transitive_model", 200, 20)
-	build_model("data/top_verb_nsubj_PROPN_PRON_NOUN_dative_PROPN_PRON_NOUN_dobj_PROPN_PRON_NOUN.json", "general_ditransitive_model", 200, 10)
-	# build_model("data/top_adv_advmod.json", "general_adv_model", 5000, 200, 20)
+	# build_model("data/top_verb_nsubj_PROPN_PRON_NOUN_dative_PROPN_PRON_NOUN_dobj_PROPN_PRON_NOUN.json", "general_ditransitive_model", 200, 10)
+	build_model("data/top_adv_advmod.json", "general_adv_model", 200, 20)
 	print("Regression complete.")

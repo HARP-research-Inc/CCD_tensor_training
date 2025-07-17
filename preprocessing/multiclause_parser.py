@@ -38,8 +38,8 @@ def worker(index, data, queue: Queue, target_pos: str):
 				cc = [child for child in token.children if child.dep_ == 'cc'][0]
 				conj = [child for child in token.children if child.dep_ == 'conj'][0]
 
-				if token.text.lower() not in output:
-					output[token.text.lower()] = []
+				if cc.text.lower() not in output:
+					output[cc.text.lower()] = []
 				
 				token_indices = []
 				conj_indices = []
@@ -54,9 +54,10 @@ def worker(index, data, queue: Queue, target_pos: str):
 
 
 				if len(token_indices) > 0 and len(conj_indices) > 0:
-					output[token.text.lower()].append((' '.join(doc[k].text.lower() for k in token_indices), ' '.join(doc[k].text.lower() for k in conj_indices)))
+					item = (' '.join(doc[k].text.lower() for k in token_indices), ' '.join(doc[k].text.lower() for k in conj_indices))
+					output[cc.text.lower()].append(item)
 					counter += 1
-					print(f'{counter} {f' <{token.text.lower()}> '.join(output[token.text.lower()])}')
+					print(counter, f' <{cc.text.lower()}> '.join(item))
 		
 		if i % 1000 == 0:
 			print(f'Thread {index}, {i}/{len(data)}', "sentences parsed,", counter, "matches,", int(time.time() - start_t), "seconds elapsed")
