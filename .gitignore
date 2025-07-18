@@ -49,6 +49,8 @@ checkpoints/checkpoint_20250501_191555.json
 checkpoints/checkpoint_20250501_191637.json
 checkpoints/checkpoint_20250501_191638.json
 /checkpoints
+/exceptions
+*_exceptions.json
 /theoretical_evaluation/checkpoints
 checkpoints/latest_checkpoint.txt
 preorder_output.txt

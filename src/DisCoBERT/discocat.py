@@ -39,6 +39,17 @@ def parse_driver(circuit: Circuit, parent: Box, leaves: list, token: spacy.token
 	
 	child_box = factory.create_box(token, pos)
 
+	if isinstance(child_box, tuple):
+		circuit.add_wire(child_box[0], parent)
+		if level in levels:
+			levels[level].append(child_box[0])
+		else:
+			levels[level] = [child_box[0]]
+		
+		parent = child_box[0]
+		child_box = child_box[1]
+		level += 1
+
 	print(pos, type(child_box))
 
 	#traversal is in the opposite direction of the tree.
@@ -192,21 +203,23 @@ def rearrange(doc, relation, relationRoot, rootPOS=None, multiLevel=False, repla
 		relation = [relation]
 	if isinstance(relationRoot, str):
 		relationRoot = [relationRoot]
+	if isinstance(sourcePOS, str):
+		sourcePOS = [sourcePOS]
 
 	for token in doc:
-		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
-				print(token.text, childA.text, childB.text, token in alreadyParsed)	
+		for childA in [child for child in get_children(token) if any(child.dep_ == rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ == rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+				print(token.text, childA.text, childB.text, token in alreadyParsed, sourcePOS and token.pos_ not in sourcePOS, token.pos_, sourcePOS)	
 		if token in alreadyParsed:
 			continue
 
-		if sourcePOS and token.pos_ != sourcePOS:
+		if sourcePOS and token.pos_ not in sourcePOS:
 			continue
 	
 		found = False
 
-		for childA in [child for child in get_children(token) if any(child.dep_ in rel for rel in relation)]:
-			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ in rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
+		for childA in [child for child in get_children(token) if any(child.dep_ == rel for rel in relation)]:
+			for childB in [child for child in (get_children(childA) if multiLevel else get_children(token)) if any(child.dep_ == rel for rel in relationRoot) and (rootPOS is None or child.pos_ == rootPOS)]:
 				prevTokenHead = token.head
 				prevTokenDep = token.dep_
 
@@ -448,16 +461,33 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 
 	print("\n\n<<< CLAUSE REORDERING >>>\n\n")
 
-	rearrange(doc, ["advcl", "ccomp", "relcl"], ["mark", "advmod", "nsubjpass", "nsubj"], "SCONJ", True)
+	rearrange(doc, ["advcl", "ccomp", "relcl", "acl"], ["mark", "advmod", "nsubjpass", "nsubj"], "SCONJ", True)
 	
 	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
 
 	to_nltk_tree(root).pretty_print()
 
+	for token in doc:
+		found = False
+		for childA in [child for child in get_children(token) if child.dep_ in ["dobj"]]:
+			for childB in [child for child in get_children(token) if child.dep_ in ["prep"]]:
+				childB.head = childA
+				found = True
+				break
+
+			if found:
+				break
+
 	rearrange(doc, "nsubjpass", "auxpass")
 
-	rearrange(doc, ["xcomp", "advcl"], "aux", "PART", True, "ADP", "VERB")
+	rearrange(doc, ["xcomp", "advcl", "acl"], "aux", "PART", True, "ADP")
+
+	for token in doc:
+		print(token.pos_, token.text)
+		for child in get_children(token):
+			print(">>>", child.dep_, child.text)
+	print()
 
 	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
 	print("root", root)
@@ -491,7 +521,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 						hasCoordinator = True
 				
 				for child in get_children(targetElem):
-					if child.dep_ == "conj" or ((hasConj or hasCoordinator) and child.dep_ in ["dobj", "appos", "nummod"]):
+					if child.dep_ == "conj":# or ((hasConj or hasCoordinator) and child.dep_ in ["dobj", "appos", "nummod"]):
 						elems.append(child)
 						nextParse.append(child)
 						expanded = True
@@ -590,7 +620,7 @@ def tree_parse(circuit: Circuit, string, spacy_model: spacy.load, factory: Box_F
 				token.dep_ = original_head_dep
 				original_head.head = token"""
 
-	flip(doc, "prep", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
+	flip(doc, "prep", lambda token: len(list(get_children(token))) > 0 and token.pos_ in ["ADP", "SCONJ"] and not token.head.pos_ == "ADP")
 	flip(doc, "agent", lambda token: len(list(get_children(token))) > 0 and token.pos_ == "ADP" and not token.head.pos_ == "ADP")
 
 	root = [token for token in doc if token.head == token and token.dep_ != "removed"][0]
@@ -846,9 +876,23 @@ if __name__ == "__main__":
 		"i ate some rice and beans",
 		"British rock musicians in the 1960s, especially the Rolling Stones, Eric Clapton, and John Mayall, were strongly influenced by the blues, as were such American rock musicians as Mike Bloomfield, Paul Butterfield, and the Allman Brothers Band",
 		"A simple example of a recursive rule is the successor function in mathematics, which takes a number as input and yields that number plus 1 as output",
+		"I am still supervising, at Oxford and elsewhere, and also still teach at Oxford's Mathematical Institute",
 		"In one way or another, socialists now seem more interested in bringing the free market under control than in eliminating it completely",
 		"Of particular consequence was his adoption of the behaviouristic theory of semantics according to which meaning is simply the relationship between a stimulus and a verbal response",
+		"Grammar increasingly parted company with its older fellow disciplines within philosophy as they moved over to the domain known as natural science, and technical academic grammatical study increasingly became involved with issues represented by empiricism versus rationalism and their successor manifestations on the academic scene",
+		"it is difficult to be sure",
+		"Dionysius defined a sentence as a unit of sense or thought, but it is difficult to be sure of his precise meaning",
+		"But this line of reasoning also led to the uncomfortable notion that elementary gases had polyatomic molecules (O2, H2, and so on), and therefore many chemists rejected Avogadro’s hypotheses.",
+		"In September he graduated from the military academy, ranking 42nd in a class of 58.",
+		"In general, alchemists sought to manipulate the properties of matter in order to prepare more valuable substances.",
+		"it reveals a deeper structure, allowing you to solve an entire class of similar problems efficiently",
+		#"Neither Tolstoy's religion nor his pacifism was shared by the earlier flamboyant Russian anarchist Mikhail Bakunin, who held that religion, capitalism, and the state are forms of oppression that must be smashed if people are ever to be free.",
 	]
+
+	if False:
+		example_sentences = [
+			"The transformational rules depend upon the prior application of the phrase-structure rules and have the effect of converting, or transforming, one phrase marker into another."
+		]
 
 	for ex in example_sentences:
 		r, d = driver(ex, nlp)
