@@ -3,6 +3,7 @@ from sklearn.linear_model import LogisticRegression
 from torch import nn
 from src.DisCoBERT.DisCoBERT import DisCoBERT as DCB
 from src.DisCoBERT.categories import Box, Circuit
+from collections import defaultdict
 
 nltk.download('punkt_tab')
 
@@ -56,7 +57,7 @@ def build_DCB_data(path, toy_mode = False):
     with open(path, 'r') as file:
         data = file.readlines()
 
-    model = DCB("en_core_web_sm")
+    model = DCB("en_core_web_trf")
 
     total_sentences = 0
 
@@ -71,7 +72,7 @@ def build_DCB_data(path, toy_mode = False):
     import random
     random.shuffle(data)
 
-    breaking_sentences = []
+    breaking_sentences = defaultdict(list)
 
     for line in data:
         if line[0] == '#' or len(line) < 4:
@@ -99,8 +100,7 @@ def build_DCB_data(path, toy_mode = False):
                 print(f"Error processing sentence: {sentence.strip()}")
                 breaks += 1
                 
-                if str(e) == "preposition":
-                    breaking_sentences.append(sentence.strip())
+                breaking_sentences[str(e)].append(sentence.strip())
                 continue
 
             n += 1
@@ -121,9 +121,13 @@ def build_DCB_data(path, toy_mode = False):
     print(f"FINAL total breaks: {breaks}")
     print(f"FINAL POS breaking dict: {Circuit.breaking_POS}")
 
-    with open('preposition_exceptions.json', 'w') as f:
-        import json
-        f.write(json.dumps(breaking_sentences))
+    import os
+    os.makedirs('exceptions', exist_ok=True)
+
+    for key in breaking_sentences:
+        with open(f'exceptions/{key}_exceptions.json', 'w') as f:
+            import json
+            f.write(json.dumps(breaking_sentences[key]))
 
     return train_embeddings, train_classifications, test_embeddings, test_classifications
 

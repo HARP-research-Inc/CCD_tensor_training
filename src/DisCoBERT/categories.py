@@ -408,10 +408,7 @@ class Circuit(Category):
 							Circuit.breaking_POS[type(v)] = 0
 						Circuit.breaking_POS[type(v)] += 1
 
-						if v.type == "PREP":
-							raise ValueError("preposition")
-						else:
-							raise
+						raise ValueError(v.type)
 
 			if currentLevel > 0:
 				currentLevel -= 1
@@ -419,6 +416,9 @@ class Circuit(Category):
 			else:
 				queue = []
 		
+		if hasattr(last_output[1], 'force_evaluate'):
+			last_output = (last_output[0], last_output[1].force_evaluate())
+
 		return last_output
 	
 	"""def forward(self):
