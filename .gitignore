@@ -57,3 +57,4 @@ preorder_output.txt
 *.tokens
 dump.txt
 /data_raw/*
+/data
