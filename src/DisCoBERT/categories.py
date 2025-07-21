@@ -42,7 +42,7 @@ class Category(object):
 
 	"""
 
-	model_cache: ModelBank = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert")
+	model_cache: ModelBank = ModelBank("models/discobert")
 
 	def __init__(self, label):
 		self.label = label
@@ -286,7 +286,6 @@ class Circuit(Category):
 		self.root = None #root node
 		self.sources: list[Box] = list()
 		self.levels: list[list[Box]] = list()
-		self.topic: torch.Tensor = None
 
 	def __str__(self):
 		"""
@@ -316,9 +315,6 @@ class Circuit(Category):
 	
 	def set_root(self, root: Box):
 		self.root = root
-
-	def set_topic(self, subject: str):
-		self.topic = ModelBank.retrieve_BERT(subject)
 		
 		
 	def add_wire(self, parentBox: Box, childBox: Box):
@@ -411,7 +407,8 @@ class Circuit(Category):
 						if type(v) not in Circuit.breaking_POS:
 							Circuit.breaking_POS[type(v)] = 0
 						Circuit.breaking_POS[type(v)] += 1
-						raise
+
+						raise ValueError(v.type)
 
 			if currentLevel > 0:
 				currentLevel -= 1
@@ -419,6 +416,9 @@ class Circuit(Category):
 			else:
 				queue = []
 		
+		if hasattr(last_output[1], 'force_evaluate'):
+			last_output = (last_output[0], last_output[1].force_evaluate())
+
 		return last_output
 	
 	"""def forward(self):

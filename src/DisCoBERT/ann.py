@@ -6,6 +6,16 @@ from sentence_transformers import SentenceTransformer
 import os
 import json
 
+class GeneralNetwork(torch.nn.Module):
+    def __init__(self, network: torch.nn.Module, inp: torch.Tensor):
+        super().__init__()
+
+        self.network = network
+        self.inp = inp
+
+    def forward(self, *inputs):
+        return self.network(self.inp, *inputs)
+
 class ModelBank(object):
     def __init__(self, model_locations: str):
         self.reference_caches: dict[str, list] = dict()
@@ -73,7 +83,7 @@ class ModelBank(object):
         """
         load regression model from the given path.
         """
-        model_path = f"{self.model_locations}/{directory}/{model_name}"
+        model_path = f"{self.model_locations}/{directory}/{model_name}" if model_name else f"{self.model_locations}/{directory}/model"
         
         model = CPTensorRegression([384 for _ in range(n)], 384, 100)
         #model = OneWordTensorRegression(384, 384)
@@ -84,7 +94,7 @@ class ModelBank(object):
 
         return model
 
-    def load_ann(self, ID: tuple[str, str], n: int) -> torch.nn.Module:
+    def load_ann(self, ID: tuple[str, str], n: int, fallback=None) -> torch.nn.Module:
         """
         load ANN model from the given path.
         """
@@ -95,56 +105,57 @@ class ModelBank(object):
             try:
                 model = self.load_model(ID[1], ID[0], n=n)
             except:
-                
-                try:
-                    print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
-                    word = ID[0]
-                    if self.nlp is None:
-                        print("spaCy model uninitialized.")
-                        raise ValueError("spaCy model uninitialized.")
-                    else:
-                        doc = self.nlp(word)
-                        
-                        for token in doc:
-                            word = token.lemma_
-                            print(f"lemma: {word}")
-                    
-                        model = self.load_model(ID[1], word, n=n)
-                except:
-                    # if the model is not found in either case, we find nearest neighbor
-                    print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
-
-                    #standard format ID string for hash
-                    ID_string = f"{ID[1]}_{ID[0]}"
-                    
-                    # load nearest neighbor cache
-                    if os.path.exists("src/DisCoBERT/nearest_neighbor_cache.json"):
-                        with open("src/DisCoBERT/nearest_neighbor_cache.json", "r") as f:
-                            nearest_neighbors = json.load(f)
-                    else:
-                        #if cache does not exist, create an empty one
-                        nearest_neighbors = {}
-                        #json.dump(nearest_neighbors, open("src/DisCoBERT/nearest_neighbor_cache.json", "w"))
-                        with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
-                            json.dump(nearest_neighbors, f)
-
-                    
-                    if ID_string in nearest_neighbors:
-                        nearest_name = nearest_neighbors[ID_string]
-                        print(f"Found nearest neighbor in cache: {nearest_name}")
-                        #in theory, this should always be a valid model. Otherwise user will see error.
-                        model = self.load_model(ID[1], nearest_name, n=n)
-                    else:
+                if fallback:
+                    model = GeneralNetwork(self.load_model(fallback, None, n=n+1), self.retrieve_BERT(ID[0]))
+                else:
+                    try:
+                        print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
                         word = ID[0]
-                        nearest_name, _ = self.ann(ID[0], ID[1])
-                        nearest_neighbors[ID_string] = nearest_name
-
-                        #save the nearest neighbor cache
-
-                        with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
-                            json.dump(nearest_neighbors, f)
+                        if self.nlp is None:
+                            print("spaCy model uninitialized.")
+                            raise ValueError("spaCy model uninitialized.")
+                        else:
+                            doc = self.nlp(word)
+                            
+                            for token in doc:
+                                word = token.lemma_
+                                print(f"lemma: {word}")
                         
-                        model = self.load_model(ID[1], nearest_name, n = n)
+                            model = self.load_model(ID[1], word, n=n)
+                    except:
+                        # if the model is not found in either case, we find nearest neighbor
+                        print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
+
+                        #standard format ID string for hash
+                        ID_string = f"{ID[1]}_{ID[0]}"
+                        
+                        # load nearest neighbor cache
+                        if os.path.exists("src/DisCoBERT/nearest_neighbor_cache.json"):
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "r") as f:
+                                nearest_neighbors = json.load(f)
+                        else:
+                            #if cache does not exist, create an empty one
+                            nearest_neighbors = {}
+                            #json.dump(nearest_neighbors, open("src/DisCoBERT/nearest_neighbor_cache.json", "w"))
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
+                                json.dump(nearest_neighbors, f)
+
+                        
+                        if ID_string in nearest_neighbors:
+                            nearest_name = nearest_neighbors[ID_string]
+                            print(f"Found nearest neighbor in cache: {nearest_name}")
+                            #in theory, this should always be a valid model. Otherwise user will see error.
+                            model = self.load_model(ID[1], nearest_name, n=n)
+                        else:
+                            word = ID[0]
+                            nearest_name, _ = self.ann(ID[0], ID[1])
+                            nearest_neighbors[ID_string] = nearest_name
+
+                            #save the nearest neighbor cache
+
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
+                                json.dump(nearest_neighbors, f)
+                            model = self.load_model(ID[1], nearest_name, n = n)
             
             self.model_caches[ID] = model
 
@@ -159,7 +170,7 @@ if __name__ == "__main__":
     """
     EXAMPLE USAGE:
     """
-    cache = ModelBank("/mnt/ssd/user-workspaces/aidan-svc/CCD_tensor_training/models/discobert")
+    cache = ModelBank("models/discobert")
 
     nlp = spacy.load("en_core_web_trf")
     cache.set_nlp(nlp)
