@@ -6,23 +6,6 @@ import torch
 from sentence_transformers import SentenceTransformer
 import spacy
 
-"""
-Models trained: 
-- adv *
-- aux 
-- cconj adj 
-- cconj noun
-- cconj verb
-- determiners *
-- interjection
-- prep aux
-- prep verb
-- pronoun
-- sconj
-- transitive verb *
-
-"""
-
 class NestedNetwork(torch.nn.Module):
 	def __init__(self, parent: torch.nn.Module, child: torch.nn.Module):
 		super().__init__()
@@ -220,17 +203,20 @@ class Adjective(Box):
 		#adv handling will be implemented when adv class is implemented
 		return self.model
 
-class Verb(Box):
-    def __init__(self, label: str, model_path: str):
-        super().__init__(label, model_path)
-    
-    def __nouns_output():
-        return None
+class Xtransitive_Verb(Box):
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path)
+		self.nsubj_str: str = nsubj_str
+		self.dobj_str = None
+		self.dative_str = None
+	
+	def __nouns_output():
+		return None
 
 
 class Intransitive_Verb(Box):
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
 		self.grammar = ['NOUN', 'SELF', 'NOUN']
 		self.type = "VERB"
 
@@ -254,14 +240,38 @@ class Intransitive_Verb(Box):
 
 		return output
 		
+class Partial_Transitive(Xtransitive_Verb):
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
+		self.grammar = ['NOUN', 'SELF', 'NOUN']
+		self.type = "VERB"
+
+		self.inward_requirements: dict = {("ADV", "0:inf"),
+										  ("INTJ", "0:inf"), 
+										 ("NOUN", "1:1")}
+		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
 	
+	def forward_helper(self):
+		state_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
 
-class Transitive_Verb(Box):
+		print("Partial transitive packet length", len(self.packets))
+		if len(state_packets) != 1:
+			raise ValueError(f"Partial transitive verb {self.label} requires exactly one state packet, got {len(state_packets)}.")  
+		
+		output = self.model(state_packets[0])
+
+		for packet in self.packets:
+			if isinstance(packet[1], torch.nn.Module):
+				output = packet[1](output)
+
+		return output
+
+class Transitive_Verb(Xtransitive_Verb):
 	"""
 
 	"""
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
 		self.grammar = ['NOUN', 'SELF', 'NOUN']
 		self.type = "VERB"
 
@@ -271,6 +281,7 @@ class Transitive_Verb(Box):
 		
 		self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2)
 
+
 	def forward_helper(self):
 		"""
 		returns an embedding state after processing the NOUN packets.
@@ -278,6 +289,9 @@ class Transitive_Verb(Box):
 		noun_packets = [packet[1] for packet in self.packets if packet[0] and not isinstance(packet[1], torch.nn.Module)]
 
 		print("transitive packet length", len(self.packets))
+
+		if len(noun_packets) == 1 and self.nsubj_str:
+			noun_packets.insert(0, Box.model_cache.retrieve_BERT(self.nsubj_str))
 		if len(noun_packets) != 2:
 			raise ValueError(f"Transitive verb {self.label} requires exactly two NOUN packets, got {len(noun_packets)}.")  
 		
@@ -328,12 +342,54 @@ class Linking_Verb(Box):
 
 		return output
 
-class Ditransitive_Verb(Box):
+class Partial_Ditransitive(Xtransitive_Verb):
 	"""
 
 	"""
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
+		self.grammar = ['NOUN', 'SELF', 'NOUN']
+		self.type = "VERB"
+
+		self.inward_requirements: dict = {("ADV", "0:inf"),
+										  ("INTJ", "0:inf"), 
+										 ("NOUN", "2:2")} 
+		
+		#CHANGE
+		self.model = Box.model_cache.load_ann((label, "transitive_model"), n=2)
+
+
+	def forward_helper(self):
+		"""
+		returns an embedding state after processing the NOUN packets.
+		"""
+		noun_packets = [packet[1] for packet in self.packets if packet[0] and not isinstance(packet[1], torch.nn.Module)]
+
+		print("transitive packet length", len(self.packets))
+
+		# if len(noun_packets) == 1 and self.nsubj_str:
+		# 	noun_packets.insert(0, Box.model_cache.retrieve_BERT(self.nsubj_str))
+		if len(noun_packets) != 2:
+			raise ValueError(f"Partial ditransitive verb {self.label} requires exactly two NOUN packets, got {len(noun_packets)}.")  
+		
+		#noun packets at index 1 should be pytorch tensors
+		output = self.model(noun_packets[0], noun_packets[1])
+
+		####adverb stuff####
+		for packet in self.packets:
+			if isinstance(packet[1], torch.nn.Module):
+				print("test")
+				model:torch.nn.Module = packet[1]
+				output = model(output)
+
+		return output
+
+class Ditransitive_Verb(Xtransitive_Verb):
+	"""
+
+	"""
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
 		self.grammar = ['NOUN', 'SELF', 'NOUN']
 		self.type = "VERB"
 
@@ -347,11 +403,13 @@ class Ditransitive_Verb(Box):
 		"""
 		returns an embedding state after processing the NOUN packets.
 		"""
-		noun_packets = [packet[1] for packet in self.packets if packet[0] == "NOUN"]
+		noun_packets = [packet[1] for packet in self.packets if packet[0] in ["NOUN", "ADP", "PREP", "VERB"] ]
 
 		print("ditransitive packet length", len(self.packets))
+		if len(noun_packets) == 2 and self.nsubj_str:
+			noun_packets.insert(0, Box.model_cache.retrieve_BERT(self.nsubj_str))
 		if len(noun_packets) != 3:
-			raise ValueError(f"Transitive verb {self.label} requires exactly three NOUN packets, got {len(noun_packets)}.")  
+			raise ValueError(f"Ditransitive verb {self.label} requires exactly three state packets, got {len(noun_packets)}.")  
 		
 		#noun packets at index 1 should be pytorch tensors
 		output = self.model(noun_packets[0], noun_packets[1], noun_packets[2])
@@ -461,9 +519,14 @@ class SubordinatingConjunction(Box):
 
 		return output"""
 
-class Intransitive_Verb(Box):
-	def __init__(self, label: str, model_path: str):
-		super().__init__(label, model_path)
+
+# partial intransitive is a verb state
+# class Partial_Intransitive(Xtransitive_Verb):
+# 	pass
+
+class Intransitive_Verb(Xtransitive_Verb):
+	def __init__(self, label: str, model_path: str, nsubj_str: str):
+		super().__init__(label, model_path, nsubj_str)
 		self.grammar = ['NOUN', 'SELF', 'NOUN']
 		self.type = "VERB"
 
@@ -473,9 +536,12 @@ class Intransitive_Verb(Box):
 		self.model = Box.model_cache.load_ann((label, "intransitive_model"), n=1)
 	
 	def forward_helper(self):
-		noun_packets = [packet[1] for packet in self.packets if isinstance(packet[1], torch.Tensor)]
+		noun_packets = [packet[1] for packet in self.packets if packet[0] in ["NOUN", "ADP", "PREP", "VERB"]]
 
 		print("packet length", len(self.packets))
+		if len(noun_packets) == 0 and self.nsubj_str:
+			noun_packets.insert(0, Box.model_cache.retrieve_BERT(self.nsubj_str))
+
 		if len(noun_packets) != 1:
 			raise ValueError(f"Intransitive verb {self.label} requires exactly one NOUN packet, got {len(noun_packets)}.")  
 		
@@ -550,6 +616,66 @@ class Box_Factory(object):
 	def is_linking_verb(self, token, feature: str): # set(['nsubj', 'prep']), set(['nsubj', 'attr']), set(['nsubj', 'acomp']), set(['acomp', 'ccomp']), set(['acomp', 'relcl']) 
 		return feature in ["AUX", "VERB"] and (set(child.dep_ for child in token.children) in [set([relA, relB]) for relA in ['nsubj', 'acomp'] for relB in ['prep', 'attr', 'acomp', 'ccomp', 'relcl', 'xcomp']] or (feature == "AUX" and any("subj" in child.dep_ for child in token.children) and any(dep in child.dep_ for dep in ["aux", "attr", "relcl", "acomp"] for child in token.children)))
 
+	def get_states_of_verbs(self, token):
+		nsubj, dobj, dative = (None, None, None)
+		for child in token.children:
+			if "subj" in child.dep_ or child.dep_ in ["nsubj", "nsubjpass", "attr", "relcl"]:
+				nsubj = child.text
+			if child.dep_ in ["dobj", "expl"] or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
+				dobj = child.text
+			if child.dep_ == "dative":
+				dative = child.text
+		
+		# print("LOOK AT ME", token.sent.root.text)
+		# print("ROOT'S HEAD", token.sent.root.head.text)
+		# print("IS EQUAL:",  token.sent.root.head == token.sent.root)
+
+		# traversed = set()
+
+		# if not nsubj:
+		# 	print("LOOK HERE:", token.text, "-", token.head.text)
+		# 	root = token.sent.root
+		# 	current_token = token
+		# 	while True:  
+		# 		for child in current_token.children:
+		# 			print("NSUBJ FIND: current - ", current_token.text)
+		# 			print("NSUBJ FIND: child - ", child.text)
+		# 			print("NSUBJ FIND: dependency - ", child.dep_)
+		# 			if "subj" in child.dep_ or child.dep_ in ["nsubj", "nsubjpass", "attr", "relcl"]:
+						
+		# 				nsubj = child.text
+		# 				break
+		# 		if nsubj:
+		# 			break
+		# 		if current_token == root:
+		# 			break
+		# 		current_token = current_token.head
+
+		# 	# nsubj_candidates = list()
+		# 	# print("TOKEN HEAD", token.head)
+
+		# 	# head = token.head
+
+		# 	# for child in head.children:
+		# 	# 	# print("TEST", child.text)
+		# 	# 	# print("TEST", child.dep_)
+		# 	# 	if child.dep_ in ["conj", "ccomp", "advcl"]:
+		# 	# 		for clause_child in child.children:
+		# 	# 			if clause_child.dep_ == "nsubj":
+		# 	# 				# print("TEST NESTED", clause_child.text)
+		# 	# 				nsubj_candidates.append(clause_child.text)
+		
+		# 	# if len(nsubj_candidates) > 0:
+		# 	# 	# in the future we could add more sophisticated resolution to decide between
+		# 	# 	# mutliple nsubj candidates
+		# 	# 	nsubj = nsubj_candidates[0]
+			
+
+		#print("VERB NOUNS:", nsubj, dobj, dative)
+	
+		return nsubj, dobj, dative
+			
+
 	def create_box(self, token: spacy.tokens.Token, feature: str):
 		if token is not None:
 			label = str(token.text).replace(',', '').lower()
@@ -568,27 +694,23 @@ class Box_Factory(object):
 		elif feature == "ADJ":
 			return Adjective(label, self.model_path)
 		elif feature == "VERB":
-			nsubj, dobj, dative = (None, None, None)
-			for child in token.children:
-				if "subj" in child.dep_ or child.dep_ in ["nsubj", "nsubjpass", "attr", "relcl"]:
-					nsubj = child.text
-				if child.dep_ in ["dobj", "expl"] or (child.dep_ == "ccomp" and self.returns_state(child, child.pos_)):
-					dobj = child.text
-				if child.dep_ == "dative":
-					dative = child.text
+			nsubj, dobj, dative = self.get_states_of_verbs(token)
 			if not nsubj:
-				if dobj:
-					return Intransitive_Verb(label, self.model_path)
+				if dobj and dative:
+					return Partial_Ditransitive(label, self.model_path, None)
+					# most common case would be imperatives
+				elif dobj or dative:
+					return Partial_Transitive(label, self.model_path, None)
 				else:
-					#raise ValueError(f"Sanity check: verb {label} somehow has no subject.")
+					# partial intransitive or imperative case					
 					return VerbState(label, self.model_path)
 			else:
 				if dobj and dative:
-					return Ditransitive_Verb(label, self.model_path)
+					return Ditransitive_Verb(label, self.model_path, nsubj)
 				elif dobj:
-					return Transitive_Verb(label, self.model_path)
+					return Transitive_Verb(label, self.model_path, nsubj)
 				else:
-					return Intransitive_Verb(label, self.model_path)
+					return Intransitive_Verb(label, self.model_path, nsubj)
 		elif feature == "DET":
 			return Determiner(label, self.model_path)
 		elif feature == "ADV":

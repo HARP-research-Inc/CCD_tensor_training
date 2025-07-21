@@ -46,7 +46,7 @@ class DisCoBERT(object):
 
 if __name__ == "__main__":
     # example usage:
-    module = DisCoBERT("en_core_web_sm")
+    module = DisCoBERT("en_core_web_trf")
 
     #embedding = module.encode_confident("This topic is more complex than it seems.")
     #embedding = module.encode_confident("Bernstein was also exposed to the Fabians while in England, and their example encouraged him to question aspects of Marx’s theory.")
@@ -59,7 +59,7 @@ if __name__ == "__main__":
 
     #embedding = module.encode_confident("In Sweden the Swedish Social Democratic Workers’ Party won control of the government in 1932 with a promise to make their country into a people’s home” based on equality, concern, cooperation, and helpfulness.")
     #embedding = module.encode_confident("They denied him readmission to the university.")
-    embedding = module.encode_confident("They denied him readmission to the university")
+    embedding = module.encode_confident("They allowed reentry but denied him readmission to the university.")
 
     print(embedding)
 

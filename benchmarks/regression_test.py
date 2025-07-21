@@ -58,7 +58,7 @@ def build_DCB_data(path, toy_mode = False):
     success_dump = open("benchmarks/successful_examples_lg.txt", "w")
 
 
-    model = DCB("en_core_web_trf")
+    model = DCB("en_core_web_lg")
 
     total_sentences = 0
 
@@ -149,9 +149,9 @@ def logisitic_regression(train_embeddings, train_classifications, test_embedding
     return model
 
 if __name__ == "__main__":
-    #train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt", toy_mode=True)
-    #logisitic_regression(train_embeddings, train_classifications, test_embeddings, test_classifications)
+    train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt", toy_mode=False)
+    logisitic_regression(train_embeddings, train_classifications, test_embeddings, test_classifications)
     #save_data(train_embeddings, train_classifications, test_embeddings, test_classifications)
 
-    _, _, _, _ = build_DCB_data("benchmarks/classification.txt", toy_mode=False)
+    #_, _, _, _ = build_DCB_data("benchmarks/classification.txt", toy_mode=False)
 

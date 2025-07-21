@@ -105,6 +105,8 @@ class Box(Category):
 		self.inward_requirements: dict = {(None, "0:inf")}  # default requirement, can be overridden
 
 		self.type = None
+
+		self.sends_state = False
 	
 	def get_label(self):
 		return self.label
