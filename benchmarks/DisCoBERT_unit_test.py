@@ -21,13 +21,13 @@ def test_init(global_model):
     dummy = Category("blank")
     dummy.set_nlp(nlp)
 
-    wrapper1 = model.encode("Alice bit Bob")
+    wrapper1 = model.encode_confident("Alice bit Bob")
     _, discourse1 = dcc.driver("Alice bit Bob", nlp)
 
-    wrapper2 = model.encode("Tito led Yugoslavia")
+    wrapper2 = model.encode_confident("Tito led Yugoslavia")
     _, discourse2 = dcc.driver("Tito led Yugoslavia", nlp)
 
-    wrapper3 = model.encode("Green frogs")
+    wrapper3 = model.encode_confident("Green frogs")
     _, discourse3 = dcc.driver("Green frogs", nlp)
 
     loose1 = discourse1.forward()
@@ -42,12 +42,12 @@ def test_caching(global_model):
     model = global_model
 
     timeN1 = time.time()
-    _ = model.encode("Alice gobbled burgers")
+    _ = model.encode_confident("Alice gobbled burgers")
     timeN2 = time.time()
 
     timeC1 = time.time()
     for _ in range(10):
-        _ = model.encode("Alice gobbled burgers")
+        _ = model.encode_confident("Alice gobbled burgers")
     timeC2 = time.time()
 
     assert timeC2 - timeC1 < timeN2 - timeN1, "Caching did not work as expected. Model should be faster on repeated calls."
@@ -59,9 +59,9 @@ def test_caching(global_model):
 def test_basic_intransitive(global_model):
     model = global_model
 
-    embedding1 = model.encode("Alice ran")
-    embedding2 = model.encode("Alice bites")
-    embedding3 = model.encode("Alice sprints")
+    embedding1 = model.encode_confident("Alice ran")
+    embedding2 = model.encode_confident("Alice bites")
+    embedding3 = model.encode_confident("Alice sprints")
 
     # Check that the embeddings are different and not converging on a trivial solution
     assert nn.CosineSimilarity(dim=1)(embedding1, embedding2) < 0.95\
@@ -72,9 +72,9 @@ def test_basic_intransitive(global_model):
 def test_basic_transitive(global_model):
     model = global_model
 
-    embedding1 = model.encode("I ran home")
-    embedding2 = model.encode("Alice bites Bob")
-    embedding3 = model.encode("Alice hates Bob")
+    embedding1 = model.encode_confident("I ran home")
+    embedding2 = model.encode_confident("Alice bites Bob")
+    embedding3 = model.encode_confident("Alice hates Bob")
 
     # Check that the embeddings are different and not converging on a trivial solution
     assert nn.CosineSimilarity(dim=1)(embedding1, embedding2) < 0.95\
@@ -85,9 +85,9 @@ def test_basic_transitive(global_model):
 def test_basic_ditransitive(global_model):
     model = global_model
 
-    embedding1 = model.encode("Bob gave Alice cakes")
-    embedding2 = model.encode("Bob read Alice books")
-    embedding3 = model.encode("Bob tossed Alice balls")
+    embedding1 = model.encode_confident("Bob gave Alice cakes")
+    embedding2 = model.encode_confident("Bob read Alice books")
+    embedding3 = model.encode_confident("Bob tossed Alice balls")
 
     # Check that the embeddings are different and not converging on a trivial solution
     assert nn.CosineSimilarity(dim=1)(embedding1, embedding2) < 0.95\
@@ -98,9 +98,9 @@ def test_basic_ditransitive(global_model):
 def test_basic_imperative(global_model):
     model = global_model
 
-    embedding2 = model.encode("Go home")
-    embedding3 = model.encode("Give her cake")
-    embedding1 = model.encode("Strike balls")
+    embedding2 = model.encode_confident("Go home")
+    embedding3 = model.encode_confident("Give her cake")
+    embedding1 = model.encode_confident("Strike balls")
 
     # Check that the embeddings are different and not converging on a trivial solution
     assert nn.CosineSimilarity(dim=1)(embedding1, embedding2) < 0.95\
@@ -111,23 +111,23 @@ def test_basic_imperative(global_model):
 # def test_basic_linking(global_model):
 #     model = global_model
 
-#     embedding1 = model.encode("placeholder")
+#     embedding1 = model.encode_confident("placeholder")
 
 def test_basic_adjective(global_model):
     model = global_model
 
-    nd_1 = model.encode("Dog")
-    nd_2 = model.encode("Someone")
-    nd_3 = model.encode("Churchgoers gave visitors cakes")
+    nd_1 = model.encode_confident("Dog")
+    nd_2 = model.encode_confident("Someone")
+    nd_3 = model.encode_confident("Churchgoers gave visitors cakes")
 
-    embedding1a = model.encode("Big dog")
-    embedding1b = model.encode("Big red dog")
+    embedding1a = model.encode_confident("Big dog")
+    embedding1b = model.encode_confident("Big red dog")
 
-    embedding2a = model.encode("Someone important")
-    embedding2b = model.encode("Someone concerned")
+    embedding2a = model.encode_confident("Someone important")
+    embedding2b = model.encode_confident("Someone concerned")
 
-    embedding3a = model.encode("Kind churchgoers gave visitors nourishing cakes")
-    embedding3b = model.encode("Angry churchgoers gave intruding visitors fake cakes")
+    embedding3a = model.encode_confident("Kind churchgoers gave visitors nourishing cakes")
+    embedding3b = model.encode_confident("Angry churchgoers gave intruding visitors fake cakes")
     
     assert nn.CosineSimilarity(dim=1)(embedding1a, nd_1) < 0.99
     assert nn.CosineSimilarity(dim=1)(embedding1b, nd_1) < 0.99
@@ -139,21 +139,21 @@ def test_basic_adjective(global_model):
 def test_basic_determiner(global_model):
     model = global_model
 
-    nd_1 = model.encode("Dog")
-    nd_2 = model.encode("Man")
-    nd_3 = model.encode("Bat strikes ball")
-    nd_4 = model.encode("Boys tossed girls balls")
-    nd_5 = model.encode("Churchgoers gave visitors cakes")
-    #nd_6 = model.encode("Give her cake")
+    nd_1 = model.encode_confident("Dog")
+    nd_2 = model.encode_confident("Man")
+    nd_3 = model.encode_confident("Bat strikes ball")
+    nd_4 = model.encode_confident("Boys tossed girls balls")
+    nd_5 = model.encode_confident("Churchgoers gave visitors cakes")
+    #nd_6 = model.encode_confident("Give her cake")
 
-    embedding1 = model.encode("The dog")
-    embedding2a = model.encode("A man")
-    embedding2b = model.encode("The man")
-    embedding3 = model.encode("Your bat strikes her ball")
-    embedding4a = model.encode("Few boys tossed most girls certain balls")
-    embedding4b = model.encode("All boys tossed the many girls some balls")
-    embedding5 = model.encode("Some churchgoers gave certain visitors the many cakes")
-    #embedding6 = model.encode("Give her the cake")
+    embedding1 = model.encode_confident("The dog")
+    embedding2a = model.encode_confident("A man")
+    embedding2b = model.encode_confident("The man")
+    embedding3 = model.encode_confident("Your bat strikes her ball")
+    embedding4a = model.encode_confident("Few boys tossed most girls certain balls")
+    embedding4b = model.encode_confident("All boys tossed the many girls some balls")
+    embedding5 = model.encode_confident("Some churchgoers gave certain visitors the many cakes")
+    #embedding6 = model.encode_confident("Give her the cake")
 
     assert nn.CosineSimilarity(dim=1)(embedding1, nd_1) < 0.99, "Determiner 'the' did not work as expected."
     assert nn.CosineSimilarity(dim=1)(embedding2a, nd_2) < 0.99, "Determiner 'a' did not work as expected."
@@ -167,23 +167,23 @@ def test_basic_determiner(global_model):
 def test_basic_adverb_on_verbs(global_model):
     model = global_model
 
-    na_1 = model.encode("James ran")
-    na_2 = model.encode("This piggy ran home")
-    na_3 = model.encode("Your bat strikes her ball")
-    na_4 = model.encode("The anarchists broke with the united front")
+    na_1 = model.encode_confident("James ran")
+    na_2 = model.encode_confident("This piggy ran home")
+    na_3 = model.encode_confident("Your bat strikes her ball")
+    na_4 = model.encode_confident("The anarchists broke with the united front")
 
-    embedding1a = model.encode("James quickly ran")
-    embedding1b = model.encode("James ran quickly")
-    embedding1c = model.encode("Quickly James ran")
+    embedding1a = model.encode_confident("James quickly ran")
+    embedding1b = model.encode_confident("James ran quickly")
+    embedding1c = model.encode_confident("Quickly James ran")
 
-    embedding2a = model.encode("This piggy ran home quickly")
-    embedding2b = model.encode("This piggy quickly ran home")
+    embedding2a = model.encode_confident("This piggy ran home quickly")
+    embedding2b = model.encode_confident("This piggy quickly ran home")
 
-    embedding3a = model.encode("Your bat barely strikes her ball")
-    embedding3b = model.encode("Your bat strikes her ball barely")
+    embedding3a = model.encode_confident("Your bat barely strikes her ball")
+    embedding3b = model.encode_confident("Your bat strikes her ball barely")
 
-    embedding4a = model.encode("The anarchists famously broke with the united front")
-    embedding4b = model.encode("The anarchists broke with the united front famously")
+    embedding4a = model.encode_confident("The anarchists famously broke with the united front")
+    embedding4b = model.encode_confident("The anarchists broke with the united front famously")
 
     assert nn.CosineSimilarity(dim=1)(embedding1a, na_1) < 0.99, "Application order case 1a failed"
     assert nn.CosineSimilarity(dim=1)(embedding1b, na_1) < 0.99, "Application order case 1b failed"
@@ -206,14 +206,14 @@ def test_basic_adverb_on_verbs(global_model):
 def test_interjections(global_model):
     model = global_model
 
-    ni_1 = model.encode("The fox jumped")
-    ni_2 = model.encode("Your bat struck her ball")
+    ni_1 = model.encode_confident("The fox jumped")
+    ni_2 = model.encode_confident("Your bat struck her ball")
 
-    embedding1a = model.encode("Dang the fox jumped")
-    embedding1b = model.encode("Cool, the fox jumped")
+    embedding1a = model.encode_confident("Dang the fox jumped")
+    embedding1b = model.encode_confident("Cool, the fox jumped")
     
-    embedding2a = model.encode("Wow your bat struck her ball")
-    embedding2b = model.encode("Wow, your bat struck her ball")
+    embedding2a = model.encode_confident("Wow your bat struck her ball")
+    embedding2b = model.encode_confident("Wow, your bat struck her ball")
 
     assert nn.CosineSimilarity(dim=1)(embedding1a, ni_1) < 0.99, "(non-comma) Interjection 'dang' did not work as expected (non-comma)"
     assert nn.CosineSimilarity(dim=1)(embedding1b, ni_1) < 0.99, "(comma case) Interjection 'cool' did not work as expected "
@@ -223,37 +223,77 @@ def test_interjections(global_model):
 def test_auxilliary(global_model):
     model = global_model
 
-    na_1 = model.encode("The fox jumped")
-    na_2 = model.encode("Your bat struck her ball")
+    na_1 = model.encode_confident("The fox jumped")
+    na_2 = model.encode_confident("Your bat struck her ball")
 
-    embedding1a = model.encode("The fox has jumped")
-    embedding1b = model.encode("The fox is jumping")
+    embedding1a = model.encode_confident("The fox has jumped")
+    embedding1b = model.encode_confident("The fox is jumping")
     
-    embedding2a = model.encode("Your bat was striking her ball")
-    embedding2b = model.encode("Your bat had struck her ball")
+    embedding2a = model.encode_confident("Your bat was striking her ball")
+    embedding2b = model.encode_confident("Your bat had struck her ball")
 
     assert nn.CosineSimilarity(dim=1)(embedding1a, na_1) < 0.99, "Auxilliary verb 'has' did not work as expected."
     assert nn.CosineSimilarity(dim=1)(embedding1b, na_1) < 0.99, "Auxilliary verb 'had' did not work as expected."
     assert nn.CosineSimilarity(dim=1)(embedding2a, na_2) < 0.99, "Auxilliary verb 'is' did not work as expected."
     assert nn.CosineSimilarity(dim=1)(embedding2b, na_2) < 0.99, "Auxilliary verb 'was' did not work as expected."
 
+def test_subordinating_conjunction(global_model):
+    model = global_model
+
+    _ = model.encode_confident("The question is more complicated than has been represented.")
+    _ = model.encode_confident("The question is more complicated than it has been represented.")
+    _ = model.encode_confident("She was fine but angry.")
+    _ = model.encode_confident("She was fine but she was angry.")
+
 ##################################
 ######## Edge P.O.S. tests #######
 ##################################
 
+# def test_deathstack_of_adj(global_model):
+#     model = global_model
+
+#     model.encode_confident("Beautifl")
+
 def test_multiple_verbs_for_subj_connected_by_conj(global_model):
     model = global_model
 
-    _ = model.encode("Bobby runs and jumps")
-    # _ = model.encode("Triathletes swim, bike and run")
-    # _ = model.encode("Lebron eats, sleeps, balls, and repeats")
+    _ = model.encode_confident("Bobby runs and jumps")
+    # _ = model.encode_confident("Triathletes swim, bike and run")
+    # _ = model.encode_confident("Lebron eats, sleeps, balls, and repeats")
 
 def test_multiple_adj_connected_by_conj(global_model):
     model = global_model
 
-    _ = model.encode("The big and red dog")
-    # _ = model.encode("The big, red and fluffy dog")
-    # _ = model.encode("The big, red, fluffy and cute dog")
+    _ = model.encode_confident("The big and red dog")
+    # _ = model.encode_confident("The big, red and fluffy dog")
+    # _ = model.encode_confident("The big, red, fluffy and cute dog")
+
+def test_intransitive_verb_with_object(global_model):
+    model = global_model
+
+    _ = model.encode_confident("Alice ran home")
+    _ = model.encode_confident("Bob bites the apple")
+    _ = model.encode_confident("The name of the application was altered to magnetic resonance imaging (MRI) to avoid the loaded word nuclear.")
+
+def test_dependent_adjectives(global_model):
+    model = global_model
+
+    embedding1 = model.encode_confident("More important topics.")
+    embedding1 = model.encode_confident("Extremely funny jokes.")
+    embedding1 = model.encode_confident("Early Eastern Roman Imperial legionary armor.")
+
+def test_nonpresent_implied_noun_in_subordinate_clause(global_model):
+    model = global_model
+
+    _ = model.encode_confident("The topic was cooler than suggested.")
+    _ = model.encode_confident("He was healthy though enjoying baking.")
+
+def test_prepositional_phrase_after_subordinating_conjunction(global_model):
+    model = global_model
+
+    _ = model.encode_confident("He tried spotted dick while in England.")
+    _ = model.encode_confident("Bernstein was exposed to the Fabians while in England")
+    _ = model.encode_confident("I've been in the trenches since before then.")
 
 ##################################
 ######### Semantic tests #########
@@ -266,16 +306,16 @@ def test_coreference_resolution(global_model):
     """
     model = global_model
 
-    ambiguous1 = model.encode("Alice bit Bob and he cried")
-    ambiguous2 = model.encode("Alice bit Bob and she cried")
+    ambiguous1 = model.encode_confident("Alice bit Bob and he cried")
+    ambiguous2 = model.encode_confident("Alice bit Bob and she cried")
 
-    ambiguous3 = model.encode("John cycles. He is very fast.")
+    ambiguous3 = model.encode_confident("John cycles. He is very fast.")
 
-    candidateA = model.encode("Alice bit Bob and Bob cried")
-    candidateB = model.encode("Alice bit Bob and Alice cried")
+    candidateA = model.encode_confident("Alice bit Bob and Bob cried")
+    candidateB = model.encode_confident("Alice bit Bob and Alice cried")
 
-    canddiateC = model.encode("John cycles. Stacy is very fast.")
-    canddiateD = model.encode("John cycles very fast.")
+    canddiateC = model.encode_confident("John cycles. Stacy is very fast.")
+    canddiateD = model.encode_confident("John cycles very fast.")
 
     similarity1A = nn.CosineSimilarity(dim=1)(ambiguous1, candidateA)
     similarity1B = nn.CosineSimilarity(dim=1)(ambiguous1, candidateB)

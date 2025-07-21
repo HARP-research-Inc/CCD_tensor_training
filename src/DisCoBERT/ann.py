@@ -97,6 +97,7 @@ class ModelBank(object):
         """
         load ANN model from the given path.
         """
+
         if ID in self.model_caches:
             model = self.model_caches[ID]
         else:

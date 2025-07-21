@@ -2,7 +2,7 @@ import nltk
 from sklearn.linear_model import LogisticRegression
 from torch import nn
 from src.DisCoBERT.DisCoBERT import DisCoBERT as DCB
-from src.DisCoBERT.categories import Box
+from src.DisCoBERT.categories import Box, Circuit
 
 def build_data(path):
     with open(path, 'r') as file:
@@ -50,9 +50,13 @@ def build_data(path):
 
     return train_embeddings, train_classifications, test_embeddings, test_classifications
 
-def build_DCB_data(path):
+def build_DCB_data(path, toy_mode = False):
     with open(path, 'r') as file:
         data = file.readlines()
+
+    failure_dump = open("benchmarks/failed_examples_lg.txt", "w")
+    success_dump = open("benchmarks/successful_examples_lg.txt", "w")
+
 
     model = DCB("en_core_web_lg")
 
@@ -70,6 +74,9 @@ def build_DCB_data(path):
     for line in data:
         if line[0] == '#' or len(line) < 4:
             continue
+        if toy_mode and n % 100 != 0:
+            n += 1
+            continue
 
         point = line.strip().split("-", 1)
 
@@ -85,12 +92,14 @@ def build_DCB_data(path):
         for sentence in sentences:
             
             try:
-                embedding = model.encode(sentence.strip()).tolist()[0]
+                embedding = model.encode_confident(sentence.strip()).tolist()[0]
             except:
                 print(f"Error processing sentence: {sentence.strip()}")
                 breaks += 1
+                failure_dump.write(sentence.strip() + "\n")
                 continue
-
+            
+            success_dump.write(sentence.strip() + "\n")
             n += 1
             print(sentence[0:20], y)
             print(len(embedding))
@@ -101,9 +110,13 @@ def build_DCB_data(path):
             else:
                 train_embeddings.append(embedding)
                 train_classifications.append(y)
+            print(f"POS breaking dict: {Circuit.breaking_POS}")
+            print(f"Current total sentences: {total_sentences}")
+            print(f"Current total breaks: {breaks}")
         
-    print(f"Total sentences: {total_sentences}")
-    print(f"Total breaks: {breaks}")
+    print(f"FINAL total sentences: {total_sentences}")
+    print(f"FINAL total breaks: {breaks}")
+    print(f"FINAL POS breaking dict: {Circuit.breaking_POS}")
     return train_embeddings, train_classifications, test_embeddings, test_classifications
 
 def save_data(train_embeddings, train_classifications, test_embeddings, test_classifications):
@@ -136,8 +149,9 @@ def logisitic_regression(train_embeddings, train_classifications, test_embedding
     return model
 
 if __name__ == "__main__":
-    train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt")
+    train_embeddings, train_classifications, test_embeddings, test_classifications = build_DCB_data("benchmarks/classification.txt", toy_mode=False)
     logisitic_regression(train_embeddings, train_classifications, test_embeddings, test_classifications)
-    save_data(train_embeddings, train_classifications, test_embeddings, test_classifications)
+    #save_data(train_embeddings, train_classifications, test_embeddings, test_classifications)
 
+    #_, _, _, _ = build_DCB_data("benchmarks/classification.txt", toy_mode=False)
 

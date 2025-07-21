@@ -60,6 +60,7 @@ class CPTensorRegression(nn.Module):
         if len(inputs) != self.arity:
             raise ValueError(f"Expected {self.arity} inputs, got {len(inputs)}")
         for i, (inp, dim) in enumerate(zip(inputs, self.input_dims)):
+            print(f"regression recieved input types {type(inp)} of dim {dim}")
             if inp.shape[1] != dim:
                 raise ValueError(f"Input {i} expected dim {dim}, got {inp.shape[1]}")
 

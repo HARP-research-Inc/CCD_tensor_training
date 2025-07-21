@@ -105,6 +105,8 @@ class Box(Category):
 		self.inward_requirements: dict = {(None, "0:inf")}  # default requirement, can be overridden
 
 		self.type = None
+
+		self.sends_state = False
 	
 	def get_label(self):
 		return self.label
@@ -181,14 +183,14 @@ class Box(Category):
 
 	def forward(self):
 
+		print("packet length:", len(self.packets))
+		print("incoming words:", [wire.label for wire in self.in_wires] )
+		
 		packet = list()
 		packet.append(self.type)
 
 		packet.append(self.forward_helper())
-		#print(packet)
-		#print([item[1] for item in self.packets if type(item) is torch.Tensor])
-
-		# 
+		
 
 		for wire in self.out_wires:
 			print(self.label, "sending", packet[0], "to", wire.get_sink_label())
@@ -278,12 +280,15 @@ class Circuit(Category):
 	Circuit maps onto a DAG, edge order preserved by pregroup structure.
 
 	"""
+	breaking_POS: dict[type, int] = {}
+
 	def __init__(self, label, dimension=384):
 		super().__init__(label)
 		self.adjacency_list: dict[Box, list[Wire]] = {}
 		self.root = None #root node
 		self.sources: list[Box] = list()
 		self.levels: list[list[Box]] = list()
+		self.topic: torch.Tensor = None
 
 	def __str__(self):
 		"""
@@ -313,6 +318,9 @@ class Circuit(Category):
 	
 	def set_root(self, root: Box):
 		self.root = root
+
+	def set_topic(self, subject: str):
+		self.topic = ModelBank.retrieve_BERT(subject)
 		
 		
 	def add_wire(self, parentBox: Box, childBox: Box):
@@ -391,7 +399,6 @@ class Circuit(Category):
 
 		print("Starting with", [b.get_label() for b in queue])
 
-		explored = set()
 		last_output = None
 
 		while len(queue) > 0:
@@ -400,17 +407,14 @@ class Circuit(Category):
 				print("Breadth-first traversal queue: ", [q.get_label() for q in queue])
 
 				if v.check_packet_status():
-					#print(v.get_label())
-					last_output = v.forward()
-					#print(v.out_wires)
-					#for wire in v.out_wires:
-					#	print("Wire", wire.get_label())
-					#	if wire.get_sink() not in explored:
-					#		print("Sink", wire.get_sink_label())
-					#		explored.add(wire.get_sink())
-							#queue.append(wire.get_sink())
-				#else:
-				#	queue.append(v)
+					try:
+						last_output = v.forward()
+					except Exception as E:
+						if type(v) not in Circuit.breaking_POS:
+							Circuit.breaking_POS[type(v)] = 0
+						Circuit.breaking_POS[type(v)] += 1
+						raise
+
 			if currentLevel > 0:
 				currentLevel -= 1
 				queue = self.levels[currentLevel]
