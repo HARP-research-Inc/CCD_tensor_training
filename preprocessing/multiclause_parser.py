@@ -13,7 +13,7 @@ mp.set_start_method('spawn', force=True)
 NOUN_NUM = 50
 
 
-def worker(index, data, queue: Queue, target_pos: str):
+def worker(index, data, queue: Queue, target_pos: str, target_words):
 	start_t = time.time()
 
 	nlp = spacy.load("en_core_web_sm", disable=['ner'])
@@ -34,6 +34,33 @@ def worker(index, data, queue: Queue, target_pos: str):
 		doc = nlp(str(sentence))
 
 		for n, token in enumerate(doc):
+			if token.pos_ == target_pos and (not target_words or token.text in target_words):
+				head = token.head
+
+				if token.text.lower() not in output:
+					output[token.text.lower()] = []
+
+				first_indices = []
+				second_indices = []
+
+				for k, t in enumerate(doc):
+					if head.is_ancestor(t):
+						if not t == token:
+							second_indices.append(k)
+					else:
+						first_indices.append(k)
+
+				first_indices.sort()
+				second_indices.sort()
+
+				if len(first_indices) > 0 and len(second_indices) > 0:
+					item = (' '.join(doc[k].text for k in first_indices), ' '.join(doc[k].text for k in second_indices))
+					output[token.text.lower()].append(item)
+					counter += 1
+
+			if target_words:
+				continue
+
 			if any(child.dep_ == "cc" and child.pos_ == target_pos for child in token.children) and any(child.dep_ == "conj" for child in token.children):
 				cc = [child for child in token.children if child.dep_ == 'cc'][0]
 				conj = [child for child in token.children if child.dep_ == 'conj'][0]
@@ -57,10 +84,10 @@ def worker(index, data, queue: Queue, target_pos: str):
 					item = (' '.join(doc[k].text.lower() for k in token_indices), ' '.join(doc[k].text.lower() for k in conj_indices))
 					output[cc.text.lower()].append(item)
 					counter += 1
-					print(counter, f' <{cc.text.lower()}> '.join(item))
+					#print(counter, f' <{cc.text.lower()}> '.join(item))
 		
 		if i % 1000 == 0:
-			print(f'Thread {index}, {i}/{len(data)}', "sentences parsed,", counter, "matches,", int(time.time() - start_t), "seconds elapsed")
+			print(f'Thread {index}, {i}/{len(data)}', "sentences parsed,", counter, "matches,", int(time.time() - start_t), "seconds elapsed", output.keys())
 	
 	queue.put(output)
 	
@@ -68,11 +95,11 @@ def worker(index, data, queue: Queue, target_pos: str):
 
 	return True
 
-def parse(data: str, target_pos: str):
+def parse(data: str, target_pos: str, target_words=None):
 	print("Loading file...")
 	file_in = open(data, 'r')
 
-	text = re.split(r"\.|\?|\!|\;", file_in.read())
+	text = re.split(r"\.|\?|\!", file_in.read())
 
 	print("Loaded!")
 
@@ -81,14 +108,17 @@ def parse(data: str, target_pos: str):
 
 	queue = Queue()
 
-	processes = [Process(target=worker, args=pair + (queue, target_pos,)) for pair in enumerate(np.array_split(text, cpu_count()))]
+	num_processes = cpu_count()
+	num_processes = 10
+
+	processes = [Process(target=worker, args=pair + (queue, target_pos, target_words)) for pair in enumerate(np.array_split(text, num_processes))]
 
 	for p in processes:
 		p.start()
 
 	print("Processes started")
 	
-	for i in range(cpu_count()):
+	for i in range(num_processes):
 		obj = queue.get()
 		print(f"Received item {i} from queue")
 
@@ -125,4 +155,5 @@ if __name__ == "__main__":
 	#parse("AUX", Conjunction(POS("AUX"), DEP("aux")), "parent")
 	#parse("ADV")
 	#parse("data_raw/wikitext_textblock.txt", "INTJ")
-	parse("data_raw/wikitext_textblock.txt", "CCONJ")
+	#parse("data_raw/wikitext_textblock.txt", "CCONJ")
+	parse("data_raw/wikitext_textblock.txt", "PUNCT", [":", ";"])

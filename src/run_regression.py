@@ -267,6 +267,8 @@ def embedding_generator(index: int, data, queue, wordQueue, cache: dict, counter
 			if not queue_obj:
 				break
 
+			print(f"Embedding generator processing {queue_obj}")
+
 			t = time.time()
 			words = data[queue_obj]
 
@@ -288,6 +290,9 @@ def embedding_generator(index: int, data, queue, wordQueue, cache: dict, counter
 					if n % 500 == 499:
 						print(f'embedding_generator {index} parsed {n + 1} examples')
 					n += 1
+
+					if n > 100_000:
+						break
 
 					embeddings.append(arr)
 					sentence_embeddings.append(get_embedding_in_parallel(f'{word[0]} {queue_obj} {' '.join(word[1:])}'.strip(), model))
@@ -431,6 +436,7 @@ def build_model(src: str, destination: str, epochs: int, producerThreads=3, cons
 
 	for key in (list(reversed(sorted(data.keys()))) if reverse else list(data.keys())):
 		wordQueue.put(key)
+		print(key)
 	
 	for _ in range(producerThreads):
 		wordQueue.put(None)
@@ -614,6 +620,7 @@ if __name__ == "__main__":
 	# bert_on_bert("data/one_verb.json", "models", epochs=500)
 	# build_tense_model("data/top_tense.json", "tense_model", 5000, 6, 3)
 	# build_model("data/top_sconj.json", "general_sconj_model", 5000, 10, 10)
-	build_model("data/top_cconj.json", "general_cconj_model", 5000, 10, 10)
+	# build_model("data/top_cconj.json", "general_cconj_model", 5000, 5, 3)
+	build_model("data/top_punct.json", "general_colon_model", 5000, 2, 2)
 
 	print("Regression complete.")

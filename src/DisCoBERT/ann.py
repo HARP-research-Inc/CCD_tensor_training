@@ -87,9 +87,10 @@ class ModelBank(object):
         
         model = CPTensorRegression([384 for _ in range(n)], 384, 100)
         #model = OneWordTensorRegression(384, 384)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        print("MODEL TYPE ", type(torch.load(model_path, weights_only=True)))
-        model.load_state_dict(torch.load(model_path, weights_only=True))
+        print("MODEL TYPE ", type(torch.load(model_path, weights_only=True, map_location=device)))
+        model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
         model.eval()
 
         return model
@@ -108,6 +109,8 @@ class ModelBank(object):
                 if fallback:
                     model = GeneralNetwork(self.load_model(fallback, None, n=n+1), self.retrieve_BERT(ID[0]))
                 else:
+                    import traceback
+                    print(traceback.format_exc())
                     try:
                         print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
                         word = ID[0]
