@@ -4,6 +4,7 @@ from src.regression import TwoWordTensorRegression, OneWordTensorRegression, CPT
 import spacy
 from sentence_transformers import SentenceTransformer
 import os
+import json
 
 class GeneralNetwork(torch.nn.Module):
     def __init__(self, network: torch.nn.Module, inp: torch.Tensor):
@@ -86,9 +87,10 @@ class ModelBank(object):
         
         model = CPTensorRegression([384 for _ in range(n)], 384, 100)
         #model = OneWordTensorRegression(384, 384)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        print("MODEL TYPE ", type(torch.load(model_path, weights_only=True)))
-        model.load_state_dict(torch.load(model_path, weights_only=True))
+        print("MODEL TYPE ", type(torch.load(model_path, weights_only=True, map_location=device)))
+        model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
         model.eval()
 
         return model
@@ -107,6 +109,8 @@ class ModelBank(object):
                 if fallback:
                     model = GeneralNetwork(self.load_model(fallback, None, n=n+1), self.retrieve_BERT(ID[0]))
                 else:
+                    import traceback
+                    print(traceback.format_exc())
                     try:
                         print(f"File {self.model_locations}/{ID[1]}/{ID[0]} not found, checking lemma...")
                         word = ID[0]
@@ -122,11 +126,39 @@ class ModelBank(object):
                         
                             model = self.load_model(ID[1], word, n=n)
                     except:
+                        # if the model is not found in either case, we find nearest neighbor
                         print(f"Model for lemmatized form of {ID[0]} not found, finding nearest neightbor...")
-                
-                        word = ID[0]
-                        nearest_name, _ = self.ann(ID[0], ID[1])
-                        model = self.load_model(ID[1], nearest_name, n = n)
+
+                        #standard format ID string for hash
+                        ID_string = f"{ID[1]}_{ID[0]}"
+                        
+                        # load nearest neighbor cache
+                        if os.path.exists("src/DisCoBERT/nearest_neighbor_cache.json"):
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "r") as f:
+                                nearest_neighbors = json.load(f)
+                        else:
+                            #if cache does not exist, create an empty one
+                            nearest_neighbors = {}
+                            #json.dump(nearest_neighbors, open("src/DisCoBERT/nearest_neighbor_cache.json", "w"))
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
+                                json.dump(nearest_neighbors, f)
+
+                        
+                        if ID_string in nearest_neighbors:
+                            nearest_name = nearest_neighbors[ID_string]
+                            print(f"Found nearest neighbor in cache: {nearest_name}")
+                            #in theory, this should always be a valid model. Otherwise user will see error.
+                            model = self.load_model(ID[1], nearest_name, n=n)
+                        else:
+                            word = ID[0]
+                            nearest_name, _ = self.ann(ID[0], ID[1])
+                            nearest_neighbors[ID_string] = nearest_name
+
+                            #save the nearest neighbor cache
+
+                            with open("src/DisCoBERT/nearest_neighbor_cache.json", "w") as f:
+                                json.dump(nearest_neighbors, f)
+                            model = self.load_model(ID[1], nearest_name, n = n)
             
             self.model_caches[ID] = model
 

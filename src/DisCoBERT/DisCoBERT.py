@@ -46,21 +46,16 @@ class DisCoBERT(object):
 
 if __name__ == "__main__":
     # example usage:
-    module = DisCoBERT("en_core_web_trf")
+    module = DisCoBERT("en_core_web_sm")
 
     #embedding = module.encode_confident("This topic is more complex than it seems.")
-    #embedding = module.encode_confident("Bernstein was also exposed to the Fabians while in England, and their example encouraged him to question aspects of Marx’s theory.")
+    try:
+        embedding = module.encode_confident("The name of the application was altered to magnetic resonance imaging (MRI) to avoid the loaded word nuclear.")
 
-    #embedding = module.encode_confident("He tried spotted dick while in England.")
-    #embedding = module.encode_confident("Bernstein was also exposed to the Fabians while in England")
-    #embedding = module.encode_confident("Fascist oppression, in fact, was a major problem for communists and socialists alike, not only in Italy but subsequently in Spain under Francisco Franco and in Germany under Adolf Hitler. Socialist parties had drawn enough votes in Germany, Britain, and France to participate in or even to lead coalition governments in the 1920s and ’30s, and in Sweden the Swedish Social Democratic Workers’ Party won control of the government in 1932 with a promise to make their country into a “people’s home” based on “equality, concern, cooperation, and helpfulness.” Wherever fascists took power, however, communists and socialists were among the first to be suppressed.")
+    except:
+        #print(module.get_failures())
+        raise
     
-    #embedding = module.encode_confident("Socialist parties had drawn enough votes in Germany, Britain, and France to participate in or even to lead coalition governments in the 1920s and ’30s, and in Sweden they made a block game in 2009")
-
-    #embedding = module.encode_confident("In Sweden the Swedish Social Democratic Workers’ Party won control of the government in 1932 with a promise to make their country into a people’s home” based on equality, concern, cooperation, and helpfulness.")
-    #embedding = module.encode_confident("They denied him readmission to the university.")
-    embedding = module.encode_confident("They allowed reentry but denied him readmission to the university.")
-
     print(embedding)
 
         
