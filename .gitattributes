@@ -1,0 +1,4 @@
+old_models/** filter=lfs diff=lfs merge=lfs -text
+orig_untracked/** filter=lfs diff=lfs merge=lfs -text
+copy_untracked/** filter=lfs diff=lfs merge=lfs -text
+public_clones/** filter=lfs diff=lfs merge=lfs -text
